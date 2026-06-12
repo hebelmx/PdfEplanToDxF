@@ -6,6 +6,7 @@ A small toolbox for moving data between Rockwell ControlLogix, EPLAN Electric P8
 |------|---------|
 | [`src/eplan_pdf_to_dxf.py`](src/eplan_pdf_to_dxf.py) | Convert EPLAN-exported PDFs into editable DXF files |
 | [`src/logix_to_eplan_csv.py`](src/logix_to_eplan_csv.py) | Convert ControlLogix L5X exports into EPLAN PLC import CSVs |
+| [`src/logix_to_qet.py`](src/logix_to_qet.py) | Generate a QElectroTech project (one folio per I/O card) from a ControlLogix L5X |
 | [`src/CsvToEplan.py`](src/CsvToEplan.py) | Convert an enriched I/O CSV into a simple EPLAN XML structure |
 
 ---
@@ -176,6 +177,32 @@ The converter is also packaged as a project skill in
 [`.claude/skills/logix-to-eplan/`](.claude/skills/logix-to-eplan/SKILL.md) —
 in a Claude Code session on this repo, asking for an "EPLAN I/O list from this
 L5X" triggers it automatically.
+
+---
+
+# 3. ControlLogix to QElectroTech Project
+
+Generate a native [QElectroTech](https://qelectrotech.org/) (FOSS electrical
+CAD) project straight from an L5X export — one folio per I/O card, drawn as a
+classical card box with a connectable terminal element per point, the PLC tag,
+the EPLAN-style address, and a humanized function text.
+
+```bash
+python src/logix_to_qet.py PROJECT.L5X -o project.qet
+```
+
+Requires QElectroTech **0.100+** to open the result (project format
+reverse-engineered from the official 0.100 example projects). The whole
+project can then be printed to PDF or exported to DXF from QET natively.
+
+## Module database (`src/module_db/`)
+
+One JSON file per module catalog number enriches the folios with vendor,
+description, RTB type, point names (`IN-0`, `OUT-7`, `Ch3`) and the physical
+RTB terminal of each point. Pins ship as `"TBD"` (rendered as a `__` write-in
+placeholder) — fill them from the vendor's installation instructions; never
+guess pinouts. See [`src/module_db/README.md`](src/module_db/README.md) for
+the schema.
 
 ---
 

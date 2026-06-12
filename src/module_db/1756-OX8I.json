@@ -1,0 +1,52 @@
+{
+  "catalog": "1756-OX8I",
+  "vendor": "Allen-Bradley (Rockwell Automation)",
+  "family": "ControlLogix 1756",
+  "description": "8-point isolated relay output module (N.O./N.C.)",
+  "kind": "DO",
+  "points": 8,
+  "rtb": "36-position RTB (1756-TBCH)",
+  "wiring": [
+    {
+      "point": 0,
+      "name": "OUT-0",
+      "pin": "TBD"
+    },
+    {
+      "point": 1,
+      "name": "OUT-1",
+      "pin": "TBD"
+    },
+    {
+      "point": 2,
+      "name": "OUT-2",
+      "pin": "TBD"
+    },
+    {
+      "point": 3,
+      "name": "OUT-3",
+      "pin": "TBD"
+    },
+    {
+      "point": 4,
+      "name": "OUT-4",
+      "pin": "TBD"
+    },
+    {
+      "point": 5,
+      "name": "OUT-5",
+      "pin": "TBD"
+    },
+    {
+      "point": 6,
+      "name": "OUT-6",
+      "pin": "TBD"
+    },
+    {
+      "point": 7,
+      "name": "OUT-7",
+      "pin": "TBD"
+    }
+  ],
+  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-OX8I."
+}

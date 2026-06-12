@@ -1,0 +1,92 @@
+{
+  "catalog": "1756-IA16",
+  "vendor": "Allen-Bradley (Rockwell Automation)",
+  "family": "ControlLogix 1756",
+  "description": "16-point 79...132 V AC digital input module",
+  "kind": "DI",
+  "points": 16,
+  "rtb": "20-position RTB (1756-TBNH)",
+  "wiring": [
+    {
+      "point": 0,
+      "name": "IN-0",
+      "pin": "TBD"
+    },
+    {
+      "point": 1,
+      "name": "IN-1",
+      "pin": "TBD"
+    },
+    {
+      "point": 2,
+      "name": "IN-2",
+      "pin": "TBD"
+    },
+    {
+      "point": 3,
+      "name": "IN-3",
+      "pin": "TBD"
+    },
+    {
+      "point": 4,
+      "name": "IN-4",
+      "pin": "TBD"
+    },
+    {
+      "point": 5,
+      "name": "IN-5",
+      "pin": "TBD"
+    },
+    {
+      "point": 6,
+      "name": "IN-6",
+      "pin": "TBD"
+    },
+    {
+      "point": 7,
+      "name": "IN-7",
+      "pin": "TBD"
+    },
+    {
+      "point": 8,
+      "name": "IN-8",
+      "pin": "TBD"
+    },
+    {
+      "point": 9,
+      "name": "IN-9",
+      "pin": "TBD"
+    },
+    {
+      "point": 10,
+      "name": "IN-10",
+      "pin": "TBD"
+    },
+    {
+      "point": 11,
+      "name": "IN-11",
+      "pin": "TBD"
+    },
+    {
+      "point": 12,
+      "name": "IN-12",
+      "pin": "TBD"
+    },
+    {
+      "point": 13,
+      "name": "IN-13",
+      "pin": "TBD"
+    },
+    {
+      "point": 14,
+      "name": "IN-14",
+      "pin": "TBD"
+    },
+    {
+      "point": 15,
+      "name": "IN-15",
+      "pin": "TBD"
+    }
+  ],
+  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-IA16."
+}

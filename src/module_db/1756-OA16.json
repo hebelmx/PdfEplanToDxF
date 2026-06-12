@@ -1,0 +1,92 @@
+{
+  "catalog": "1756-OA16",
+  "vendor": "Allen-Bradley (Rockwell Automation)",
+  "family": "ControlLogix 1756",
+  "description": "16-point 74...265 V AC digital output module",
+  "kind": "DO",
+  "points": 16,
+  "rtb": "20-position RTB (1756-TBNH)",
+  "wiring": [
+    {
+      "point": 0,
+      "name": "OUT-0",
+      "pin": "TBD"
+    },
+    {
+      "point": 1,
+      "name": "OUT-1",
+      "pin": "TBD"
+    },
+    {
+      "point": 2,
+      "name": "OUT-2",
+      "pin": "TBD"
+    },
+    {
+      "point": 3,
+      "name": "OUT-3",
+      "pin": "TBD"
+    },
+    {
+      "point": 4,
+      "name": "OUT-4",
+      "pin": "TBD"
+    },
+    {
+      "point": 5,
+      "name": "OUT-5",
+      "pin": "TBD"
+    },
+    {
+      "point": 6,
+      "name": "OUT-6",
+      "pin": "TBD"
+    },
+    {
+      "point": 7,
+      "name": "OUT-7",
+      "pin": "TBD"
+    },
+    {
+      "point": 8,
+      "name": "OUT-8",
+      "pin": "TBD"
+    },
+    {
+      "point": 9,
+      "name": "OUT-9",
+      "pin": "TBD"
+    },
+    {
+      "point": 10,
+      "name": "OUT-10",
+      "pin": "TBD"
+    },
+    {
+      "point": 11,
+      "name": "OUT-11",
+      "pin": "TBD"
+    },
+    {
+      "point": 12,
+      "name": "OUT-12",
+      "pin": "TBD"
+    },
+    {
+      "point": 13,
+      "name": "OUT-13",
+      "pin": "TBD"
+    },
+    {
+      "point": 14,
+      "name": "OUT-14",
+      "pin": "TBD"
+    },
+    {
+      "point": 15,
+      "name": "OUT-15",
+      "pin": "TBD"
+    }
+  ],
+  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-OA16."
+}
