@@ -1,0 +1,6 @@
+# Fixture files are proprietary plant data (PLC programs, exports, generated
+# CSVs) used for local testing only — never publish them.
+# Ignore everything in this folder except this .gitignore, so the folder
+# exists in the repo but its contents stay untracked.
+*
+!.gitignore
