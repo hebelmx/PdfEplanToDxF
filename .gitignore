@@ -27,3 +27,15 @@ desktop.ini
 
 # Test data
 test_data/
+
+# Proprietary plant data (PLC programs and exports) — do not publish
+*.ACD
+*.L5K
+*.L5X
+*.AML
+*.RDF
+*_eplan.csv
+
+# Personal files
+spam_blocked.vcf
+spam_numbers_to_block.txt

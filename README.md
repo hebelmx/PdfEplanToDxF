@@ -1,4 +1,16 @@
-# EPLAN PDF to DXF Converter
+# EPLAN Engineering Tools
+
+A small toolbox for moving data between Rockwell ControlLogix, EPLAN Electric P8, and CAD:
+
+| Tool | Purpose |
+|------|---------|
+| [`src/eplan_pdf_to_dxf.py`](src/eplan_pdf_to_dxf.py) | Convert EPLAN-exported PDFs into editable DXF files |
+| [`src/logix_to_eplan_csv.py`](src/logix_to_eplan_csv.py) | Convert ControlLogix L5X exports into EPLAN PLC import CSVs |
+| [`src/CsvToEplan.py`](src/CsvToEplan.py) | Convert an enriched I/O CSV into a simple EPLAN XML structure |
+
+---
+
+# 1. EPLAN PDF to DXF Converter
 
 Convert EPLAN-exported electrical diagram PDFs into editable DXF files that can be opened in AutoCAD, DraftSight, LibreCAD, or any CAD tool.
 
@@ -33,28 +45,28 @@ pip install PyMuPDF ezdxf
 
 ### Convert all pages
 ```bash
-python eplan_pdf_to_dxf.py schematic.pdf
+python src/eplan_pdf_to_dxf.py schematic.pdf
 ```
 
 ### Specify output directory
 ```bash
-python eplan_pdf_to_dxf.py schematic.pdf output/
+python src/eplan_pdf_to_dxf.py schematic.pdf output/
 ```
 
 ### Convert specific pages
 ```bash
-python eplan_pdf_to_dxf.py schematic.pdf output/ --pages 1,5,10-20
+python src/eplan_pdf_to_dxf.py schematic.pdf output/ --pages 1,5,10-20
 ```
 
 ### Custom shift value
 If your EPLAN version uses a different encoding shift (rare):
 ```bash
-python eplan_pdf_to_dxf.py schematic.pdf --shift 29
+python src/eplan_pdf_to_dxf.py schematic.pdf --shift 29
 ```
 
 ### Quiet mode
 ```bash
-python eplan_pdf_to_dxf.py schematic.pdf -q
+python src/eplan_pdf_to_dxf.py schematic.pdf -q
 ```
 
 ## Output
@@ -109,6 +121,63 @@ If your EPLAN PDF uses a different shift, you can discover it by:
 3. Compare: `expected_ASCII - glyph_ID = shift`
 
 For example, if 'R' (ASCII 82) is encoded as glyph ID 53: shift = 82 - 53 = 29.
+
+# 2. ControlLogix to EPLAN PLC Import CSV
+
+Generate an EPLAN Electric P8 "PLC bulk data" import CSV directly from a
+Rockwell Studio 5000 / RSLogix 5000 project, so the PLC schematic generation
+tool can draw I/O cards with real tags, addresses, and function texts.
+
+## Input format
+
+Work from an **.L5X** export (Studio 5000: *File > Save As > L5X*). Among the
+formats Rockwell can produce, L5X is the only one that is both standard XML
+and carries the complete picture:
+
+| Format | Verdict |
+|--------|---------|
+| .ACD   | Closed binary — not parseable |
+| .L5K   | Custom text grammar — needs a bespoke parser |
+| .RDF / .AML | Hardware tree only, **no tag database** |
+| **.L5X** | XML with module tree (catalogs, slots, chassis) **and** all tags |
+
+## Usage
+
+Python 3.10+, standard library only:
+
+```bash
+python src/logix_to_eplan_csv.py PROJECT.L5X -o project_eplan.csv
+```
+
+Options:
+- `--spares` — also emit unused points of referenced cards (FunctionText "Spare")
+- `--include-hmi` — include PanelView/HMI-mapped points (excluded by default; not hardwired)
+- `--logix-address` — keep raw Logix addresses (`Local:2:I.Data.3`) instead of EPLAN-style `I0.3` / `IW256`
+- `--keep-duplicates` — emit every tag even when several alias one physical point
+
+A mapping summary (modules per rack/slot, mapped/skipped/duplicate counts) is
+printed to stderr; the CSV goes to the output file with the fixed header:
+
+```
+DeviceTag,Rack,Slot,ConnectionPoint,Address,DataType,SymbolicName,FunctionText
+```
+
+## What it handles
+
+- Digital and analog I/O, local chassis and remote drops (ControlNet/EtherNet adapters); local rack = 1, each remote drop = 2, 3, ...
+- Controller- and program-scoped alias tags, including alias-of-alias chains
+- 1756 / 1769 / 5069 catalog classification (DI/DO/AI/AO + point count) with a heuristic fallback for unknown catalog numbers
+- Several tags aliasing the same physical point are de-duplicated (EPLAN rejects duplicate connection points); extras are folded into the function text
+- FunctionText is humanized from the tag name through an English/Spanish abbreviation dictionary (e.g. `HU_OIL_PRESSURE_PT1` → "Hydraulic Unit Oil Pressure PT1"); tag descriptions are used when present
+
+## Claude Code skill
+
+The converter is also packaged as a project skill in
+[`.claude/skills/logix-to-eplan/`](.claude/skills/logix-to-eplan/SKILL.md) —
+in a Claude Code session on this repo, asking for an "EPLAN I/O list from this
+L5X" triggers it automatically.
+
+---
 
 ## Contributing
 
