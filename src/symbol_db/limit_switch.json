@@ -1,0 +1,34 @@
+{
+  "id": "limit_switch",
+  "description": "Limit switch / position switch, NO contact",
+  "element": "limit_switch.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/41_limit_switches/fin_de_course_no.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "LS",
+    "FC",
+    "FDC",
+    "ZS",
+    "SQ"
+  ],
+  "keywords": [
+    "limit switch",
+    "limit",
+    "fin de carrera",
+    "final de carrera",
+    "fin carrera",
+    "end of travel",
+    "overtravel",
+    "came",
+    "leva",
+    "door",
+    "puerta",
+    "guard",
+    "guarda",
+    "gate",
+    "compuerta",
+    "posicion",
+    "position"
+  ]
+}

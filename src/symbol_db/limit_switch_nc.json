@@ -1,0 +1,14 @@
+{
+  "id": "limit_switch_nc",
+  "description": "Limit switch / position switch, NC contact",
+  "element": "limit_switch_nc.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/41_limit_switches/fin_de_course_nf.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [],
+  "keywords": [
+    "limit switch nc",
+    "fin de carrera nc",
+    "limit switch closed"
+  ]
+}

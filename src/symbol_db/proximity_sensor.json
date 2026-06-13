@@ -1,0 +1,22 @@
+{
+  "id": "proximity_sensor",
+  "description": "Proximity sensor (inductive), NO",
+  "element": "proximity_sensor.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/02_sensors_inductive/capteur_inductif_no.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "PX",
+    "PRX",
+    "PROX"
+  ],
+  "keywords": [
+    "proximity",
+    "proximidad",
+    "inductive",
+    "inductivo",
+    "detector",
+    "sensor",
+    "presencia"
+  ]
+}

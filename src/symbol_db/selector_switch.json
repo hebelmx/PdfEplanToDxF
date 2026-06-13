@@ -1,0 +1,24 @@
+{
+  "id": "selector_switch",
+  "description": "Selector / mode switch",
+  "element": "selector_switch.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/21_selector_switches/010_switch_1pos.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "SS",
+    "SEL"
+  ],
+  "keywords": [
+    "selector switch",
+    "selector",
+    "llave",
+    "key switch",
+    "man auto",
+    "manual auto",
+    "manual automatico",
+    "local remote",
+    "mode switch",
+    "modo"
+  ]
+}

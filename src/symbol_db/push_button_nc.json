@@ -1,0 +1,20 @@
+{
+  "id": "push_button_nc",
+  "description": "Push button, NC (stop style)",
+  "element": "push_button_nc.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/poussoir_nf.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "PARO",
+    "STOP"
+  ],
+  "keywords": [
+    "stop button",
+    "boton paro",
+    "pulsador paro",
+    "paro",
+    "stop",
+    "alto"
+  ]
+}

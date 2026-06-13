@@ -1,0 +1,28 @@
+{
+  "id": "level_switch",
+  "description": "Liquid level switch / float",
+  "element": "level_switch.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/12_sensors_level/niv_liquide_no.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "LSH",
+    "LSL",
+    "NIV"
+  ],
+  "keywords": [
+    "level switch",
+    "level",
+    "nivel",
+    "float",
+    "flotador",
+    "boya",
+    "oil level",
+    "level low",
+    "level high",
+    "nivel bajo",
+    "nivel alto",
+    "tank level",
+    "nivel aceite"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "horn",
+  "description": "Horn / siren / audible alarm",
+  "element": "horn.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/12_acoustic_signaling/sirene.elmt",
+  "direction": "O",
+  "priority": 0,
+  "suffixes": [
+    "HN"
+  ],
+  "keywords": [
+    "horn",
+    "siren",
+    "sirena",
+    "alarm",
+    "alarma",
+    "buzzer",
+    "zumbador",
+    "bocina",
+    "claxon",
+    "bell",
+    "timbre",
+    "chicharra"
+  ]
+}

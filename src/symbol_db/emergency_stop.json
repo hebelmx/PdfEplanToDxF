@@ -1,0 +1,26 @@
+{
+  "id": "emergency_stop",
+  "description": "Emergency stop, mushroom head",
+  "element": "emergency_stop.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/au.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "ES",
+    "AU",
+    "EMERGENCIA",
+    "EMERGENCY",
+    "ESTOP"
+  ],
+  "keywords": [
+    "emergency stop",
+    "paro de emergencia",
+    "paro emergencia",
+    "emergencia",
+    "emergency",
+    "e stop",
+    "estop",
+    "seta",
+    "hongo"
+  ]
+}

@@ -1,0 +1,41 @@
+<definition version="0.100.0" type="element" link_type="master" width="40" height="60" hotspot_x="20" hotspot_y="32">
+    <uuid uuid="{793302b1-e96a-f7f8-70bc-dec53eeaab5b}"/>
+    <names>
+        <name lang="ar">ملف</name>
+        <name lang="ca">Bobina</name>
+        <name lang="cs">Cívka relé</name>
+        <name lang="de">Spule</name>
+        <name lang="el">Πηνίο</name>
+        <name lang="en">Coil</name>
+        <name lang="es">Bobina</name>
+        <name lang="fr">Bobine</name>
+        <name lang="hu">Tekercs</name>
+        <name lang="it">Bobina</name>
+        <name lang="nl">Spoel</name>
+        <name lang="nl_BE">Relais spoel (algemeen)</name>
+        <name lang="pl">Cewka</name>
+        <name lang="ru">Обмотка</name>
+    </names>
+    <kindInformations>
+        <kindInformation name="type">coil</kindInformation>
+    </kindInformations>
+    <informations>Author: The QElectroTech team
+License: see http://qelectrotech.org/wiki/doc/elements_license</informations>
+    <description>
+        <rect x="-14" y="-8" width="28" height="16" rx="0" ry="0" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <line x1="0" y1="-20" x2="0" y2="-8" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <dynamic_text x="2" y="11.33" z="3" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="UserText" uuid="{0a58bdda-9173-48ba-acaa-35f2dc00c4bb}" font="Liberation Sans,4,-1,5,25,0,0,0,0,0,Regular">
+            <text>A2</text>
+        </dynamic_text>
+        <dynamic_text x="2" y="-24.67" z="4" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="UserText" uuid="{7e98ddfe-fde0-4715-a926-9f60cf750078}" font="Liberation Sans,4,-1,5,25,0,0,0,0,0,Regular">
+            <text>A1</text>
+        </dynamic_text>
+        <line x1="0" y1="8" x2="0" y2="20" end1="none" end2="none" length1="1.5" length2="1.5" style="line-style:normal;line-weight:normal;filling:none;color:black" antialias="false"/>
+        <dynamic_text x="25" y="-9.17" z="6" text_width="-1" Halignment="AlignLeft" Valignment="AlignTop" frame="false" rotation="0" keep_visual_rotation="false" text_from="ElementInfo" uuid="{3ef105d2-add6-4c4b-a4cd-120c40096202}" font="Liberation Sans,9,-1,5,50,0,0,0,0,0,Regular">
+            <text></text>
+            <info_name>label</info_name>
+        </dynamic_text>
+        <terminal uuid="{8d0fa333-2d98-4a75-8a4e-21c81cce7ec3}" name="A1" x="0" y="-20" orientation="n" type="Generic"/>
+        <terminal uuid="{c5376fd7-bdf1-4c10-985a-0d7d5f52c8f9}" name="A2" x="0" y="20" orientation="s" type="Generic"/>
+    </description>
+</definition>

@@ -1,0 +1,25 @@
+{
+  "id": "push_button",
+  "description": "Push button, NO (start/reset style)",
+  "element": "push_button.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/poussoir.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "PB",
+    "BP",
+    "BTN"
+  ],
+  "keywords": [
+    "push button",
+    "pushbutton",
+    "boton",
+    "pulsador",
+    "button",
+    "start",
+    "arranque",
+    "reset",
+    "rearme",
+    "marcha"
+  ]
+}

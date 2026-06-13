@@ -1,0 +1,32 @@
+{
+  "id": "pilot_light",
+  "description": "Pilot light / indicator lamp",
+  "element": "pilot_light.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/11_optical_signaling/lampe2.elmt",
+  "direction": "O",
+  "priority": 0,
+  "suffixes": [
+    "PL",
+    "LT",
+    "H"
+  ],
+  "keywords": [
+    "pilot light",
+    "light",
+    "lamp",
+    "lampara",
+    "piloto",
+    "luz",
+    "indicator",
+    "indicador",
+    "beacon",
+    "baliza",
+    "led",
+    "flash",
+    "destello",
+    "strobe",
+    "alarma luminosa",
+    "luminosa",
+    "luminoso"
+  ]
+}

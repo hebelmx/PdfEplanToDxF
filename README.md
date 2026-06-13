@@ -195,6 +195,20 @@ Requires QElectroTech **0.100+** to open the result (project format
 reverse-engineered from the official 0.100 example projects). The whole
 project can then be printed to PDF or exported to DXF from QET natively.
 
+## Automatic field-device symbols (`src/symbol_db/`)
+
+Each digital point is semantically matched against a plain-JSON database of
+common control elements — limit switches, push buttons, e-stops, selectors,
+proximity/photo/pressure/level/flow sensors, solenoid valves, pilot lights,
+relay coils, horns. Matching works as an inverse of the tag humanizer: the
+tag is expanded through the abbreviation dictionary, pooled with the tag
+description, and fuzzy-matched (English/Spanish, accent-insensitive) against
+each entry's keyword phrases and tag-suffix conventions (`_LS`, `PB1`,
+`SV604WE1A`, `PARO`, ...). A confident match draws the device symbol at the
+end of the row, wired to the point's terminal; anything uncertain keeps the
+generic terminal. Disable with `--no-symbols`. See
+[`src/symbol_db/README.md`](src/symbol_db/README.md) to extend the database.
+
 ## Module database (`src/module_db/`)
 
 One JSON file per module catalog number enriches the folios with vendor,

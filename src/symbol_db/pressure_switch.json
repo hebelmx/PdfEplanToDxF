@@ -1,0 +1,17 @@
+{
+  "id": "pressure_switch",
+  "description": "Pressure switch, NO",
+  "element": "pressure_switch.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/13_sensors_pressure/pressostat_no.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "PS"
+  ],
+  "keywords": [
+    "pressure switch",
+    "presostato",
+    "pressure",
+    "presion"
+  ]
+}

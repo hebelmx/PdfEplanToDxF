@@ -1,0 +1,29 @@
+{
+  "id": "solenoid_valve",
+  "description": "Solenoid valve coil",
+  "element": "solenoid_valve.elmt",
+  "qet_source": "10_electric/10_allpole/310_relays_contactors_contacts/01_coils/bobine3.elmt",
+  "direction": "O",
+  "priority": 0,
+  "suffixes": [
+    "SV",
+    "EV",
+    "YV"
+  ],
+  "keywords": [
+    "solenoid valve",
+    "solenoid",
+    "solenoide",
+    "valve",
+    "valvula",
+    "electrovalvula",
+    "electrovalve",
+    "piston",
+    "cilindro",
+    "cylinder",
+    "neumatico",
+    "pneumatic",
+    "hidraulico",
+    "hydraulic"
+  ]
+}

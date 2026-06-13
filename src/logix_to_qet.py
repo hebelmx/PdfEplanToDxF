@@ -7,6 +7,11 @@ Each used point is drawn as a terminal element (connectable later in QET) with
 its connection-point number as label, next to a text line with the EPLAN-style
 address, the PLC tag and the humanized function text.
 
+Digital points are additionally matched against the plain-JSON symbol database
+in symbol_db/ (keyword + tag-suffix fuzzy matching over the humanized tag and
+the description); a matched field device (limit switch, push button, solenoid
+valve, ...) is drawn at the end of the row and wired to the point's terminal.
+
 Reuses the L5X parsing/classification from logix_to_eplan_csv.py.
 
 Usage:
@@ -17,9 +22,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
+import itertools
 import json
 import re
 import sys
+import unicodedata
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -28,6 +36,120 @@ from xml.dom import minidom
 import logix_to_eplan_csv as l2e
 
 MODULE_DB_DIR = Path(__file__).resolve().parent / "module_db"
+SYMBOL_DB_DIR = Path(__file__).resolve().parent / "symbol_db"
+
+
+ORIENT_CODE = {"n": 0, "e": 1, "s": 2, "w": 3}
+
+# semantic symbol matching (digital points only)
+SYM_FUZZ = 0.82        # min difflib ratio for a fuzzy word hit
+SYM_MIN_SCORE = 0.95   # below this the point keeps the generic terminal
+SYM_X_OFF = 290        # device symbol center, right of the tag/function texts
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", s)
+                   if not unicodedata.combining(c))
+
+
+def _tokens(s: str) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", _strip_accents(s).lower()) if t]
+
+
+def load_symbol_db() -> list[dict]:
+    """Load symbol_db/*.json + their .elmt definitions, sorted by id."""
+    entries = []
+    for path in sorted(SYMBOL_DB_DIR.glob("*.json")):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"warning: ignoring {path.name}: {exc}", file=sys.stderr)
+            continue
+        elmt_path = SYMBOL_DB_DIR / "elements" / entry.get("element", "")
+        if not elmt_path.is_file():
+            print(f"warning: {path.name}: missing {elmt_path.name}", file=sys.stderr)
+            continue
+        try:
+            definition = ET.fromstring(elmt_path.read_text(encoding="utf-8"))
+        except ET.ParseError as exc:
+            print(f"warning: {elmt_path.name}: {exc}", file=sys.stderr)
+            continue
+        entry["_definition"] = definition
+        entry["_terminals"] = [
+            (round(float(t.get("x"))), round(float(t.get("y"))),
+             ORIENT_CODE.get(t.get("orientation"), 0))
+            for t in definition.find("description").iter("terminal")]
+        entries.append(entry)
+    return entries
+
+
+def _suffix_hit(suffix: str, raw_tokens: list[str]) -> bool:
+    """LS matches the tag tokens LS, LS2, 2LS and LS08A (suffix bounded by
+    a digit), but not LSH or FLASH."""
+    s = suffix.upper()
+    for t in raw_tokens:
+        t = t.upper()
+        if (t == s
+                or (t.startswith(s) and t[len(s)].isdigit())
+                or (t.endswith(s) and t[-len(s) - 1].isdigit())):
+            return True
+    return False
+
+
+def _phrase_score(words: list[str], text_tokens: set[str]) -> float:
+    """All words of the phrase must appear (fuzzily) somewhere in the text;
+    longer phrases are more specific and score higher."""
+    worst = 1.0
+    for w in words:
+        if w in text_tokens:
+            continue
+        if len(w) <= 3:        # short words fuzz badly: exact only
+            return 0.0
+        best = max((difflib.SequenceMatcher(None, w, t).ratio()
+                    for t in text_tokens), default=0.0)
+        if best < SYM_FUZZ:
+            return 0.0
+        worst = min(worst, best)
+    return (1.0 + 0.6 * (len(words) - 1)) * worst
+
+
+def match_symbol(symbols: list[dict], tag: str, description: str,
+                 direction: str) -> dict | None:
+    """Pick the field-device symbol for a digital point, or None.
+
+    Inverse of the humanizer: the tag is expanded through l2e.humanize()
+    (abbreviation dictionary) and pooled with the description, then each
+    symbol's keyword phrases and tag-suffix conventions are fuzzy-matched
+    against that text.
+    """
+    raw_tokens = [t for t in re.split(r"[^A-Za-z0-9]+", tag) if t]
+    # words the engineer actually wrote (tag + description, no expansion):
+    # a multi-word match here is the strongest evidence and beats suffixes
+    raw_set = set(t.lower() for t in raw_tokens) | set(_tokens(description or ""))
+    text_tokens = raw_set | set(_tokens(l2e.humanize(tag)))
+    best_key, best = (SYM_MIN_SCORE, 0.0, 0), None
+    for entry in symbols:
+        want = entry.get("direction", "any")
+        if want not in ("any", direction):
+            continue
+        # whole words (PARO, EMERGENCIA) are stronger evidence than 2-letter
+        # codes (PB, LS) when both kinds of suffix hit on the same tag
+        suffix = max((2.8 if len(s) >= 4 else 2.5
+                      for s in entry.get("suffixes", [])
+                      if _suffix_hit(s, raw_tokens)), default=0.0)
+        phrase = 0.0
+        for kw in entry.get("keywords", []):
+            words = _tokens(kw)
+            if not words:
+                continue
+            ps = _phrase_score(words, text_tokens)
+            if len(words) >= 2 and all(w in raw_set for w in words):
+                ps = max(ps, 3.0)
+            phrase = max(phrase, ps)
+        key = (max(suffix, phrase), phrase, entry.get("priority", 0))
+        if key > best_key:
+            best_key, best = key, entry
+    return best
 
 
 def load_module_db(catalog: str) -> dict | None:
@@ -114,29 +236,68 @@ def add_rect(shapes: ET.Element, x1: int, y1: int, x2: int, y2: int,
     ET.SubElement(shape, "brush", {"color": "#000000", "style": "NoBrush"})
 
 
-def add_terminal_element(elements: ET.Element, x: int, y: int,
-                         label: str, function: str):
+def _add_element(elements: ET.Element, type_path: str, x: int, y: int,
+                 orientation: int, pins, infos: dict, ids) -> list[int]:
+    """Place an element instance; allocate one diagram-unique id per pin
+    (conductors reference those ids) and return them in pin order."""
     el = ET.SubElement(elements, "element", {
-        "type": TERMINAL_TYPE,
+        "type": type_path,
         "x": str(x), "y": str(y), "z": "10",
-        "orientation": "0", "prefix": "X", "freezeLabel": "false",
+        "orientation": str(orientation), "prefix": "X", "freezeLabel": "false",
         "uuid": new_uuid(),
     })
     terms = ET.SubElement(el, "terminals")
-    for i, (tx, ty, to) in enumerate(TERMINAL_PINS):
+    pin_ids = []
+    for tx, ty, to in pins:
+        pid = next(ids)
+        pin_ids.append(pid)
         ET.SubElement(terms, "terminal", {
-            "id": str(i), "x": str(tx), "y": str(ty),
+            "id": str(pid), "x": str(tx), "y": str(ty),
             "orientation": str(to), "name": "_", "number": "_",
             "nameHidden": "0",
         })
-    infos = ET.SubElement(el, "elementInformations")
-    for name, value in (("label", label), ("function", function)):
-        info = ET.SubElement(infos, "elementInformation",
-                             {"name": name, "show": "1"})
+    infos_el = ET.SubElement(el, "elementInformations")
+    for name, (value, show) in infos.items():
+        info = ET.SubElement(infos_el, "elementInformation",
+                             {"name": name, "show": show})
         info.text = value
+    return pin_ids
 
 
-def build_folio(project: ET.Element, order: int, mod, points):
+def add_terminal_element(elements: ET.Element, x: int, y: int,
+                         label: str, function: str, ids) -> list[int]:
+    return _add_element(elements, TERMINAL_TYPE, x, y, 0, TERMINAL_PINS,
+                        {"label": (label, "1"), "function": (function, "1")},
+                        ids)
+
+
+def add_symbol_element(elements: ET.Element, entry: dict, x: int, y: int,
+                       label: str, ids) -> tuple[list[int], int]:
+    """Place a symbol_db device rotated 90° CW (horizontal in the row).
+
+    Instance terminals are stored already transformed: (x,y) -> (-y,x),
+    orientation code +1 mod 4. Returns (pin ids, index of the west pin —
+    the one facing the I/O terminal)."""
+    pins = [(-ty, tx, (to + 1) % 4) for tx, ty, to in entry["_terminals"]]
+    west = min(range(len(pins)),
+               key=lambda i: (pins[i][2] != 3, pins[i][0]))
+    type_path = f"embed://import/symbols/{entry['element']}"
+    pin_ids = _add_element(elements, type_path, x, y, 1, pins,
+                           {"label": (label, "0")}, ids)
+    return pin_ids, west
+
+
+def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int):
+    ET.SubElement(conductors, "conductor", {
+        "terminal1": str(terminal1), "terminal2": str(terminal2),
+        "type": "multi", "num": "", "x": "0", "y": "0",
+        "condsize": "1", "numsize": "9", "displaytext": "1",
+        "onetextperfolio": "0", "freezeLabel": "false",
+    })
+
+
+def build_folio(project: ET.Element, order: int, mod, points,
+                symbols: list[dict], sym_counts: dict):
     """One diagram per I/O card; points already sorted."""
     title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
@@ -151,9 +312,10 @@ def build_folio(project: ET.Element, order: int, mod, points):
         "displaytext": "1", "onetextperfolio": "0",
     })
     elements = ET.SubElement(diagram, "elements")
-    conductors = ET.SubElement(diagram, "conductors")  # none yet
+    conductors = ET.SubElement(diagram, "conductors")
     shapes = ET.SubElement(diagram, "shapes")
     inputs = ET.SubElement(diagram, "inputs")
+    ids = itertools.count(1)  # terminal ids must be unique per diagram
 
     db = load_module_db(mod.catalog)
     header = (f"{mod.name}   |   {mod.catalog}   |   Rack {mod.rack}"
@@ -194,22 +356,36 @@ def build_folio(project: ET.Element, order: int, mod, points):
         # filled in module_db)
         add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
         add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {pin}", FONT_SMALL)
-        add_terminal_element(elements, x, y, str(cp), function)
+        term_ids = add_terminal_element(elements, x, y, str(cp), function, ids)
         add_text(inputs, x + 20, y - 8,
                  f"{cp:>2}  {address:<7} {pt.tag}")
         add_text(inputs, x + 20, y + 4, function)
+        # field-device symbol from the semantic match, wired to the terminal
+        sym = None if pt.analog else match_symbol(symbols, pt.tag,
+                                                  pt.description, pt.direction)
+        if sym:
+            pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
+                                               pt.tag, ids)
+            add_conductor(conductors, term_ids[2], pin_ids[west])
+            sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
 
     return diagram
 
 
-def build_collection(project: ET.Element):
-    """Embed the terminal element definition used by every folio."""
+def build_collection(project: ET.Element, used_symbols: list[dict]):
+    """Embed the terminal element plus every symbol the folios used."""
     collection = ET.SubElement(project, "collection")
-    cat = ET.SubElement(collection, "category", {"name": "import"})
+    imp = ET.SubElement(collection, "category", {"name": "import"})
+    cat = imp
     for name in ("10_electric", "10_allpole", "130_terminals&terminal_strips"):
         cat = ET.SubElement(cat, "category", {"name": name})
     el = ET.SubElement(cat, "element", {"name": "borne_2.elmt"})
     el.append(ET.fromstring(TERMINAL_ELMT))
+    if used_symbols:
+        sym_cat = ET.SubElement(imp, "category", {"name": "symbols"})
+        for entry in used_symbols:
+            el = ET.SubElement(sym_cat, "element", {"name": entry["element"]})
+            el.append(entry["_definition"])
 
 
 def main(argv=None):
@@ -219,6 +395,8 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="output .qet path (default: <l5x>.qet)")
     ap.add_argument("--include-hmi", action="store_true",
                     help="include PanelView/HMI-mapped points")
+    ap.add_argument("--no-symbols", action="store_true",
+                    help="skip field-device symbol matching (terminals only)")
     args = ap.parse_args(argv)
 
     out_path = args.output or re.sub(r"\.l5x$", "", args.l5x, flags=re.I) + ".qet"
@@ -239,6 +417,9 @@ def main(argv=None):
         seen.add(key)
         per_module.setdefault(pt.module.name, []).append(pt)
 
+    symbols = [] if args.no_symbols else load_symbol_db()
+    sym_counts: dict[str, int] = {}
+
     project = ET.Element("project", {"title": f"{controller} I/O", "version": "0.80"})
     order = 1
     folios = 0
@@ -246,10 +427,11 @@ def main(argv=None):
         pts = per_module.get(mod.name)
         if not pts:
             continue
-        build_folio(project, order, mod, pts)
+        build_folio(project, order, mod, pts, symbols, sym_counts)
         order += 1
         folios += 1
-    build_collection(project)
+    used = [e for e in symbols if e["id"] in sym_counts]
+    build_collection(project, used)
 
     pretty = minidom.parseString(ET.tostring(project, encoding="unicode")) \
         .toprettyxml(indent="    ")
@@ -261,8 +443,14 @@ def main(argv=None):
     err = sys.stderr
     print(f"controller : {controller}", file=err)
     print(f"folios     : {folios} (one per I/O card with mapped tags)", file=err)
-    print(f"points     : {sum(len(v) for v in per_module.values())} drawn, "
-          f"{len(skipped)} skipped", file=err)
+    n_points = sum(len(v) for v in per_module.values())
+    print(f"points     : {n_points} drawn, {len(skipped)} skipped", file=err)
+    if symbols:
+        matched = sum(sym_counts.values())
+        detail = ", ".join(f"{k} {v}" for k, v in
+                           sorted(sym_counts.items(), key=lambda kv: -kv[1]))
+        print(f"symbols    : {matched} matched ({detail}), "
+              f"{n_points - matched} generic terminal", file=err)
     print(f"output     : {out_path}", file=err)
     return 0
 

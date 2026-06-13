@@ -1,0 +1,31 @@
+{
+  "id": "contact_feedback",
+  "description": "Auxiliary contact (contactor/relay feedback)",
+  "element": "contact_feedback.elmt",
+  "qet_source": "10_electric/10_allpole/310_relays_contactors_contacts/02_contacts_cross_referencing/01_auxiliary_contacts/con_simple.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "AUX",
+    "FB",
+    "KM",
+    "CR"
+  ],
+  "keywords": [
+    "feedback",
+    "confirmacion",
+    "confirmation",
+    "retorno",
+    "aux contact",
+    "auxiliar",
+    "running",
+    "contactor",
+    "fault",
+    "falla",
+    "fallo",
+    "trip",
+    "tripped",
+    "disparo",
+    "motor fault"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "photocell",
+  "description": "Photoelectric sensor / photo eye, NO",
+  "element": "photocell.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/04_sensors_optical/capteur_opt_no_2p.elmt",
+  "direction": "I",
+  "priority": 0,
+  "suffixes": [
+    "FE",
+    "PH"
+  ],
+  "keywords": [
+    "photocell",
+    "photo eye",
+    "photoeye",
+    "fotocelda",
+    "fotocelula",
+    "optical sensor",
+    "optico",
+    "light barrier",
+    "barrera",
+    "beam",
+    "cortina"
+  ]
+}
