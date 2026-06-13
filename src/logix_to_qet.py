@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import difflib
 import itertools
 import json
@@ -214,6 +215,106 @@ BOX_LEFT, BOX_RIGHT = 60, 10   # card box extents relative to terminal x
 PIN_PLACEHOLDER = "__"
 
 
+# ── BOM / device-index folio ────────────────────────────────────────────────
+# Unified flat schema: every emitted row uses exactly these 10 columns, in this
+# order. The CSV sidecar carries all 10 (it is the complete record); the summary
+# folio renders only a legible subset (SUMMARY_FOLIO_COLUMNS below). No category
+# invents columns: each fills the subset the data supports and leaves the rest
+# blank (""). NOTE: 'folio' is the source DRAWING page (diagram order) a row
+# belongs to — NOT the rendered QET folio number of the summary sheet itself.
+BOM_COLUMNS = ("category", "folio", "designation", "catalog_or_type", "tag",
+               "address", "vendor", "description", "rack", "slot")
+
+SUMMARY_ROW_Y0 = 70         # y of the header row
+SUMMARY_ROW_DY = 14         # per-row pitch
+SUMMARY_HEIGHT = 660        # matches the drawing folios' page height
+SUMMARY_BOTTOM_MARGIN = 30  # keep the last row clear of the bottom frame (descent)
+SUMMARY_PAGE_WIDTH = 1010   # cols*colsize = 17*60 = 1020; stay just inside it
+# Rows per summary folio, DERIVED from the geometry so the page-fit invariant
+# (last data row + descent stays inside the frame) cannot silently drift if the
+# pitch/height is retuned. Deterministic, so repeat runs paginate identically.
+SUMMARY_ROWS_PER_PAGE = (SUMMARY_HEIGHT - SUMMARY_ROW_Y0
+                         - SUMMARY_BOTTOM_MARGIN) // SUMMARY_ROW_DY
+
+# The summary folio renders a LEGIBLE SUBSET of the schema (the CSV keeps all 10
+# columns). Each entry is (column-key, left-x, max-chars); a value longer than
+# max-chars is ellipsized so it never overruns into the next column. Widths fit
+# inside SUMMARY_PAGE_WIDTH; 'description' is last and gets the widest budget.
+SUMMARY_FOLIO_COLUMNS = (
+    ("folio", 10, 5),
+    ("designation", 70, 12),
+    ("catalog_or_type", 180, 18),
+    ("tag", 320, 22),
+    ("address", 480, 10),
+    ("description", 560, 88),
+)
+# header labels that differ from the upper-cased column key
+SUMMARY_FOLIO_LABELS = {"catalog_or_type": "TYPE"}
+
+
+def _ellipsize(text: str, max_chars: int) -> str:
+    """Truncate `text` to at most max_chars, marking truncation with a single
+    ellipsis so a too-long cell never overruns its folio column. Pure; the CSV
+    sidecar is unaffected (it keeps the full value)."""
+    if not isinstance(text, str) or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars == 1:
+        return "…"
+    return text[:max_chars - 1] + "…"
+
+
+def _bom_row(category: str, folio: int, *, designation: str = "",
+             catalog_or_type: str = "", tag: str = "", address: str = "",
+             vendor: str = "", description: str = "", rack: str = "",
+             slot: str = "") -> dict:
+    """Build one schema row as a dict keyed by BOM_COLUMNS.
+
+    Pure and deterministic (stdlib only, no I/O). Every column is present;
+    callers fill only the columns their category supports and the rest stay
+    "" (blank). `folio` (an int page/order number) is coerced to str so CSV
+    and folio rendering see a single canonical string form."""
+    return {
+        "category": category,
+        "folio": str(folio),
+        "designation": designation,
+        "catalog_or_type": catalog_or_type,
+        "tag": tag,
+        "address": address,
+        "vendor": vendor,
+        "description": description,
+        "rack": rack,
+        "slot": slot,
+    }
+
+
+def module_bom_row(folio: int, *, catalog: str, vendor: str, description: str,
+                   rack: str, slot: str) -> dict:
+    """(module) one row per I/O card: catalog_or_type/vendor/description/rack/
+    slot filled; designation/tag/address left blank (a card is not a device and
+    has no single tag or address)."""
+    return _bom_row("module", folio, catalog_or_type=catalog, vendor=vendor,
+                    description=description, rack=rack, slot=slot)
+
+
+def device_bom_row(folio: int, *, designation: str, type_id: str,
+                   description: str, tag: str, address: str) -> dict:
+    """(device) one row per MATCHED field device: designation is the IEC 81346
+    tag that was actually emitted (from next_designation, or the documented PLC-
+    tag fallback — never fabricated), catalog_or_type is the matched symbol
+    entry's type id, description is the symbol's human description, tag/address
+    come from the point; vendor/rack/slot stay blank."""
+    return _bom_row("device", folio, designation=designation,
+                    catalog_or_type=type_id, description=description,
+                    tag=tag, address=address)
+
+
+def generic_bom_row(folio: int, *, tag: str, address: str) -> dict:
+    """(generic) one row per UNMATCHED point (and EVERY analog point): only
+    tag/address filled. Guardrail — designation and catalog_or_type MUST stay
+    blank so an unmatched point is never assigned a device identity."""
+    return _bom_row("generic", folio, tag=tag, address=address)
+
+
 def new_uuid() -> str:
     return "{%s}" % uuid.uuid4()
 
@@ -352,8 +453,16 @@ def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int,
 
 def build_folio(project: ET.Element, order: int, mod, points,
                 symbols: list[dict], sym_counts: dict, designations: dict,
-                wire_scheme: str = "address", wire_counters: dict | None = None):
-    """One diagram per I/O card; points already sorted."""
+                wire_scheme: str = "address", wire_counters: dict | None = None,
+                bom_rows: list | None = None):
+    """One diagram per I/O card; points already sorted.
+
+    If `bom_rows` is given, schema rows are appended to it DURING this single
+    traversal (no second pass, no recomputation): one (module) row for the
+    card, then one (device) row per matched field device or one (generic) row
+    per unmatched/analog point, in the deterministic folio/point order. The
+    accumulator is data-only — appending to it does not touch the emitted XML,
+    so the drawing folios stay byte-for-byte identical."""
     title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
@@ -383,6 +492,16 @@ def build_folio(project: ET.Element, order: int, mod, points,
                                      db.get("rtb")) if s)
         add_text(inputs, 40, 44, sub, FONT_SMALL)
     wiring = db["_wiring_by_point"] if db else {}
+
+    # (module) BOM row for this I/O card — only data already computed above:
+    # the catalog, and the vendor/description the sub-header already rendered.
+    if bom_rows is not None:
+        bom_rows.append(module_bom_row(
+            order, catalog=mod.catalog,
+            vendor=(db.get("vendor") or "") if db else "",
+            description=(db.get("description") or "") if db else "",
+            rack=str(mod.rack),
+            slot="" if mod.slot is None else str(mod.slot)))
 
     # classical card box: one per column of points, card name on top
     n_cols = (mod.points + POINTS_PER_COL - 1) // POINTS_PER_COL
@@ -435,6 +554,20 @@ def build_folio(project: ET.Element, order: int, mod, points,
             num = wire_number(address, order, wire_scheme, wire_counters) or ""
             add_conductor(conductors, term_ids[2], pin_ids[west], num)
             sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
+            # (device) BOM row — designation is exactly what we labelled the
+            # placed symbol with (next_designation result or PLC-tag fallback),
+            # never a fabricated value; type/description come from the matched
+            # symbol entry already in hand.
+            if bom_rows is not None:
+                bom_rows.append(device_bom_row(
+                    order, designation=designation, type_id=sym["id"],
+                    description=sym.get("description") or "",
+                    tag=pt.tag, address=address))
+        elif bom_rows is not None:
+            # (generic) BOM row — unmatched point (or any analog point): only
+            # tag/address; designation and catalog_or_type stay blank so we
+            # never invent a device for a point that matched no symbol.
+            bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
 
     return diagram
 
@@ -453,6 +586,100 @@ def build_collection(project: ET.Element, used_symbols: list[dict]):
         for entry in used_symbols:
             el = ET.SubElement(sym_cat, "element", {"name": entry["element"]})
             el.append(entry["_definition"])
+
+
+def _csv_safe(value: str) -> str:
+    """Guard a CSV cell against spreadsheet formula injection.
+
+    A cell whose first character is one of = + - @ is interpreted as a formula
+    by Excel / LibreOffice Calc — and every device designation starts with '-'
+    (e.g. -S1.1), so without a guard the BOM's primary cross-reference column
+    shows #NAME? errors. Such a value is prefixed with a single apostrophe, the
+    spreadsheet text marker, so it is never evaluated. Only the CSV sidecar is
+    affected; the .qet folio label and the stored designation keep the raw
+    value. Empty / non-str values pass through unchanged."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
+def write_bom_csv(path, bom_rows: list[dict]):
+    """Write the BOM rows to a CSV sidecar using the stdlib csv module.
+
+    Header is BOM_COLUMNS in order; one line per row across all three
+    categories; blank columns are emitted as empty fields. Every cell is passed
+    through _csv_safe so a formula-leading value can't be misread by a
+    spreadsheet. newline="" is the documented csv contract so the module
+    controls line endings."""
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(BOM_COLUMNS))
+        writer.writeheader()
+        for row in bom_rows:
+            writer.writerow({k: _csv_safe(v) for k, v in row.items()})
+
+
+def _add_summary_diagram(project: ET.Element, order: int, page_rows: list[dict],
+                         page_no: int, page_total: int) -> ET.Element:
+    """Render one summary folio: a legible text table (header + the given rows)
+    drawn with ONLY text and shape primitives — no <element>/terminal instances
+    and no <conductor>. Only the SUMMARY_FOLIO_COLUMNS subset is shown and each
+    cell is ellipsized to its column width so columns never overlap (the CSV
+    sidecar keeps all 10 columns at full width). Keeps empty <elements>/
+    <conductors> containers so the project schema matches the drawing folios."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order),
+        "title": f"BOM / device index ({page_no}/{page_total})",
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    x0 = SUMMARY_FOLIO_COLUMNS[0][1]
+    add_text(inputs, x0, 30,
+             f"BOM / DEVICE INDEX   (page {page_no} of {page_total})",
+             FONT_HEADER)
+    # column header row (subset only)
+    for key, x, _w in SUMMARY_FOLIO_COLUMNS:
+        add_text(inputs, x, SUMMARY_ROW_Y0,
+                 SUMMARY_FOLIO_LABELS.get(key, key.upper()), FONT_SMALL)
+    # header rule: a thin (2 px tall) rectangle clamped inside the page frame —
+    # a zero-height rectangle does not render as a line in QElectroTech.
+    y_rule = SUMMARY_ROW_Y0 + 6
+    add_rect(shapes, x0, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
+    # one text line per row; each cell ellipsized to its column width
+    for i, row in enumerate(page_rows):
+        y = SUMMARY_ROW_Y0 + (i + 1) * SUMMARY_ROW_DY
+        for key, x, w in SUMMARY_FOLIO_COLUMNS:
+            value = _ellipsize(row.get(key, ""), w)
+            if value:
+                add_text(inputs, x, y, value, FONT_SMALL)
+    return diagram
+
+
+def build_summary_folios(project: ET.Element, start_order: int,
+                         bom_rows: list[dict]) -> int:
+    """Append paginated summary folio(s) AFTER the drawing folios (order numbers
+    continue past them). Rows are split so no row is drawn past the page bottom
+    (SUMMARY_ROWS_PER_PAGE per page, deterministic). Returns the number of
+    summary folios appended."""
+    if not bom_rows:
+        return 0
+    pages = [bom_rows[i:i + SUMMARY_ROWS_PER_PAGE]
+             for i in range(0, len(bom_rows), SUMMARY_ROWS_PER_PAGE)]
+    total = len(pages)
+    for n, page_rows in enumerate(pages, start=1):
+        _add_summary_diagram(project, start_order + n - 1, page_rows, n, total)
+    return total
 
 
 def main(argv=None):
@@ -502,16 +729,29 @@ def main(argv=None):
     project = ET.Element("project", {"title": f"{controller} I/O", "version": "0.80"})
     order = 1
     folios = 0
+    # BOM rows accumulated DURING the folio/point traversal below (no second
+    # pass): deterministic order == folio/point order, so repeat runs of the
+    # same L5X produce byte-identical rows. Scope: the BOM indexes the DRAWN
+    # points (one row per module + per drawn point); the points l2e skipped as
+    # unmapped get no row, so the BOM mirrors the drawing, not the raw I/O map.
+    bom_rows: list[dict] = []
     for mod in io_mods:
         pts = per_module.get(mod.name)
         if not pts:
             continue
         build_folio(project, order, mod, pts, symbols, sym_counts, designations,
-                    args.wire_scheme, wire_counters)
+                    args.wire_scheme, wire_counters, bom_rows=bom_rows)
         order += 1
         folios += 1
+    # summary folio(s) come AFTER the drawing folios (order continues past
+    # them); the drawing folios' XML is untouched.
+    summary_folios = build_summary_folios(project, order, bom_rows)
     used = [e for e in symbols if e["id"] in sym_counts]
     build_collection(project, used)
+
+    # CSV sidecar next to the .qet: <output-base>_bom.csv
+    bom_path = re.sub(r"\.qet$", "", out_path, flags=re.I) + "_bom.csv"
+    write_bom_csv(bom_path, bom_rows)
 
     pretty = minidom.parseString(ET.tostring(project, encoding="unicode")) \
         .toprettyxml(indent="    ")
@@ -531,7 +771,13 @@ def main(argv=None):
                            sorted(sym_counts.items(), key=lambda kv: -kv[1]))
         print(f"symbols    : {matched} matched ({detail}), "
               f"{n_points - matched} generic terminal", file=err)
+    n_mod = sum(1 for r in bom_rows if r["category"] == "module")
+    n_dev = sum(1 for r in bom_rows if r["category"] == "device")
+    n_gen = sum(1 for r in bom_rows if r["category"] == "generic")
+    print(f"bom        : {len(bom_rows)} rows ({n_mod} module, {n_dev} device, "
+          f"{n_gen} generic) over {summary_folios} summary folio(s)", file=err)
     print(f"output     : {out_path}", file=err)
+    print(f"bom csv    : {bom_path}", file=err)
     return 0
 
 

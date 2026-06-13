@@ -35,6 +35,7 @@ test_data/
 *.AML
 *.RDF
 *_eplan.csv
+*_bom.csv
 *.qet
 
 # Personal files
