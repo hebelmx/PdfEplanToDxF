@@ -153,7 +153,7 @@ When done, leave the working tree with your changes in place (do NOT commit, do 
 Report exactly which files you changed.
 
 ${GUARDRAILS}`,
-  { phase: 'Implement', label: 'implement', schema: IMPL_SCHEMA, agentType: 'bmad-agent-dev' }
+  { phase: 'Implement', label: 'implement', schema: IMPL_SCHEMA }
 )
 
 if (!impl || !impl.completed) {
