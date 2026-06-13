@@ -310,17 +310,49 @@ def next_designation(entry: dict, counters: dict, page: int) -> str | None:
     return f"-{dt}{page}.{n}"
 
 
-def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int):
+def wire_number(address: str | None, page: int, scheme: str,
+                counters: dict) -> str | None:
+    """Wire number for a field conductor (terminal pin -> field-device pin).
+
+    Pure and deterministic, mirroring next_designation: no I/O, no globals, and
+    repeat calls with identical inputs and an equivalent counter state produce
+    identical output. Returns None when there is no defined source point so the
+    caller can leave num="" rather than invent a placeholder number.
+
+    Schemes:
+      'address'    — the default; returns the EPLAN address VERBATIM (e.g.
+                     'Q0.0' -> 'Q0.0', 'IW100' -> 'IW100'), no page prefix and
+                     no transformation.
+      'sequential' — returns 'W<page>.<n>' where <page> is the folio order and
+                     <n> is a per-folio running count that starts at 1 and
+                     increments per conductor on the same page, resetting to 1
+                     on a new page. The count is carried via `counters` (same
+                     mechanism as next_designation), keyed by page.
+
+    Guardrail — no invented numbers: when `address` is None or empty there is no
+    defined source point, so both schemes return None."""
+    if not isinstance(address, str) or not address.strip():
+        return None
+    if scheme == "sequential":
+        n = counters.get(page, 0) + 1
+        counters[page] = n
+        return f"W{page}.{n}"
+    return address.strip()
+
+
+def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int,
+                  num: str = ""):
     ET.SubElement(conductors, "conductor", {
         "terminal1": str(terminal1), "terminal2": str(terminal2),
-        "type": "multi", "num": "", "x": "0", "y": "0",
+        "type": "multi", "num": num, "x": "0", "y": "0",
         "condsize": "1", "numsize": "9", "displaytext": "1",
         "onetextperfolio": "0", "freezeLabel": "false",
     })
 
 
 def build_folio(project: ET.Element, order: int, mod, points,
-                symbols: list[dict], sym_counts: dict, designations: dict):
+                symbols: list[dict], sym_counts: dict, designations: dict,
+                wire_scheme: str = "address", wire_counters: dict | None = None):
     """One diagram per I/O card; points already sorted."""
     title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
@@ -334,6 +366,8 @@ def build_folio(project: ET.Element, order: int, mod, points,
         "type": "multi", "num": "", "condsize": "1", "numsize": "9",
         "displaytext": "1", "onetextperfolio": "0",
     })
+    if wire_counters is None:
+        wire_counters = {}
     elements = ET.SubElement(diagram, "elements")
     conductors = ET.SubElement(diagram, "conductors")
     shapes = ET.SubElement(diagram, "shapes")
@@ -395,7 +429,11 @@ def build_folio(project: ET.Element, order: int, mod, points,
             designation = next_designation(sym, designations, order) or pt.tag
             pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
                                                designation, ids)
-            add_conductor(conductors, term_ids[2], pin_ids[west])
+            # the field conductor wires the I/O terminal pin to its matched
+            # field-device symbol pin; the address is a defined source point, so
+            # it carries a visible wire number (None only if address is empty)
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], pin_ids[west], num)
             sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
 
     return diagram
@@ -426,6 +464,11 @@ def main(argv=None):
                     help="include PanelView/HMI-mapped points")
     ap.add_argument("--no-symbols", action="store_true",
                     help="skip field-device symbol matching (terminals only)")
+    ap.add_argument("--wire-scheme", choices=("address", "sequential"),
+                    default="address",
+                    help="field-conductor wire numbering: 'address' uses the "
+                         "EPLAN address verbatim (default); 'sequential' uses "
+                         "per-folio W<page>.<n>")
     args = ap.parse_args(argv)
 
     out_path = args.output or re.sub(r"\.l5x$", "", args.l5x, flags=re.I) + ".qet"
@@ -452,6 +495,9 @@ def main(argv=None):
     # so each folio numbers its own devices from 1; filled in the deterministic
     # folio/point traversal below
     designations: dict[tuple[int, str], int] = {}
+    # per-folio wire-number counter keyed by page -> last sequential number,
+    # so each folio numbers its own field conductors from 1 (sequential scheme)
+    wire_counters: dict[int, int] = {}
 
     project = ET.Element("project", {"title": f"{controller} I/O", "version": "0.80"})
     order = 1
@@ -460,7 +506,8 @@ def main(argv=None):
         pts = per_module.get(mod.name)
         if not pts:
             continue
-        build_folio(project, order, mod, pts, symbols, sym_counts, designations)
+        build_folio(project, order, mod, pts, symbols, sym_counts, designations,
+                    args.wire_scheme, wire_counters)
         order += 1
         folios += 1
     used = [e for e in symbols if e["id"] in sym_counts]

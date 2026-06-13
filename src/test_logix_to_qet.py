@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the device-designation helper in logix_to_qet.py.
+"""Unit tests for the designation/wire-number helpers in logix_to_qet.py.
 
 Stdlib-only (unittest). Run from anywhere:
     python -m unittest src.test_logix_to_qet
@@ -9,7 +9,9 @@ or from src/:
 
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -86,6 +88,93 @@ class NextDesignationTest(unittest.TestCase):
             seq2.append(q.next_designation({"dt": dt}, c2, page))
         self.assertEqual(seq1, seq2)
         self.assertEqual(seq1, ["-B1.1", "-B1.2", "-S1.1", "-K3.1", "-K3.2"])
+
+
+class WireNumberTest(unittest.TestCase):
+    def test_address_scheme_returns_address_verbatim(self):
+        """Default scheme: address passes through untouched, no page prefix."""
+        for addr in ("Q0.0", "I2.4", "IW100"):
+            self.assertEqual(
+                q.wire_number(addr, 3, "address", {}), addr)
+
+    def test_sequential_scheme_increments_within_page(self):
+        counters = {}
+        self.assertEqual(q.wire_number("Q0.0", 3, "sequential", counters), "W3.1")
+        self.assertEqual(q.wire_number("Q0.1", 3, "sequential", counters), "W3.2")
+        self.assertEqual(q.wire_number("Q0.2", 3, "sequential", counters), "W3.3")
+
+    def test_sequential_scheme_resets_on_new_page(self):
+        counters = {}
+        self.assertEqual(q.wire_number("I0.0", 3, "sequential", counters), "W3.1")
+        self.assertEqual(q.wire_number("I0.1", 3, "sequential", counters), "W3.2")
+        self.assertEqual(q.wire_number("I0.0", 4, "sequential", counters), "W4.1")
+        # page 3 continues from where it left off, independent of page 4
+        self.assertEqual(q.wire_number("I0.2", 3, "sequential", counters), "W3.3")
+
+    def test_none_or_empty_address_returns_none_both_schemes(self):
+        """Guardrail: no defined source point -> no invented number."""
+        for scheme in ("address", "sequential"):
+            for addr in (None, "", "   "):
+                counters = {}
+                self.assertIsNone(
+                    q.wire_number(addr, 3, scheme, counters))
+                # and it must not consume a sequential number
+                self.assertEqual(counters, {})
+
+    def test_deterministic_repeat(self):
+        inputs = [("Q0.0", 3), ("Q0.1", 3), ("I0.0", 4), ("I0.1", 4), ("I0.2", 3)]
+        seq1, c1 = [], {}
+        for addr, page in inputs:
+            seq1.append(q.wire_number(addr, page, "sequential", c1))
+        seq2, c2 = [], {}
+        for addr, page in inputs:
+            seq2.append(q.wire_number(addr, page, "sequential", c2))
+        self.assertEqual(seq1, seq2)
+        self.assertEqual(seq1, ["W3.1", "W3.2", "W4.1", "W4.2", "W3.3"])
+
+    def test_address_scheme_trims_surrounding_whitespace(self):
+        """Emptiness is judged on the stripped form, so the returned value is
+        stripped too — no padded num lands in the conductor attribute."""
+        self.assertEqual(q.wire_number("  Q0.0  ", 3, "address", {}), "Q0.0")
+
+
+class BuildFolioWireNumberTest(unittest.TestCase):
+    """Integration: the build_folio call site must actually populate the
+    conductor `num` (the pure-helper tests above can't catch a broken/dropped
+    call site, which is the whole point of the feature)."""
+
+    @staticmethod
+    def _folio(scheme):
+        """Build one folio with two symbol-matching input points (LS1/LS2 ->
+        limit_switch) and return the resulting <diagram> element."""
+        symbols = q.load_symbol_db()
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog="FAKE-NODB",
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pts = [SimpleNamespace(module=mod, index=i, tag=tag, direction="I",
+                               description="", analog=False)
+               for i, tag in ((0, "LS1"), (1, "LS2"))]
+        project = ET.Element("project")
+        q.build_folio(project, 3, mod, pts, symbols, {}, {},
+                      wire_scheme=scheme, wire_counters={})
+        return project.find("diagram")
+
+    def test_address_scheme_emits_eplan_address_verbatim(self):
+        diagram = self._folio("address")
+        nums = [c.get("num") for c in diagram.find("conductors").findall("conductor")]
+        self.assertEqual(nums, ["I0.0", "I0.1"])
+        # every field conductor carries a non-empty num...
+        self.assertTrue(all(nums))
+        # ...while the defaultconductor template stays empty (sourceless).
+        self.assertEqual(diagram.find("defaultconductor").get("num"), "")
+
+    def test_sequential_scheme_emits_per_folio_wire_numbers(self):
+        diagram = self._folio("sequential")
+        nums = [c.get("num") for c in diagram.find("conductors").findall("conductor")]
+        self.assertEqual(nums, ["W3.1", "W3.2"])
+        self.assertTrue(all(nums))
+        self.assertEqual(diagram.find("defaultconductor").get("num"), "")
 
 
 if __name__ == "__main__":
