@@ -1,6 +1,7 @@
 {
   "id": "relay_coil",
   "description": "Relay / contactor coil",
+  "dt": "K",
   "element": "relay_coil.elmt",
   "qet_source": "10_electric/10_allpole/310_relays_contactors_contacts/01_coils/bobine3.elmt",
   "direction": "O",

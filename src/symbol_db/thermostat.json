@@ -1,6 +1,7 @@
 {
   "id": "thermostat",
   "description": "Thermostat / temperature switch / thermal contact",
+  "dt": "B",
   "element": "thermostat.elmt",
   "qet_source": "10_electric/10_allpole/390_sensors_instruments/15_sensors_temperature/thermostat_01.elmt",
   "direction": "I",

@@ -1,6 +1,7 @@
 {
   "id": "emergency_stop",
   "description": "Emergency stop, mushroom head",
+  "dt": "S",
   "element": "emergency_stop.elmt",
   "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/au.elmt",
   "direction": "I",

@@ -1,6 +1,7 @@
 {
   "id": "flow_switch",
   "description": "Flow switch (fluid)",
+  "dt": "B",
   "element": "flow_switch.elmt",
   "qet_source": "10_electric/10_allpole/390_sensors_instruments/11_sensors_flow/debit_fluide_no.elmt",
   "direction": "I",

@@ -1,6 +1,7 @@
 {
   "id": "photocell",
   "description": "Photoelectric sensor / photo eye, NO",
+  "dt": "B",
   "element": "photocell.elmt",
   "qet_source": "10_electric/10_allpole/390_sensors_instruments/04_sensors_optical/capteur_opt_no_2p.elmt",
   "direction": "I",

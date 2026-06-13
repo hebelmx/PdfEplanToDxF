@@ -1,6 +1,7 @@
 {
   "id": "limit_switch",
   "description": "Limit switch / position switch, NO contact",
+  "dt": "B",
   "element": "limit_switch.elmt",
   "qet_source": "10_electric/10_allpole/390_sensors_instruments/41_limit_switches/fin_de_course_no.elmt",
   "direction": "I",

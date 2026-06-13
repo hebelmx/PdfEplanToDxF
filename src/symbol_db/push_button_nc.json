@@ -1,6 +1,7 @@
 {
   "id": "push_button_nc",
   "description": "Push button, NC (stop style)",
+  "dt": "S",
   "element": "push_button_nc.elmt",
   "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/poussoir_nf.elmt",
   "direction": "I",

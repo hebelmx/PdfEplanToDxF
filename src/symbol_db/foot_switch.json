@@ -1,6 +1,7 @@
 {
   "id": "foot_switch",
   "description": "Foot switch / pedal, NO",
+  "dt": "S",
   "element": "foot_switch.elmt",
   "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/foot_no.elmt",
   "direction": "I",

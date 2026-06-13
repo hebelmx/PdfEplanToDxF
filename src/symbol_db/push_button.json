@@ -1,6 +1,7 @@
 {
   "id": "push_button",
   "description": "Push button, NO (start/reset style)",
+  "dt": "S",
   "element": "push_button.elmt",
   "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/poussoir.elmt",
   "direction": "I",

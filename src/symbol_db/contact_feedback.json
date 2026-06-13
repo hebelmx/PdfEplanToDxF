@@ -1,6 +1,7 @@
 {
   "id": "contact_feedback",
   "description": "Auxiliary contact (contactor/relay feedback)",
+  "dt": "K",
   "element": "contact_feedback.elmt",
   "qet_source": "10_electric/10_allpole/310_relays_contactors_contacts/02_contacts_cross_referencing/01_auxiliary_contacts/con_simple.elmt",
   "direction": "I",

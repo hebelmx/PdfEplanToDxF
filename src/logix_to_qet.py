@@ -283,8 +283,31 @@ def add_symbol_element(elements: ET.Element, entry: dict, x: int, y: int,
                key=lambda i: (pins[i][2] != 3, pins[i][0]))
     type_path = f"embed://import/symbols/{entry['element']}"
     pin_ids = _add_element(elements, type_path, x, y, 1, pins,
-                           {"label": (label, "0")}, ids)
+                           {"label": (label, "1")}, ids)
     return pin_ids, west
+
+
+def next_designation(entry: dict, counters: dict, page: int) -> str | None:
+    """IEC 81346 device tag (e.g. -K3.1) for a matched symbol_db entry.
+
+    The class letter is the entry's "dt" field; the folio's page number is the
+    prefix and a per-(page, letter) counter assigns the sequence, so every page
+    numbers its own devices from 1 (-K3.1, -K3.2, ...). The page prefix keeps
+    designations unambiguous across folios without relying on project-wide
+    numbering continuity (no convention requires it). Called in the
+    deterministic folio/point traversal so repeat runs of the same L5X produce
+    identical designations. Returns None when the entry carries no usable single
+    A–Z "dt" letter (graceful degradation — caller falls back to the PLC tag)."""
+    dt = entry.get("dt")
+    if not isinstance(dt, str):
+        return None
+    dt = dt.strip().upper()
+    if len(dt) != 1 or not ("A" <= dt <= "Z"):
+        return None
+    key = (page, dt)
+    n = counters.get(key, 0) + 1
+    counters[key] = n
+    return f"-{dt}{page}.{n}"
 
 
 def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int):
@@ -297,7 +320,7 @@ def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int):
 
 
 def build_folio(project: ET.Element, order: int, mod, points,
-                symbols: list[dict], sym_counts: dict):
+                symbols: list[dict], sym_counts: dict, designations: dict):
     """One diagram per I/O card; points already sorted."""
     title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
@@ -364,8 +387,14 @@ def build_folio(project: ET.Element, order: int, mod, points,
         sym = None if pt.analog else match_symbol(symbols, pt.tag,
                                                   pt.description, pt.direction)
         if sym:
+            # IEC 81346 designation (e.g. -K3.1, page-prefixed) becomes the
+            # symbol label; if the matched entry has no usable "dt" we fall back
+            # to the PLC tag so a placed device never carries an empty/garbage
+            # label. The PLC tag and function text stay visible in the row texts
+            # above regardless.
+            designation = next_designation(sym, designations, order) or pt.tag
             pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
-                                               pt.tag, ids)
+                                               designation, ids)
             add_conductor(conductors, term_ids[2], pin_ids[west])
             sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
 
@@ -419,6 +448,10 @@ def main(argv=None):
 
     symbols = [] if args.no_symbols else load_symbol_db()
     sym_counts: dict[str, int] = {}
+    # IEC 81346 counter keyed by (page, class letter) -> last sequential number,
+    # so each folio numbers its own devices from 1; filled in the deterministic
+    # folio/point traversal below
+    designations: dict[tuple[int, str], int] = {}
 
     project = ET.Element("project", {"title": f"{controller} I/O", "version": "0.80"})
     order = 1
@@ -427,7 +460,7 @@ def main(argv=None):
         pts = per_module.get(mod.name)
         if not pts:
             continue
-        build_folio(project, order, mod, pts, symbols, sym_counts)
+        build_folio(project, order, mod, pts, symbols, sym_counts, designations)
         order += 1
         folios += 1
     used = [e for e in symbols if e["id"] in sym_counts]

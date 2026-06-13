@@ -1,6 +1,7 @@
 {
   "id": "horn",
   "description": "Horn / siren / audible alarm",
+  "dt": "H",
   "element": "horn.elmt",
   "qet_source": "10_electric/10_allpole/380_signaling_operating/12_acoustic_signaling/sirene.elmt",
   "direction": "O",
