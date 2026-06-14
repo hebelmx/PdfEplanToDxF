@@ -1253,6 +1253,56 @@ class SupplyFolioTest(unittest.TestCase):
         self.assertIsNotNone(d.find("properties"))
 
 
+class ReorderDiagramsByPositionTest(unittest.TestCase):
+    """DA.2: reorder_diagrams_by_position stably re-sorts <diagram> children by
+    their integer 'order' attribute, decoupling folio position from build order
+    while leaving every attribute and any non-diagram child untouched."""
+
+    @staticmethod
+    def _project(orders):
+        p = ET.Element("project")
+        for o in orders:
+            d = ET.SubElement(p, "diagram", {"title": f"t{o}"})
+            if o is not None:
+                d.set("order", str(o))
+        return p
+
+    def test_sorts_by_integer_order_not_string(self):
+        # 100 < 101 < 200 < 900 numerically (string sort would put "1000"<"200")
+        p = self._project([900, 101, 300, 100, 200])
+        ordered = q.reorder_diagrams_by_position(p)
+        seq = [int(d.get("order")) for d in p.findall("diagram")]
+        self.assertEqual(seq, [100, 101, 200, 300, 900])
+        self.assertEqual([d.get("order") for d in ordered],
+                         ["100", "101", "200", "300", "900"])
+
+    def test_stable_and_missing_order_sorts_last(self):
+        p = ET.Element("project")
+        a = ET.SubElement(p, "diagram", {"title": "no-order-A"})
+        b = ET.SubElement(p, "diagram", {"title": "p5", "order": "5"})
+        c = ET.SubElement(p, "diagram", {"title": "no-order-B"})
+        q.reorder_diagrams_by_position(p)
+        titles = [d.get("title") for d in p.findall("diagram")]
+        # the ordered one floats to the front; the two order-less keep A-before-B
+        self.assertEqual(titles, ["p5", "no-order-A", "no-order-B"])
+
+    def test_preserves_non_diagram_children(self):
+        p = self._project([200, 100])
+        coll = ET.SubElement(p, "collection")  # e.g. the symbol collection
+        coll.set("tag", "keep")
+        q.reorder_diagrams_by_position(p)
+        tags = [c.tag for c in list(p)]
+        self.assertEqual(tags.count("collection"), 1)
+        self.assertEqual(p.find("collection").get("tag"), "keep")
+        seq = [int(d.get("order")) for d in p.findall("diagram")]
+        self.assertEqual(seq, [100, 200])
+
+    def test_no_diagrams_is_noop(self):
+        p = ET.Element("project")
+        ET.SubElement(p, "collection")
+        self.assertEqual(q.reorder_diagrams_by_position(p), [])
+
+
 class WaddingRegressionTest(unittest.TestCase):
     """End-to-end floor: the WADDING_1 fixture must still produce 10 drawing
     folios / 106 points / 75 matched / 0 false positives, with the summary +
@@ -1324,6 +1374,50 @@ class WaddingRegressionTest(unittest.TestCase):
         for d in root.findall("diagram"):
             for prop in d.find("properties").findall("property"):
                 self.assertNotIn("%{", prop.text or "")
+
+    def test_folios_in_natural_drawing_order(self):
+        # DA.2: document order == section order. The 'order' attribute (section
+        # page) must be non-decreasing across the diagrams as serialized, and the
+        # section anchors must fall in the natural sequence: Alimentación (100) →
+        # card drawings (101..110) → borneros (200+) → BOM (300+) → Historial (900).
+        root, _, _ = self._run()
+        diagrams = root.findall("diagram")
+        orders = [int(d.get("order")) for d in diagrams]
+        self.assertEqual(orders, sorted(orders))   # serialized in section order
+        titles = [d.get("title") or "" for d in diagrams]
+        idx = lambda pred: next(i for i, t in enumerate(titles) if pred(t))
+        i_supply = idx(lambda t: t == "Alimentación")
+        i_draw = idx(lambda t: t.startswith("R"))
+        i_born = idx(lambda t: t.startswith("Bornero"))
+        i_bom = idx(lambda t: "BOM" in t)
+        i_chg = idx(lambda t: "revisiones" in t.lower())
+        self.assertLess(i_supply, i_draw)
+        self.assertLess(i_draw, i_born)
+        self.assertLess(i_born, i_bom)
+        self.assertLess(i_bom, i_chg)
+        self.assertEqual(i_chg, len(titles) - 1)   # changelog is LAST
+
+    def test_designations_follow_printed_page(self):
+        # DA.5: designations FOLLOW the printed page. Each card drawing sits on a
+        # section page 101..110 and every -K<page>.<n> device on that folio uses
+        # that folio's page as the prefix (so no -K1.. -K10.. survive).
+        root, _, _ = self._run()
+        drawing = [d for d in root.findall("diagram")
+                   if (d.get("title") or "").startswith("R")]
+        self.assertEqual(len(drawing), 10)
+        pages = sorted(int(d.get("order")) for d in drawing)
+        self.assertEqual(pages, list(range(101, 111)))   # 101..110
+        seen_prefixes = set()
+        for d in drawing:
+            page = d.get("order")
+            xml = ET.tostring(d, encoding="unicode")
+            for prefix in re.findall(r"-[A-Z](\d+)\.\d+", xml):
+                self.assertEqual(prefix, page,
+                                 f"designation prefix {prefix} on folio {page}")
+                seen_prefixes.add(prefix)
+        # at least some page-prefixed designations actually exist (sanity)
+        self.assertTrue(seen_prefixes)
+        self.assertTrue(seen_prefixes.issubset({str(p) for p in range(101, 111)}))
 
     def test_structural_invariants_hold(self):
         root, _, _ = self._run()

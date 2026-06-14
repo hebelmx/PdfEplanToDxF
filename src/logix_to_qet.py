@@ -1325,6 +1325,56 @@ def build_bornero_folios(project: ET.Element, start_order: int,
     return n
 
 
+# ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
+# Each document section starts on a round page boundary so a section can grow
+# without renumbering the sections downstream of it. The drawing-sheet page
+# number is ALSO the device-designation / wire-number prefix (decision: the
+# designations FOLLOW the printed page), so the 10 schematic sheets carry pages
+# 101..110 and their devices are -K101.x .. -K110.x. The non-schematic sections
+# carry no designations, so their page numbers are free to use the gap scheme.
+# Build order stays dependency-driven (bom_rows / drawn_cards / sym_counts come
+# from the drawing loop); reorder_diagrams_by_position re-sorts the <diagram>
+# children into this section order just before serialization.
+SECTION_PORTADA = 0        # cover sheet (DA.3)
+SECTION_SIMBOLOGIA = 1     # symbol legend (DA.4)
+SECTION_SUPPLY = 100       # 'Alimentación' rail folio
+SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
+SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
+SECTION_BOM = 300          # BOM / device-index summary folios
+SECTION_CHANGELOG = 900    # revision-history folio, LAST
+
+
+def reorder_diagrams_by_position(project: ET.Element) -> list:
+    """Stably re-sort the <diagram> children of <project> by their integer
+    `order` attribute (the DA.5 section page number), decoupling folio POSITION
+    from build order (which is driven by data dependencies). QET renders folios
+    in document order, so this puts the set into natural drawing order
+    (Portada → Simbología → Alimentación → card drawings → borneros → BOM →
+    Historial). Diagrams keep the slots they collectively occupied among any
+    non-diagram children; a diagram with a missing/non-integer order sorts last,
+    preserving its relative position (stable sort). Returns the ordered diagram
+    list. Pure structural move — no attribute is changed."""
+    children = list(project)
+    slots = [i for i, c in enumerate(children) if c.tag == "diagram"]
+    if not slots:
+        return []
+
+    def key(d: ET.Element):
+        try:
+            return (0, int(d.get("order")))
+        except (TypeError, ValueError):
+            return (1, 0)
+
+    ordered = sorted((children[i] for i in slots), key=key)  # stable
+    for slot, diagram in zip(slots, ordered):
+        children[slot] = diagram
+    for c in list(project):
+        project.remove(c)
+    for c in children:
+        project.append(c)
+    return ordered
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a ControlLogix L5X export to a QElectroTech project.")
@@ -1376,7 +1426,6 @@ def main(argv=None):
 
     project = ET.Element("project",
                          {"title": tb_fields["project"], "version": "0.80"})
-    order = 1
     folios = 0
     # BOM rows accumulated DURING the folio/point traversal below (no second
     # pass): deterministic order == folio/point order, so repeat runs of the
@@ -1387,35 +1436,40 @@ def main(argv=None):
     # ordered (mod, points) pairs for the drawing folios — reused verbatim to
     # build one dedicated bornero folio per card in the same deterministic order.
     drawn_cards: list = []
+    # Drawing folios carry the schematic SECTION pages 101..110; that page is
+    # also the designation/wire-number prefix (-K101.x …), per the gated
+    # decision that designations follow the printed page (DA.5).
+    page = SECTION_DRAWINGS
     for mod in io_mods:
         pts = per_module.get(mod.name)
         if not pts:
             continue
-        build_folio(project, order, mod, pts, symbols, sym_counts, designations,
+        build_folio(project, page, mod, pts, symbols, sym_counts, designations,
                     args.wire_scheme, wire_counters, bom_rows=bom_rows)
         drawn_cards.append((mod, pts))
-        order += 1
+        page += 1
         folios += 1
-    # summary folio(s) come AFTER the drawing folios (order continues past
-    # them); the drawing folios' XML is untouched.
-    summary_folios = build_summary_folios(project, order, bom_rows)
-    order += summary_folios
-    # changelog / revision-history folio comes last (order continues), so the
-    # whole document carries a traceability sheet.
+    # The remaining sections are built in DEPENDENCY order (the data they need is
+    # ready only after the drawing loop) but each is stamped with its own SECTION
+    # base page; reorder_diagrams_by_position re-sorts the <diagram> children into
+    # the natural drawing order below, just before serialization (DA.2). All are
+    # built BEFORE attach_titleblocks so they inherit the ISO 7200 title block.
+    # supply-rail folio ('Alimentación') — draws the rails the cards' power
+    # blocks reference; sits before the card drawings in the final order.
+    supply_folios = build_supply_folios(project, SECTION_SUPPLY, io_mods)
+    # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
+    # in the same deterministic order as the drawing folios.
+    bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
+    # summary / device-index folio(s).
+    summary_folios = build_summary_folios(project, SECTION_BOM, bom_rows)
+    # changelog / revision-history folio comes LAST, so the whole document
+    # carries a traceability sheet.
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
-    changelog_folios = build_changelog_folios(project, order, revisions)
-    order += changelog_folios
-    # supply-rail folio ('Alimentación') comes AFTER the changelog (order
-    # continues) and BEFORE attach_titleblocks, so it inherits the ISO 7200
-    # title block too. Draws the rails the cards' power blocks reference.
-    supply_folios = build_supply_folios(project, order, io_mods)
-    order += supply_folios
-    # dedicated terminal-strip (bornero) folios — one per drawing card, listing
-    # that card's strip '-X1' and its terminals — appended AFTER the supply folio
-    # (order continues) and BEFORE attach_titleblocks so they inherit the ISO 7200
-    # title block too. Deterministic: same order as the drawing folios.
-    bornero_folios = build_bornero_folios(project, order, drawn_cards)
-    order += bornero_folios
+    changelog_folios = build_changelog_folios(project, SECTION_CHANGELOG, revisions)
+    # DA.2: re-sort the folios into natural drawing order (by section page) now
+    # that every section exists. Done before attach_titleblocks/build_collection
+    # so at this point <project> holds only <diagram> children.
+    reorder_diagrams_by_position(project)
     # cajetín: reference the ISO 7200 template from EVERY folio (drawing +
     # summary). QET renders the framed block + SVG logo + auto sheet number
     # itself; values (company, drawing no., rev, static date…) ride along as
