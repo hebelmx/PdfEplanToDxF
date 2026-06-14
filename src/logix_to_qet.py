@@ -319,23 +319,24 @@ PIN_PLACEHOLDER = "__"
 STRIP_X_OFF = 235
 STRIP_DESIGNATION = "-X1"
 
-# Inline power/common terminals: a horizontal strip ABOVE the card box, in the
-# free band between the sub-header (y≈44) and the box top edge (ROW_Y0-20 = 80).
-# A group's supply and common terminals sit side by side on ONE lane, so the
-# full borne_2 pin extent (y ± 10) stays clear of the box top and the strip
-# never runs off the left sheet edge or into the I/O-point rows below. Stacking
-# supply OVER common (a second lane) does not fit this 36-px band, hence the
-# side-by-side layout. One supply + one common terminal per power group.
-POWER_BAND_Y = 60              # the single lane y; pins span 50..70, box top = 80
-POWER_X0 = 150                 # first terminal x (positive — on-sheet, clear left)
-POWER_PAIR_DX = 80             # supply -> common spacing within one group
-POWER_GROUP_DX = 180           # start-to-start spacing between successive groups
+# Per-card power table (DA.8 review fix): the card's supply/common potentials are
+# listed as a compact boxed table in the clear TOP-RIGHT corner of the sheet,
+# right-aligned to the page frame and ABOVE the I/O rows (which start at ROW_Y0).
+# The earlier inline lane above the box crowded and overlapped on multi-group
+# cards (the 1756-OA16's two L1/N groups ran their labels together). Top-right is
+# clear on single-column cards (their content ends well left of POWER_TABLE_LEFT)
+# and, for the only two-column card in play (a single-group IB32), the ≤2-row
+# table still ends above the right column's strip. One row per usable potential.
+POWER_TABLE_LEFT = 815         # table left edge (clear of card content)
+POWER_TABLE_RIGHT = 1010       # table right edge (page-frame aligned, < 17*60)
+POWER_TABLE_Y0 = 34            # table top edge (below the col ruler, above rows)
+POWER_TABLE_HEADER_DY = 15     # first row baseline below the top edge
+POWER_TABLE_ROW_DY = 13        # per-row pitch
+POWER_TABLE_PIN_DX = 100       # 'pin __' column offset from the table left edge
 
-# Spanish supply-rail label and the compact text-annotation prefix that
-# references the rail folio ('Alimentación') from each inline power terminal.
-# It is a LABEL, not a navigable QET cross-reference. Data, not logic.
+# Spanish supply-rail label; the per-card power table's header doubles as the
+# reference to this rail folio. Language-agnostic display data, not logic.
 SUPPLY_FOLIO_TITLE = "Alimentación"
-POWER_XREF_PREFIX = "→ /Alim "
 
 
 # ── Cajetín / title block (native QElectroTech ISO 7200) ─────────────────────
@@ -792,50 +793,45 @@ def _power_pin_label(pin) -> str:
     return pin.strip()
 
 
-def add_power_terminals(elements, inputs, power_groups: list, ids) -> list:
-    """Draw the inline power/common terminals for a card's power groups.
-
-    For each group, places ONE supply terminal and ONE common terminal side by
-    side on a single horizontal lane above the card box (reusing
-    add_terminal_element / add_text and the borne_2 definition already embedded
-    in the collection — no new element type). Each terminal is labelled with its
-    POTENTIAL NAME (e.g. L1, N, L+, 0V), shows 'pin __' until the physical pin is
-    filled (TBD -> __), and carries a compact text annotation referencing the
-    rail folio ('→ /Alim <potential>') — a LABEL only, NOT a drawn conductor and
-    NOT a navigable QET cross-reference. When the card has more than one group
-    the annotation carries a '(G<n>)' suffix so electrically-isolated groups that
-    share a potential name (e.g. the 1756-OA16's two L1/N output groups) stay
-    distinguishable in the drawing instead of collapsing into one reference.
-
-    Terminals sit in the free band between the sub-header and the box top, so the
-    full borne_2 pin extent stays clear of the card box and the I/O-point rows
-    (see POWER_* geometry) and never runs off the left sheet edge. A group whose
-    potential is blank draws NOTHING for that role (graceful — never a guessed
-    "?" terminal). Returns the list of (x, y) center positions of the placed
-    terminals so an integration test can assert they clear the box / sheet
-    bounds. Cards with no/omitted/malformed power block draw NOTHING (empty)."""
-    positions = []
+def add_power_terminals(inputs, shapes, power_groups: list) -> list:
+    """Draw the card's power table: a compact boxed list of the supply/common
+    potentials in the clear top-right corner of the sheet (see POWER_TABLE_*).
+    One row per usable potential — '<potential>[ (G<n>)]' plus 'pin <pin>' — under
+    an 'ALIMENTACIÓN' header that references the supply-rail folio. A group whose
+    potential is blank contributes NO row (graceful — never a guessed '?'); pins
+    stay TBD -> __. Multi-group cards tag each row with '(G<n>)' so isolated
+    groups sharing a potential name (the 1756-OA16's two L1/N output groups) stay
+    distinguishable instead of collapsing into one reference. These are
+    documentation references, not wired terminals, so NO terminal element and NO
+    conductor is placed. Returns the list of row baseline y's so a test can assert
+    the table clears the I/O rows / page frame. A card with no/omitted/malformed
+    power block draws NOTHING (empty list)."""
+    rows = []
     multi = len(power_groups) > 1
     for gi, group in enumerate(power_groups):
-        gx0 = POWER_X0 + gi * POWER_GROUP_DX
         gsuffix = f" (G{gi + 1})" if multi else ""
-        for role, dx in (("supply", 0), ("common", POWER_PAIR_DX)):
+        for role in ("supply", "common"):
             potential = group.get(role) or ""
             if not potential:
-                continue   # never draw a blank/"?" power terminal (graceful)
-            x = gx0 + dx
-            y = POWER_BAND_Y
+                continue   # never draw a blank/"?" power row (graceful)
             pin = _power_pin_label(group.get(f"{role}_pin"))
-            # the terminal symbol itself (reuses borne_2 / add_terminal_element)
-            add_terminal_element(elements, x, y, potential, potential, ids)
-            # potential name, physical-pin placeholder, and the compact rail-folio
-            # text annotation — three short lines that stay inside the band
-            add_text(inputs, x + 11, y - 9, potential, FONT_SMALL)
-            add_text(inputs, x + 11, y + 2, f"pin {pin}", FONT_SMALL)
-            add_text(inputs, x + 11, y + 12,
-                     f"{POWER_XREF_PREFIX}{potential}{gsuffix}", FONT_SMALL)
-            positions.append((x, y))
-    return positions
+            rows.append((f"{potential}{gsuffix}", f"pin {pin}"))
+    if not rows:
+        return []
+    bottom = (POWER_TABLE_Y0 + POWER_TABLE_HEADER_DY
+              + len(rows) * POWER_TABLE_ROW_DY)
+    add_rect(shapes, POWER_TABLE_LEFT, POWER_TABLE_Y0,
+             POWER_TABLE_RIGHT, bottom + 4)
+    add_text(inputs, POWER_TABLE_LEFT + 6, POWER_TABLE_Y0 + 2,
+             SUPPLY_FOLIO_TITLE.upper(), FONT_SMALL)
+    ys = []
+    for i, (label, pinlabel) in enumerate(rows):
+        y = POWER_TABLE_Y0 + POWER_TABLE_HEADER_DY + i * POWER_TABLE_ROW_DY
+        add_text(inputs, POWER_TABLE_LEFT + 6, y, label, FONT_SMALL)
+        add_text(inputs, POWER_TABLE_LEFT + POWER_TABLE_PIN_DX, y, pinlabel,
+                 FONT_SMALL)
+        ys.append(y)
+    return ys
 
 
 def build_folio(project: ET.Element, order: int, mod, points,
@@ -875,11 +871,9 @@ def build_folio(project: ET.Element, order: int, mod, points,
     db = load_module_db(mod.catalog)
     header = (f"{mod.name}   |   {mod.catalog}   |   Rack {mod.rack}"
               f"  Slot {mod.slot}   |   {mod.kind}{mod.points}")
-    # Header + sub-header sit tight to the top of the sheet. The sub-header is a
-    # full-width line and the inline power band (POWER_BAND_Y, between the two
-    # terminal columns) is wedged between it and the first I/O row's strip label
-    # (~y 87); keeping the header high widens that lane so the power terminals'
-    # glyph + labels clear the sub-header instead of overprinting it.
+    # Header + sub-header sit at the top-left of the sheet. (The per-card power
+    # potentials now render as a boxed table in the top-RIGHT corner — see
+    # add_power_terminals — so nothing competes with the sub-header's lane.)
     add_text(inputs, 40, 20, header, FONT_HEADER)
     if db:
         sub = " — ".join(s for s in (db.get("vendor"), db.get("description"),
@@ -909,11 +903,10 @@ def build_folio(project: ET.Element, order: int, mod, points,
                     f"-{mod.name}  ({col * POINTS_PER_COL}…{col * POINTS_PER_COL + pts_in_col - 1})"
         add_text(inputs, x - BOX_LEFT, y1 - 14, box_title, FONT_TEXT)
 
-    # inline power/common terminals from the (optional) module_db power block:
-    # one supply + one common per group on a horizontal lane above the card box,
-    # clear of the I/O rows and the box. Empty/omitted block -> nothing drawn.
-    add_power_terminals(elements, inputs, (db.get("power_groups") if db else []),
-                        ids)
+    # per-card power table from the (optional) module_db power block: a boxed
+    # list of the supply/common potentials in the clear top-right corner, above
+    # the I/O rows. Empty/omitted block -> nothing drawn.
+    add_power_terminals(inputs, shapes, (db.get("power_groups") if db else []))
 
     for pt in points:
         cp = pt.index + 1
@@ -1075,10 +1068,7 @@ def _add_summary_diagram(project: ET.Element, order: int, page_rows: list[dict],
     for key, x, _w in SUMMARY_FOLIO_COLUMNS:
         add_text(inputs, x, SUMMARY_ROW_Y0,
                  SUMMARY_FOLIO_LABELS.get(key, key.upper()), FONT_SMALL)
-    # header rule: a thin (2 px tall) rectangle clamped inside the page frame —
-    # a zero-height rectangle does not render as a line in QElectroTech.
-    y_rule = SUMMARY_ROW_Y0 + 6
-    add_rect(shapes, x0, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
+    # (no header rule — the rule struck through the header text; DA.8 review fix)
     # one text line per row; each cell ellipsized to its column width
     for i, row in enumerate(page_rows):
         y = SUMMARY_ROW_Y0 + (i + 1) * SUMMARY_ROW_DY
@@ -1176,8 +1166,7 @@ def _add_changelog_diagram(project: ET.Element, order: int, page_rows: list,
     add_text(inputs, x0, 30, "HISTORIAL DE REVISIONES", FONT_HEADER)
     for key, x, _w in REVISION_FOLIO_COLUMNS:
         add_text(inputs, x, SUMMARY_ROW_Y0, REVISION_FOLIO_LABELS[key], FONT_SMALL)
-    y_rule = SUMMARY_ROW_Y0 + 6
-    add_rect(shapes, x0, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
+    # (no header rule — the rule struck through the header text; DA.8 review fix)
     for i, row in enumerate(page_rows):
         y = SUMMARY_ROW_Y0 + (i + 1) * SUMMARY_ROW_DY
         for key, x, w in REVISION_FOLIO_COLUMNS:
@@ -1266,8 +1255,9 @@ def _add_supply_diagram(project: ET.Element, order: int, rails: list) -> ET.Elem
         y = SUPPLY_RAIL_Y0 + i * SUPPLY_RAIL_DY
         # the rail itself: a thin (2 px tall) rectangle — a horizontal line
         add_rect(shapes, SUPPLY_RAIL_X1, y, SUPPLY_RAIL_X2, y + 2)
-        # the potential label at the left end of the rail
-        add_text(inputs, SUPPLY_RAIL_X1, y - 12, name, FONT_TEXT)
+        # the potential label, lifted clear of the rail line so the line no
+        # longer touches/obscures the text (DA.8 review fix)
+        add_text(inputs, SUPPLY_RAIL_X1, y - 22, name, FONT_TEXT)
     return diagram
 
 
@@ -1332,8 +1322,7 @@ def _add_bornero_diagram(project: ET.Element, order: int, mod, points) -> ET.Ele
     add_text(inputs, BORNERO_TERM_X, BORNERO_ROW_Y0 - 18, "BORNE", FONT_SMALL)
     add_text(inputs, BORNERO_FUNC_X, BORNERO_ROW_Y0 - 18, "FUNCIÓN / TAG",
              FONT_SMALL)
-    y_rule = BORNERO_ROW_Y0 - 12
-    add_rect(shapes, BORNERO_TERM_X, y_rule, BORNERO_FUNC_X + 300, y_rule + 2)
+    # (no header rule — the rule struck through the header text; DA.8 review fix)
     for i, pt in enumerate(points):
         y = BORNERO_ROW_Y0 + i * BORNERO_ROW_DY
         add_text(inputs, BORNERO_TERM_X, y, strip_terminal_label(pt.index),
@@ -1452,6 +1441,17 @@ SYM_GLYPH_X = 170          # glyph anchor x
 SYM_NAME_X = 320           # name column x
 SYM_ROW_Y0 = 130           # y of the first legend row
 SYM_ROW_DY = 70            # pitch between rows (clears the rotated glyph)
+# Two legend columns per folio so a symbol-rich set does not run off the bottom
+# of the page into the cajetín (DA.8 review fix). The 2nd column is offset by
+# SYM_COL_DX; its name column (SYM_NAME_X + SYM_COL_DX = 770) still fits the
+# longest Spanish name inside SUMMARY_PAGE_WIDTH, and its glyph (SYM_GLYPH_X +
+# SYM_COL_DX = 620) clears the 1st column's names. Rows per column are derived
+# from the geometry so the last glyph stays clear of the bottom frame; a set
+# larger than two columns paginates onto further folios.
+SYM_COL_DX = 450           # x offset of the 2nd legend column
+SYM_BOTTOM_MARGIN = 40     # keep the last glyph clear of the bottom frame
+SYM_COLS_PER_PAGE = 2
+SYM_ROWS_PER_COL = (SUMMARY_HEIGHT - SYM_ROW_Y0 - SYM_BOTTOM_MARGIN) // SYM_ROW_DY
 
 
 def symbol_display_name(entry: dict, lang: str = "es") -> str:
@@ -1476,15 +1476,12 @@ def symbol_display_name(entry: dict, lang: str = "es") -> str:
     return (entry.get("description") or entry.get("id") or "").strip()
 
 
-def build_symbology_folio(project: ET.Element, order: int, used_symbols: list,
-                          lang: str = "es") -> int:
-    """Append the symbol-legend (Simbología) folio at the given section order,
-    one row per USED symbol type (glyph + localized name) in the deterministic
-    used-symbol order. Returns 1 when at least one symbol was placed, else 0 (no
-    legend for a symbol-less set, e.g. --no-symbols). The glyph is the actual
-    embedded symbol element, so the legend matches the drawings exactly."""
-    if not used_symbols:
-        return 0
+def _add_symbology_diagram(project: ET.Element, order: int, page_symbols: list,
+                           lang: str) -> ET.Element:
+    """Render one Simbología folio: up to SYM_COLS_PER_PAGE columns of
+    (glyph + localized name), filled column-major (top of column 1, then column
+    2). Each column carries its own SÍMBOLO / DESCRIPCIÓN header. The glyph is the
+    actual embedded symbol element, so the legend matches the drawings exactly."""
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": SIMBOLOGIA_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -1498,21 +1495,43 @@ def build_symbology_folio(project: ET.Element, order: int, used_symbols: list,
     })
     elements = ET.SubElement(diagram, "elements")
     ET.SubElement(diagram, "conductors")     # legend has glyphs but NO conductors
-    shapes = ET.SubElement(diagram, "shapes")
+    ET.SubElement(diagram, "shapes")         # no header rule (DA.8 review fix)
     inputs = ET.SubElement(diagram, "inputs")
     ids = itertools.count(1)                 # terminal ids unique per diagram
 
     add_text(inputs, SYM_LABEL_X, 30, SIMBOLOGIA_TITLE.upper(), FONT_HEADER)
-    add_text(inputs, SYM_LABEL_X, SYM_ROW_Y0 - 40, "SÍMBOLO", FONT_SMALL)
-    add_text(inputs, SYM_NAME_X, SYM_ROW_Y0 - 40, "DESCRIPCIÓN", FONT_SMALL)
-    y_rule = SYM_ROW_Y0 - 34
-    add_rect(shapes, SYM_LABEL_X, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
-    for i, entry in enumerate(used_symbols):
-        y = SYM_ROW_Y0 + i * SYM_ROW_DY
-        add_symbol_element(elements, entry, SYM_GLYPH_X, y, "", ids)
-        add_text(inputs, SYM_NAME_X, y, symbol_display_name(entry, lang),
-                 FONT_TEXT)
-    return 1
+    for c in range(SYM_COLS_PER_PAGE):
+        col_syms = page_symbols[c * SYM_ROWS_PER_COL:(c + 1) * SYM_ROWS_PER_COL]
+        if not col_syms:
+            break
+        dx = c * SYM_COL_DX
+        add_text(inputs, SYM_LABEL_X + dx, SYM_ROW_Y0 - 40, "SÍMBOLO", FONT_SMALL)
+        add_text(inputs, SYM_NAME_X + dx, SYM_ROW_Y0 - 40, "DESCRIPCIÓN",
+                 FONT_SMALL)
+        for i, entry in enumerate(col_syms):
+            y = SYM_ROW_Y0 + i * SYM_ROW_DY
+            add_symbol_element(elements, entry, SYM_GLYPH_X + dx, y, "", ids)
+            add_text(inputs, SYM_NAME_X + dx, y,
+                     symbol_display_name(entry, lang), FONT_TEXT)
+    return diagram
+
+
+def build_symbology_folio(project: ET.Element, start_order: int,
+                          used_symbols: list, lang: str = "es") -> int:
+    """Append the symbol-legend (Simbología) folio(s), one row per USED symbol
+    type (glyph + localized name) in the deterministic used-symbol order, laid
+    out in SYM_COLS_PER_PAGE columns so a symbol-rich set never runs off the page
+    into the cajetín. Paginates onto further folios (order + 1, + 2, …) when the
+    set exceeds one folio's columns. Returns the number of folios appended, or 0
+    for a symbol-less set (e.g. --no-symbols)."""
+    if not used_symbols:
+        return 0
+    per_page = SYM_COLS_PER_PAGE * SYM_ROWS_PER_COL
+    pages = [used_symbols[i:i + per_page]
+             for i in range(0, len(used_symbols), per_page)]
+    for n, page_symbols in enumerate(pages):
+        _add_symbology_diagram(project, start_order + n, page_symbols, lang)
+    return len(pages)
 
 
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────

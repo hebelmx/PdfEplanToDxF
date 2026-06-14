@@ -512,12 +512,11 @@ class SummaryFolioSubsetTest(unittest.TestCase):
         self.assertTrue(all(len(t) <= 88 for t in shown))
         self.assertTrue(any(t.endswith("…") for t in shown))
 
-    def test_header_rule_clamped_inside_page_frame(self):
+    def test_no_header_rule_drawn(self):
+        # the header rule struck through the column-header text, so it was
+        # removed (DA.8 review fix): the summary folio draws no shape.
         diagram = self._diagram([q.generic_bom_row(1, tag="T", address="I0.0")])
-        shapes = diagram.find("shapes").findall("shape")
-        self.assertTrue(shapes)
-        for sh in shapes:
-            self.assertLessEqual(int(float(sh.get("x2"))), q.SUMMARY_PAGE_WIDTH)
+        self.assertEqual(len(diagram.find("shapes").findall("shape")), 0)
 
     def test_all_text_starts_inside_page_width(self):
         rows = [q.device_bom_row(1, designation="-K1.1", type_id="solenoid_valve",
@@ -1150,97 +1149,99 @@ class BuildFolioPowerRenderTest(unittest.TestCase):
     def _texts(self, d):
         return [i.get("text") for i in d.find("inputs").findall("input")]
 
-    def test_oa16_draws_two_supply_two_common_terminals(self):
+    def test_oa16_lists_two_supply_two_common_rows(self):
         d = self._diagram("1756-OA16")
         texts = self._texts(d)
-        # 2 groups -> 2 L1 supply labels + 2 N common labels
-        self.assertEqual(texts.count("L1"), 2)
-        self.assertEqual(texts.count("N"), 2)
-        # each terminal shows the placeholder pin (TBD -> __)
+        # 2 groups -> rows for each group's L1/N, suffixed so they stay distinct
+        for label in ("L1 (G1)", "L1 (G2)", "N (G1)", "N (G2)"):
+            self.assertIn(label, texts)
+        # each row shows the placeholder pin (TBD -> __)
         self.assertGreaterEqual(texts.count(f"pin {q.PIN_PLACEHOLDER}"), 4)
+        # the table header references the supply-rail folio
+        self.assertIn(q.SUPPLY_FOLIO_TITLE.upper(), texts)
 
-    def test_subheader_clears_power_band(self):
-        # the bug Abel caught: the full-width sub-header line was overprinted by
-        # the inline power band. The sub-header must sit clearly ABOVE the
-        # topmost power-terminal label (the potential name), not on top of it.
+    def test_power_table_sits_top_right_clear_of_subheader(self):
+        # DA.8: the power potentials moved OUT of the sub-header's lane into a
+        # boxed table in the top-right corner. Every power-table label is right
+        # of (and so never overprints) the sub-header.
         d = self._diagram("1756-OA16")
         inputs = d.find("inputs").findall("input")
         sub = next(i for i in inputs if " — " in (i.get("text") or ""))
-        sub_y = float(sub.get("y"))
-        pot_ys = [float(i.get("y")) for i in inputs if i.get("text") in ("L1", "N")]
-        self.assertTrue(pot_ys)
-        self.assertLess(sub_y, min(pot_ys))
-        self.assertGreaterEqual(min(pot_ys) - sub_y, 12)   # real gap, no overprint
+        sub_x = float(sub.get("x"))
+        pot_xs = [float(i.get("x")) for i in inputs
+                  if (i.get("text") or "").startswith(("L1", "N"))]
+        self.assertTrue(pot_xs)
+        self.assertTrue(all(x >= q.POWER_TABLE_LEFT for x in pot_xs))
+        self.assertGreater(min(pot_xs), sub_x)
 
-    def test_cross_reference_text_points_at_rail_folio(self):
-        # OA16 has TWO groups -> the rail annotations carry a (G1)/(G2) suffix so
-        # the two isolated L1/N groups stay distinguishable instead of collapsing
-        # into identical references.
+    def test_isolated_groups_stay_distinct_and_draw_no_conductor(self):
+        # OA16 has TWO groups -> each row carries a (G1)/(G2) suffix so the two
+        # isolated L1/N groups stay distinguishable instead of collapsing.
         d = self._diagram("1756-OA16")
-        xrefs = [t for t in self._texts(d) if t and "/Alim" in t]
-        self.assertIn("→ /Alim L1 (G1)", xrefs)
-        self.assertIn("→ /Alim L1 (G2)", xrefs)
-        self.assertIn("→ /Alim N (G1)", xrefs)
-        self.assertIn("→ /Alim N (G2)", xrefs)
-        # the two groups' references are distinct (isolation survives)
-        self.assertEqual(len(set(xrefs)), len(xrefs))
-        # the power-rail annotation itself draws NO conductor; the only conductor
-        # on this single-generic-point card is the inline strip segment (card
-        # terminal east pin -> strip terminal), which is the new bornero feature.
+        rows = [t for t in self._texts(d)
+                if t and (t.startswith("L1") or t.startswith("N"))]
+        self.assertEqual(len(set(rows)), len(rows))     # all distinct
+        # the power table draws NO conductor; the only conductor on this single-
+        # generic-point card is the inline strip segment (the bornero feature).
         self.assertEqual(len(d.find("conductors").findall("conductor")), 1)
 
     def test_single_group_card_has_no_group_suffix(self):
         # IA16 is a single L1/N group -> no (G1) suffix (suffix only when >1)
         d = self._diagram("1756-IA16")
-        xrefs = [t for t in self._texts(d) if t and "/Alim" in t]
-        self.assertIn("→ /Alim L1", xrefs)
-        self.assertIn("→ /Alim N", xrefs)
-        self.assertFalse(any("(G" in t for t in xrefs))
+        texts = self._texts(d)
+        self.assertIn("L1", texts)
+        self.assertIn("N", texts)
+        self.assertFalse(any(t and "(G" in t for t in texts))
 
-    def test_no_power_block_draws_no_power_terminals(self):
+    def test_no_power_block_draws_no_power_table(self):
         d = self._diagram("FAKE-NODB")
         texts = self._texts(d)
-        self.assertFalse(any(t and "/Alim" in t for t in texts))
+        self.assertNotIn(q.SUPPLY_FOLIO_TITLE.upper(), texts)
 
-    def test_blank_potential_group_draws_no_question_mark_terminal(self):
+    def test_blank_potential_group_draws_no_question_mark_row(self):
         # a group whose supply is the only usable potential draws ONLY the supply
-        # terminal; the blank common is skipped (no "?" terminal, no orphan xref)
+        # row; the blank common is skipped (no "?" row, no guessed potential)
         groups = [{"points": [0, 1], "supply": "L+", "common": "",
                    "supply_pin": "TBD", "common_pin": "TBD"}]
-        elements, inputs = ET.Element("e"), ET.Element("i")
-        positions = q.add_power_terminals(elements, inputs, groups,
-                                          iter(range(1000)))
-        self.assertEqual(len(positions), 1)   # supply only
+        inputs, shapes = ET.Element("i"), ET.Element("s")
+        ys = q.add_power_terminals(inputs, shapes, groups)
+        self.assertEqual(len(ys), 1)   # supply only
         texts = [i.get("text") for i in inputs.findall("input")]
         self.assertNotIn("?", texts)
         self.assertIn("L+", texts)
 
-    def test_power_terminals_clear_card_box_and_sheet(self):
-        """No overlap, no off-sheet: every power terminal's full pin extent
-        (centre y ± 10) stays above the card box top, the terminal is on-sheet
-        (non-negative x), and the whole strip sits above the first I/O row."""
-        positions = q.add_power_terminals(
-            ET.Element("e"), ET.Element("i"),
-            q.load_module_db("1756-OA16")["power_groups"], iter(range(1000)))
-        self.assertTrue(positions)
-        box_top = q.ROW_Y0 - 20
-        for x, y in positions:
-            # the FULL pin extent (borne_2 pins reach y + 10) clears the box top
-            self.assertLessEqual(y + 10, box_top,
-                                 f"power terminal {(x, y)} pin extent crosses "
-                                 f"the card box top ({box_top})")
-            # on-sheet: the terminal is not off the left edge
-            self.assertGreaterEqual(x, 0,
-                                    f"power terminal {(x, y)} is off the left "
-                                    f"sheet edge")
-            # above the first I/O row entirely
-            self.assertLess(y, q.ROW_Y0)
+    def test_power_table_clears_content_on_two_column_card(self):
+        """A 2-column card (IB32) shares the table's x-band with its right
+        column, so the whole table (header + rows) must end ABOVE the first I/O
+        row (ROW_Y0) and stay inside the page frame — asserting the FULL extent,
+        not just the first row."""
+        d = self._diagram("1756-IB32", npoints=32, kind="DI")
+        inputs = d.find("inputs").findall("input")
+        table = [i for i in inputs
+                 if (i.get("text") or "").startswith(("L+", "0V"))
+                 or i.get("text") == q.SUPPLY_FOLIO_TITLE.upper()]
+        self.assertTrue(table)
+        self.assertTrue(all(float(i.get("y")) < q.ROW_Y0 for i in table))
+        self.assertTrue(all(float(i.get("x")) < q.SUMMARY_PAGE_WIDTH
+                            for i in table))
 
-    def test_power_terminals_reuse_borne_2_definition(self):
+    def test_power_table_right_of_content_on_single_column_card(self):
+        # a 1-column card (OA16) keeps all I/O content left of the table, so the
+        # table is clear regardless of how tall it grows.
         d = self._diagram("1756-OA16")
-        types = {el.get("type")
-                 for el in d.find("elements").findall("element")}
-        self.assertIn(q.TERMINAL_TYPE, types)
+        pot_xs = [float(i.get("x")) for i in d.find("inputs").findall("input")
+                  if (i.get("text") or "").startswith(("L1", "N"))]
+        self.assertTrue(pot_xs)
+        self.assertTrue(all(x >= q.POWER_TABLE_LEFT for x in pot_xs))
+
+    def test_power_table_places_no_element(self):
+        # the power potentials are documentation references, not wired terminals:
+        # add_power_terminals writes ONLY text (inputs) + the table box (shapes)
+        inputs, shapes = ET.Element("i"), ET.Element("s")
+        q.add_power_terminals(inputs, shapes,
+                              q.load_module_db("1756-OA16")["power_groups"])
+        self.assertTrue(inputs.findall("input"))
+        self.assertEqual(len(shapes.findall("shape")), 1)   # just the table box
 
 
 class CollectSupplyRailsTest(unittest.TestCase):
@@ -1289,6 +1290,22 @@ class SupplyFolioTest(unittest.TestCase):
         project = ET.Element("project")
         self.assertEqual(q.build_supply_folios(project, 1, rails=[]), 0)
         self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_rail_label_sits_clear_above_its_line(self):
+        # DA.8: the potential label and its rail line were touching; the label
+        # must now sit a clear gap ABOVE the line it names. The rails are drawn
+        # top-to-bottom, so the i-th label pairs with the i-th line.
+        project = ET.Element("project")
+        q.build_supply_folios(project, 7, rails=["L1", "N", "L+"])
+        d = project.find("diagram")
+        label_ys = sorted(float(i.get("y"))
+                          for i in d.find("inputs").findall("input")
+                          if i.get("text") in ("L1", "N", "L+"))
+        line_ys = sorted(float(s.get("y1"))
+                         for s in d.find("shapes").findall("shape"))
+        self.assertEqual(len(label_ys), len(line_ys))
+        for label_y, line_y in zip(label_ys, line_ys):
+            self.assertLessEqual(label_y + 12, line_y)   # clear gap, not touching
 
     def test_inherits_titleblock_when_attached(self):
         """The supply folio must be stamped by attach_titleblocks like any other
@@ -1382,6 +1399,40 @@ class SymbologyFolioTest(unittest.TestCase):
         ids = [t.get("id") for t in
                project.find("diagram").find("elements").iter("terminal")]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_overflow_flows_to_second_column_same_folio(self):
+        # DA.8: one more symbol than a single column holds flows into the 2nd
+        # column on the SAME folio (column-major), never off the page bottom.
+        proj = ET.Element("project")
+        syms = self._used(*[f"s{i}" for i in range(q.SYM_ROWS_PER_COL + 1)])
+        n = q.build_symbology_folio(proj, 1, syms)
+        self.assertEqual(n, 1)
+        names = {i.get("text"): float(i.get("x"))
+                 for i in proj.find("diagram").find("inputs").findall("input")
+                 if (i.get("text") or "").startswith("N-")}
+        self.assertEqual(names["N-s0"], float(q.SYM_NAME_X))
+        self.assertEqual(names[f"N-s{q.SYM_ROWS_PER_COL}"],
+                         float(q.SYM_NAME_X + q.SYM_COL_DX))
+
+    def test_all_glyphs_and_names_inside_page_frame(self):
+        # a full two-column folio keeps every glyph + name inside the frame
+        proj = ET.Element("project")
+        syms = self._used(*[f"s{i}" for i in range(2 * q.SYM_ROWS_PER_COL)])
+        q.build_symbology_folio(proj, 1, syms)
+        inputs = proj.find("diagram").find("inputs").findall("input")
+        self.assertTrue(all(float(i.get("y")) < q.SUMMARY_HEIGHT for i in inputs))
+        self.assertTrue(all(float(i.get("x")) < q.SUMMARY_PAGE_WIDTH
+                            for i in inputs))
+
+    def test_more_than_two_columns_paginate_to_more_folios(self):
+        # beyond two columns the legend paginates onto further folios
+        proj = ET.Element("project")
+        per_page = q.SYM_COLS_PER_PAGE * q.SYM_ROWS_PER_COL
+        syms = self._used(*[f"s{i}" for i in range(per_page + 1)])
+        n = q.build_symbology_folio(proj, 1, syms)
+        self.assertEqual(n, 2)
+        self.assertEqual([d.get("order") for d in proj.findall("diagram")],
+                         ["1", "2"])
 
 
 class PortadaFolioTest(unittest.TestCase):
@@ -1881,13 +1932,14 @@ class BorneroFolioTest(unittest.TestCase):
         for ch in (0, 3, 7):
             self.assertIn(f"-X1:{ch}", texts)
 
-    def test_text_and_shapes_only_no_elements_or_conductors(self):
+    def test_text_only_no_elements_or_conductors(self):
         project = ET.Element("project")
         q.build_bornero_folios(project, 1, [self._card("A", [0, 1])])
         d = project.find("diagram")
         self.assertEqual(len(d.find("elements").findall("element")), 0)
         self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
-        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+        # the header rule was removed (DA.8): the bornero folio is text-only
+        self.assertEqual(len(d.find("shapes").findall("shape")), 0)
 
     def test_empty_card_list_appends_nothing(self):
         project = ET.Element("project")
