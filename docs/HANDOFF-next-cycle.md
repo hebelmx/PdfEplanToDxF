@@ -1,31 +1,36 @@
-# Handoff — next dev cycle (Document-assembly DONE → start Tier 3)
+# Handoff — next dev cycle (T3.1 DONE → start T3.2)
 
 > Self-contained handoff so a **fresh agent in a new session** can continue with no
-> prior context. Rewritten 2026-06-14 after **DA.5c** landed and the whole
-> Document-assembly theme (DA.x) completed. Supersedes the previous DA.5c handoff.
+> prior context. Rewritten 2026-06-14 after **T3.1** (NO/NC contact correctness)
+> landed on branch `feat/t3-no-nc`. Supersedes the DA-theme handoff.
 
 ## TL;DR — read this first
 
 - Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O drawing
   set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`. Tests =
-  `src/test_logix_to_qet.py` (**186 tests**, stdlib unittest). Durable task list =
+  `src/test_logix_to_qet.py` (**194 tests**, stdlib unittest). Durable task list =
   `docs/TIER3-tracker.md`.
 - **The Document-assembly theme (DA.1–DA.8) is DONE, ff-merged into `main` (@ `a59e39f`)
   and PUSHED to origin (2026-06-14).** WADDING_1 emits **27
   folios** in natural order: **Portada → Simbología → Alimentación → card drawings
   (101–110) → borneros (200–209) → BOM (300–302) → Historial (900)**, with prev/next
   continuation refs on the three multi-sheet sections.
-- **THE NEXT TASK = Tier 3, starting `T3.1` (NO/NC correctness on symbols).** See
-  `docs/TIER3-tracker.md` for the full T3.1–T3.5 specs and the recommended order
-  (T3.1 → T3.2 → T3.3 → T3.4, then T3.5 on demand). **Each Tier-3 item has "Open
-  decisions (gate)" — surface those to Abel before/with implementing.**
+- **T3.1 (NO/NC contact correctness) is DONE** (`9518e77`) on branch
+  **`feat/t3-no-nc`** (branched off `main`/`a59e39f`). Added `_nc` symbol_db variants
+  for level/flow/pressure/foot switch + thermostat (real QET-library glyphs), and fixed
+  the unreachable pre-existing `limit_switch_nc` (priority tie). Floor intact; **NOT yet
+  pushed** (see "Things needing Abel's word").
+- **THE NEXT TASK = `T3.2` (Spare-point rendering).** See `docs/TIER3-tracker.md` for the
+  full T3.2–T3.5 specs and the recommended order (T3.2 → T3.3 → T3.4, then T3.5 on
+  demand). **Each Tier-3 item has "Open decisions (gate)" — surface those to Abel
+  before/with implementing.** T3.2 carries explicit **floor risk** (must keep 106/75/0).
 - **Things still needing Abel's word (don't act without asking):**
-  1. **Eyeball DA.5c + DA.8 in QET** — DA.5c arrow glyphs `◄ ►` rendering + the bottom-lane
-     clearance on a *full* 16-row drawing folio; DA.8 the top-right power table (esp. the
-     OA16 4-row table and the 2-column IB32 folio 106), the 2-column símbología, and the
-     lifted card-box titles. DA.8 is committed but status `review` until Abel blesses it.
-  2. ~~Pushing / merging `feat/doc-assembly`~~ — **DONE 2026-06-14**: ff-merged into `main`
-     and pushed to origin (`a59e39f`).
+  1. **Push `feat/t3-no-nc`** — T3.1 is committed locally but NOT pushed; ask before
+     pushing the feature branch and before any merge to `main`.
+  2. **(Optional) eyeball an NC switch in QET** — T3.1 changed no WADDING_1 output (no
+     fixture tag carries an NC signal for these switch types), so there is nothing new
+     to see in the WADDING_1 render; the NC glyphs would only appear on a project whose
+     tags say "NC"/"cerrado". A synthetic check is possible if Abel wants to see one.
 
 ## What was done across this theme (all on `feat/doc-assembly`, floor intact)
 
@@ -109,17 +114,16 @@ Gated decisions live in memory **`da-numbering-decisions`** and **`qet-generator
 8. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
    One focused commit per item; doc/handoff changes in their OWN commit.
 
-## THE NEXT TASK — Tier 3 (start T3.1)
+## THE NEXT TASK — Tier 3 (start T3.2)
 
 Full specs in `docs/TIER3-tracker.md`. Summary + the decisions to gate with Abel:
 
-- **T3.1 NO/NC correctness on symbols** *(recommended first)* — render each matched
-  contact in its true normally-open vs normally-closed state instead of a single default.
-  **Gate:** where the NO/NC signal lives (a `symbol_db` field vs. a keyword rule, e.g.
-  `_NC`/`PARO`/e-stop ⇒ NC); the default when ambiguous (never force — low confidence
-  keeps the current default); whether NC needs a distinct `.elmt`. Touches `src/symbol_db/`,
-  the matcher + `add_symbol_element` in `src/logix_to_qet.py`.
-- **T3.2 Spare-point rendering** — draw a card's unused/reserved points as spare terminals
+- **T3.1 NO/NC correctness on symbols** — ✅ **DONE `9518e77`** (branch `feat/t3-no-nc`).
+  Gated decisions (Abel 2026-06-14, memory `t3-no-nc-decisions`): extend the separate-entry
+  `_nc` pattern (data-driven, no Python NO/NC logic); scope = level/flow/pressure/foot/
+  thermostat switches; ambiguous default stays NO. Glyphs = real QET-library NC symbols.
+  Also fixed the unreachable pre-existing `limit_switch_nc` (keyword/score tie → `priority=1`).
+- **T3.2 Spare-point rendering** *(recommended next)* — draw a card's unused/reserved points as spare terminals
   (no device, no invented tag), counted honestly. **Floor risk** — verify 106/75/0 stays.
 - **T3.3 Column pagination on card overflow** — paginate a card with more points than one
   column/sheet holds; mind the ~660-px height already near-full at 16 rows.
@@ -170,31 +174,32 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 
 ## Git state / how to resume
 
-- **`main` @ `a59e39f` — the whole Document-assembly theme (DA.1–DA.8) is ff-merged into
-  `main` and PUSHED to origin (2026-06-14).** `feat/doc-assembly` is at the same commit and
-  also pushed; `origin/main == origin/feat/doc-assembly == a59e39f`.
-- Start the next cycle (Tier 3 / T3.1) from a fresh branch off `main`.
+- **`main` @ `a59e39f`** — Document-assembly theme (DA.1–DA.8) ff-merged & pushed to origin.
+- **`feat/t3-no-nc` @ `9518e77`+ (docs commit)** — T3.1 committed here, branched off `main`.
+  **NOT pushed** — ask Abel before pushing the branch or merging to `main`.
+- Continue T3.2 on `feat/t3-no-nc` (or a fresh branch off it).
 
 ## Kickoff prompt — paste into the new session
 
 ```
 Continue the PLC → mini-EPLAN product (src/logix_to_qet.py) on branch
-feat/doc-assembly. The Document-assembly theme (DA.1–DA.7 + DA.5a/b/c) is DONE and
-reviewed; 27 folios in natural order with prev/next continuation refs, floor
-10/106/75/0 FP, 186 tests green. NEXT = Tier 3, starting T3.1 (NO/NC correctness).
+feat/t3-no-nc. T3.1 (NO/NC contact correctness) is DONE & verified (9518e77): _nc
+variants for level/flow/pressure/foot/thermostat switches + fixed the unreachable
+limit_switch_nc; floor 10/106/75/0 FP, 27 folios, 194 tests green. NEXT = T3.2
+(Spare-point rendering) — carries explicit FLOOR RISK (must keep 106/75/0).
 
 READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES incl. #6 QET-numbers-by-
-position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.1–T3.5
+position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.2–T3.5
 specs + Open-decisions to gate), ProductPlanEnhancement.md, and memory
-da-numbering-decisions + qet-generator-status.
+qet-generator-status + t3-no-nc-decisions.
 
-For T3.1: gate the Open decisions with Abel (where the NO/NC signal lives — symbol_db
-field vs keyword rule; the ambiguous default; whether NC needs a distinct .elmt) BEFORE
-coding. Implement data-driven (never force; low confidence keeps the default), verify
-from ground truth, one focused commit, eyeball in QET.
+For T3.2: gate the Open decisions with Abel (which points count as "spare" — card
+capacity vs mapped; label/format; whether spares appear in the BOM) BEFORE coding.
+Spares render as plain terminals (no device, no invented tag), counted honestly;
+must NOT inflate matched/FP or change the 75-match floor. Verify from ground truth,
+one focused commit, eyeball in QET.
 
-STILL PENDING ABEL: (1) eyeball DA.5c in QET — arrow glyphs ◄ ► + bottom-lane clearance
-on full drawing folios; (2) pushing/merging feat/doc-assembly (NOT pushed — ask first).
+STILL PENDING ABEL: push feat/t3-no-nc (T3.1 committed but NOT pushed — ask first).
 
 HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
 (TBD→__, blank cells); stdlib only; never git add Fixtures/ or *.L5X/*.qet/*.pdf/*_bom.csv;
@@ -202,4 +207,4 @@ restart QET to see template edits; don't push without Abel's OK.
 ```
 
 ---
-*Overwrite this file for the cycle after T3.1.*
+*Overwrite this file for the cycle after T3.2.*

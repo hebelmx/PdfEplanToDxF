@@ -73,7 +73,7 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 
 | # | Item | Status | Manual step removed |
 |---|------|--------|---------------------|
-| T3.1 | NO/NC correctness on symbols | `todo` | Hand-flipping each contact to its real normally-open/closed state |
+| T3.1 | NO/NC correctness on symbols | `done` `9518e77` | Hand-flipping each contact to its real normally-open/closed state |
 | T3.2 | Spare-point rendering | `todo` | Hand-drawing unused/reserved card points so the strip is complete |
 | T3.3 | Column pagination on card overflow | `todo` | Manually splitting a high-point-count card across sheets/columns |
 | T3.4 | PE / ground potentials | `todo` | Hand-drawing the protective-earth / ground references on devices |
@@ -92,10 +92,25 @@ demands it** (the plan calls the extra languages drop-in pure data, not a must-d
   not code assumptions); the matcher picks the right variant from the tag/desc
   (e.g. `_NC`, `PARO`/e-stop ⇒ NC); low-confidence keeps the current default
   (never force). The placed element + its `<definition>` reflect the variant.
-- **Open decisions (gate):** where the NO/NC signal lives (symbol_db field vs.
-  keyword rule); the default when ambiguous; whether NC needs a distinct `.elmt`.
-- **Touches:** `src/symbol_db/`, the matcher + `add_symbol_element` in
-  `src/logix_to_qet.py`. No physical-pin guessing.
+- **Open decisions — RESOLVED with Abel 2026-06-14** (memory `t3-no-nc-decisions`):
+  - **NC signal = extend the separate-entry pattern** (`_nc` JSON + `.elmt` matched by
+    DB keywords/suffixes — as push_button_nc/limit_switch_nc/emergency_stop already do).
+    No NO/NC logic in Python; data-driven & language-agnostic.
+  - **Scope this pass = switches with real NC forms QET ships:** level, flow, pressure,
+    foot switch, thermostat (`limit_switch_nc` already exists). Sensors/lights/coils/
+    valves stay single-state.
+  - **Ambiguous default = keep current default (NO)** — never force.
+  - **Glyphs extracted (no guessing) from `C:\Program Files\QElectroTech\elements`:**
+    `niv_liquide_nf`, `debit_fluide_nf`, `pressostat_nc`, `thermostat_nc`, `foot_nc`.
+- **Touches:** `src/symbol_db/` (5 new `_nc` JSON + `.elmt`), matcher already handles
+  variant selection via keywords. No physical-pin guessing.
+- **DONE `9518e77`:** added level/flow/pressure/foot/thermostat `_nc` entries (real
+  QET-library glyphs, 2 terminals each). **Bug fixed:** the pre-existing
+  `limit_switch_nc` was unreachable — its keywords overlap the base, tying the score
+  and losing by id-sort; `priority=1` breaks the tie only when the NC keyword fires
+  (added ES "cerrado" for parity). No Python change — fully data-driven. Verified:
+  194 tests green; WADDING_1 floor 10/106/75/0 FP, 27 folios, limit_switch still 17
+  (the new NC entries are pure added capability — no fixture variant flipped).
 
 ## T3.2 — Spare-point rendering
 - **Goal:** draw a card's unused/reserved points (the ones currently skipped) as
