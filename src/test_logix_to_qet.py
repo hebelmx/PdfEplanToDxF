@@ -1968,5 +1968,86 @@ class WaddingBorneroFloorTest(unittest.TestCase):
             self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
 
 
+class ContinuationRefsTest(unittest.TestCase):
+    """DA.5c: prev/next continuation refs on multi-sheet sections only."""
+
+    @staticmethod
+    def _project(orders):
+        project = ET.Element("project")
+        for o in orders:
+            d = ET.SubElement(project, "diagram", {"order": str(o)})
+            ET.SubElement(d, "inputs")
+        return project
+
+    @staticmethod
+    def _refs(project):
+        """{order: [ref texts]} for every diagram carrying continuation text."""
+        out = {}
+        for d in project.findall("diagram"):
+            texts = [i.get("text") for i in d.find("inputs").findall("input")
+                     if "pág." in (i.get("text") or "")]
+            if texts:
+                out[int(d.get("order"))] = texts
+        return out
+
+    def test_middle_sheet_gets_both_first_and_last_one_each(self):
+        # a 3-folio drawing section: 101 → next only, 102 → both, 103 → prev only
+        project = self._project([101, 102, 103])
+        n = q.add_continuation_refs(project)
+        refs = self._refs(project)
+        self.assertEqual(refs[101], ["pág. 102 ►"])
+        self.assertCountEqual(refs[102], ["◄ pág. 101", "pág. 103 ►"])
+        self.assertEqual(refs[103], ["◄ pág. 102"])
+        self.assertEqual(n, 4)            # 1 + 2 + 1 lines
+
+    def test_refs_use_section_page_not_position(self):
+        # borneros 200..202 reference their SECTION pages, never 0/1/2 positions
+        project = self._project([200, 201, 202])
+        q.add_continuation_refs(project)
+        refs = self._refs(project)
+        self.assertCountEqual(refs[201], ["◄ pág. 200", "pág. 202 ►"])
+
+    def test_single_folio_section_gets_no_refs(self):
+        # a lone BOM folio (300) has no neighbour → no continuation text
+        project = self._project([300])
+        self.assertEqual(q.add_continuation_refs(project), 0)
+        self.assertEqual(self._refs(project), {})
+
+    def test_front_matter_and_changelog_excluded(self):
+        # Portada(0), Simbología(1), Alimentación(100), Historial(900) are
+        # outside CONTINUATION_RANGES — never annotated even alongside a real
+        # multi-sheet drawings section.
+        project = self._project([0, 1, 100, 101, 102, 900])
+        q.add_continuation_refs(project)
+        refs = self._refs(project)
+        self.assertEqual(set(refs), {101, 102})
+        for excluded in (0, 1, 100, 900):
+            self.assertNotIn(excluded, refs)
+
+    def test_sections_do_not_bleed_into_each_other(self):
+        # adjacent sections must not chain: drawing 110's "next" is NOT bornero
+        # 200, and bornero 200's "prev" is NOT drawing 110.
+        project = self._project([109, 110, 200, 201])
+        q.add_continuation_refs(project)
+        refs = self._refs(project)
+        self.assertEqual(refs[110], ["◄ pág. 109"])     # last drawing: prev only
+        self.assertEqual(refs[200], ["pág. 201 ►"])     # first bornero: next only
+
+    def test_refs_clear_card_box_and_stay_inside_frame(self):
+        # the continuation lane sits BELOW the tallest card box (full 16-row
+        # column bottom = ROW_Y0 + 15*ROW_DY + 20) and inside the 660 frame.
+        box_bottom = q.ROW_Y0 + (q.POINTS_PER_COL - 1) * q.ROW_DY + 20
+        self.assertGreater(q.CONTINUATION_Y, box_bottom)
+        self.assertLess(q.CONTINUATION_Y, 660)
+        self.assertLess(q.CONTINUATION_Y, q.SUMMARY_HEIGHT)
+
+    def test_added_refs_do_not_change_diagram_set(self):
+        # pure annotation: no diagram added/removed, only <input> text grows
+        project = self._project([101, 102])
+        before = len(project.findall("diagram"))
+        q.add_continuation_refs(project)
+        self.assertEqual(len(project.findall("diagram")), before)
+
+
 if __name__ == "__main__":
     unittest.main()

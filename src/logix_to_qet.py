@@ -1534,6 +1534,72 @@ SECTION_BOM = 300          # BOM / device-index summary folios
 SECTION_CHANGELOG = 900    # revision-history folio, LAST
 
 
+# ── Continuation references (DA.5c) ──────────────────────────────────────────
+# On a section that spans several folios, stamp each sheet with prev/next page
+# references so a reader can follow the section across its sheets (the classic
+# EPLAN "viene de / sigue en"). Abel's gated format (2026-06-14): a compact
+# arrow + the SECTION page — "◄ pág. X" points back, "pág. Y ►" points forward —
+# placed along the bottom of the sheet, just above the cajetín. The page shown
+# is the diagram `order`, i.e. the SECTION page the cajetín already displays
+# (DA.5b), NOT QET's document position. Targets the multi-sheet sections only:
+# the card drawings and the two auto-paginated lists (borneros, BOM).
+#
+# Page ranges (lo inclusive, hi exclusive) that receive refs. The single-folio
+# sections — Portada (0), Simbología (1), Alimentación (100), Historial (900) —
+# fall OUTSIDE these ranges, so they never get refs; and a section that happens
+# to occupy a single folio gets none either (its lone sheet has no neighbour).
+CONTINUATION_RANGES = (
+    (SECTION_DRAWINGS, SECTION_BORNERO),   # 101 .. 199  — card drawings
+    (SECTION_BORNERO, SECTION_BOM),        # 200 .. 299  — borneros
+    (SECTION_BOM, SECTION_CHANGELOG),      # 300 .. 899  — BOM / device index
+)
+# A short text lane along the bottom of every sheet: BELOW the tallest card box
+# (a full 16-row column's box bottom is ROW_Y0 + 15*ROW_DY + 20 = 645) and
+# inside the 660-px page frame, clear of the list folios' 30-px bottom margin
+# too. The two refs sit on the same line — prev at the left, next at the right.
+CONTINUATION_Y = 648
+CONTINUATION_PREV_X = 60     # left end  — "◄ pág. {prev}"
+CONTINUATION_NEXT_X = 860    # right end — "pág. {next} ►"
+
+
+def add_continuation_refs(project: ET.Element) -> int:
+    """DA.5c: stamp each folio of a multi-sheet section with prev/next page
+    references (EPLAN 'viene de / sigue en'), so a reader can follow the section
+    across its sheets. Targets CONTINUATION_RANGES (card drawings + the
+    auto-paginated bornero/BOM lists); single-folio sections are skipped
+    automatically (outside the ranges, or no neighbour). The reference shows the
+    SECTION page (the diagram `order`, which is what the cajetín displays since
+    DA.5b) as a compact arrow: '◄ pág. X' points back, 'pág. Y ►' forward. The
+    first sheet of a section omits the back ref, the last omits the forward ref.
+    Pure annotation — adds only <input> text, leaving every element/terminal/
+    conductor count and the folio set untouched. Call before
+    reorder_diagrams_by_position (while <project> holds only diagrams). Returns
+    the number of reference lines added."""
+    numbered = []
+    for d in project.findall("diagram"):
+        try:
+            numbered.append((int(d.get("order")), d))
+        except (TypeError, ValueError):
+            continue  # graceful: a diagram without an integer order gets no ref
+    added = 0
+    for lo, hi in CONTINUATION_RANGES:
+        section = sorted((p for p in numbered if lo <= p[0] < hi),
+                         key=lambda p: p[0])
+        for i, (_page, d) in enumerate(section):
+            inputs = d.find("inputs")
+            if inputs is None:
+                inputs = ET.SubElement(d, "inputs")
+            if i > 0:
+                add_text(inputs, CONTINUATION_PREV_X, CONTINUATION_Y,
+                         f"◄ pág. {section[i - 1][0]}", FONT_SMALL)
+                added += 1
+            if i < len(section) - 1:
+                add_text(inputs, CONTINUATION_NEXT_X, CONTINUATION_Y,
+                         f"pág. {section[i + 1][0]} ►", FONT_SMALL)
+                added += 1
+    return added
+
+
 def reorder_diagrams_by_position(project: ET.Element) -> list:
     """Stably re-sort the <diagram> children of <project> by their integer
     `order` attribute (the DA.5 section page number), decoupling folio POSITION
@@ -1666,6 +1732,11 @@ def main(argv=None):
     # carries a traceability sheet.
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = build_changelog_folios(project, SECTION_CHANGELOG, revisions)
+    # DA.5c: prev/next continuation refs on the multi-sheet sections (drawings,
+    # borneros, BOM). Added while <project> still holds only <diagram> children,
+    # before the reorder; pure annotation, so the folio/element counts are
+    # unaffected.
+    add_continuation_refs(project)
     # DA.2: re-sort the folios into natural drawing order (by section page) now
     # that every section exists. Done before attach_titleblocks/build_collection
     # so at this point <project> holds only <diagram> children.
