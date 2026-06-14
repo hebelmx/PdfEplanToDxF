@@ -1253,6 +1253,87 @@ class SupplyFolioTest(unittest.TestCase):
         self.assertIsNotNone(d.find("properties"))
 
 
+class SymbolDisplayNameTest(unittest.TestCase):
+    """DA.4: localized name pulled from the embedded .elmt <names>, language
+    agnostic with a graceful fallback chain (lang → en → any → description → id),
+    so no locale is hardcoded and a symbol always has a legible label."""
+
+    @staticmethod
+    def _entry(names: dict, **extra):
+        defn = ET.Element("definition")
+        ns = ET.SubElement(defn, "names")
+        for lang, text in names.items():
+            ET.SubElement(ns, "name", {"lang": lang}).text = text
+        return {"_definition": defn, **extra}
+
+    def test_prefers_requested_lang(self):
+        e = self._entry({"es": "Lámpara", "en": "Lamp"})
+        self.assertEqual(q.symbol_display_name(e, "es"), "Lámpara")
+
+    def test_falls_back_to_english_then_any(self):
+        self.assertEqual(q.symbol_display_name(self._entry({"en": "Lamp"}), "es"),
+                         "Lamp")
+        self.assertEqual(q.symbol_display_name(self._entry({"de": "Lampe"}), "es"),
+                         "Lampe")
+
+    def test_falls_back_to_description_then_id(self):
+        no_names = {"_definition": ET.Element("definition"),
+                    "description": "Pilot light", "id": "pilot_light"}
+        self.assertEqual(q.symbol_display_name(no_names, "es"), "Pilot light")
+        only_id = {"_definition": ET.Element("definition"), "id": "pilot_light"}
+        self.assertEqual(q.symbol_display_name(only_id, "es"), "pilot_light")
+
+    def test_ignores_blank_names(self):
+        e = self._entry({"es": "   ", "en": "Lamp"})
+        self.assertEqual(q.symbol_display_name(e, "es"), "Lamp")
+
+
+class SymbologyFolioTest(unittest.TestCase):
+    """DA.4: the legend lists ONLY the used symbol types — one real glyph
+    (embedded element) + its localized name per row — and is empty-safe."""
+
+    @staticmethod
+    def _used(*ids):
+        # minimal entries good enough for placement + naming
+        out = []
+        for sid in ids:
+            defn = ET.fromstring(
+                '<definition><names><name lang="es">N-%s</name></names>'
+                '<description><terminal x="0" y="0" orientation="north"/>'
+                '</description></definition>' % sid)
+            out.append({"id": sid, "element": f"{sid}.elmt",
+                        "_definition": defn,
+                        "_terminals": [(0, 0, 0)]})
+        return out
+
+    def test_empty_used_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_symbology_folio(project, 1, []), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_one_glyph_and_name_per_used_symbol(self):
+        project = ET.Element("project")
+        n = q.build_symbology_folio(project, 1, self._used("relay_coil", "horn"))
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(d.get("title"), "Simbología")
+        self.assertEqual(d.get("order"), "1")
+        glyphs = d.find("elements").findall("element")
+        self.assertEqual(len(glyphs), 2)          # one glyph per used symbol
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("N-relay_coil", texts)
+        self.assertIn("N-horn", texts)
+
+    def test_terminal_ids_unique_within_folio(self):
+        project = ET.Element("project")
+        q.build_symbology_folio(project, 1,
+                                self._used("a", "b", "c"))
+        ids = [t.get("id") for t in
+               project.find("diagram").find("elements").iter("terminal")]
+        self.assertEqual(len(ids), len(set(ids)))
+
+
 class PortadaFolioTest(unittest.TestCase):
     """DA.3: the cover (Portada) folio is one diagram of text + shapes only
     (empty <elements>/<conductors>), rendering REAL title-block metadata + the
@@ -1445,18 +1526,38 @@ class WaddingRegressionTest(unittest.TestCase):
         titles = [d.get("title") or "" for d in diagrams]
         idx = lambda pred: next(i for i, t in enumerate(titles) if pred(t))
         i_portada = idx(lambda t: t == "Portada")
+        i_simb = idx(lambda t: t == "Simbología")
         i_supply = idx(lambda t: t == "Alimentación")
         i_draw = idx(lambda t: t.startswith("R"))
         i_born = idx(lambda t: t.startswith("Bornero"))
         i_bom = idx(lambda t: "BOM" in t)
         i_chg = idx(lambda t: "revisiones" in t.lower())
         self.assertEqual(i_portada, 0)             # Portada is FIRST
-        self.assertLess(i_portada, i_supply)
+        self.assertEqual(i_simb, 1)                # Simbología second
+        self.assertLess(i_simb, i_supply)
         self.assertLess(i_supply, i_draw)
         self.assertLess(i_draw, i_born)
         self.assertLess(i_born, i_bom)
         self.assertLess(i_bom, i_chg)
         self.assertEqual(i_chg, len(titles) - 1)   # changelog is LAST
+
+    def test_symbology_lists_only_used_symbols(self):
+        # DA.4: the legend carries exactly one glyph per USED symbol type, and
+        # the count matches the embedded collection's symbol definitions.
+        root, _, _ = self._run()
+        simb = [d for d in root.findall("diagram")
+                if d.get("title") == "Simbología"]
+        self.assertEqual(len(simb), 1)
+        glyphs = simb[0].find("elements").findall("element")
+        self.assertGreater(len(glyphs), 0)
+        # every glyph type resolves to an embedded definition
+        collection = root.find("collection")
+        def_names = {el.get("name") for el in collection.iter("element")
+                     if el.find("definition") is not None}
+        glyph_types = {e.get("type").split("/")[-1] for e in glyphs}
+        self.assertTrue(glyph_types.issubset(def_names))
+        # the legend has no conductors
+        self.assertEqual(len(simb[0].find("conductors").findall("conductor")), 0)
 
     def test_designations_follow_printed_page(self):
         # DA.5: designations FOLLOW the printed page. Each card drawing sits on a

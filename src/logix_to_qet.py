@@ -1403,6 +1403,83 @@ def build_portada_folio(project: ET.Element, order: int, fields: dict,
     return 1
 
 
+# ── Simbología (symbol legend) folio (DA.4) ──────────────────────────────────
+# A legend listing ONLY the field-symbol types actually placed in the set (those
+# in sym_counts), one row each in the deterministic used-symbol order: the REAL
+# symbol glyph (the same embedded element the drawings use, so the legend never
+# drifts from the schematics) beside its localized name. Unlike the other
+# front-matter folios this one DOES carry element instances (the glyphs); their
+# <definition>s are embedded by build_collection, terminal ids are unique per
+# diagram, and there are no conductors — so every structural invariant holds.
+SIMBOLOGIA_TITLE = "Simbología"
+SYM_LABEL_X = 80           # header / legend title x
+SYM_GLYPH_X = 170          # glyph anchor x
+SYM_NAME_X = 320           # name column x
+SYM_ROW_Y0 = 130           # y of the first legend row
+SYM_ROW_DY = 70            # pitch between rows (clears the rotated glyph)
+
+
+def symbol_display_name(entry: dict, lang: str = "es") -> str:
+    """Localized display name for a symbol, pulled from its embedded .elmt
+    <names> (language-agnostic: the DB stores every locale QET ships). Prefers
+    `lang`, then English, then any available name, then the entry's English
+    `description`, then its id — so a symbol always has a legible label and no
+    locale is hardcoded into the generator."""
+    definition = entry.get("_definition")
+    names = definition.find("names") if definition is not None else None
+    by_lang = {}
+    if names is not None:
+        for n in names.findall("name"):
+            if n.get("lang") and (n.text or "").strip():
+                by_lang[n.get("lang")] = n.text.strip()
+    if lang in by_lang:
+        return by_lang[lang]
+    if "en" in by_lang:
+        return by_lang["en"]
+    if by_lang:
+        return next(iter(by_lang.values()))
+    return (entry.get("description") or entry.get("id") or "").strip()
+
+
+def build_symbology_folio(project: ET.Element, order: int, used_symbols: list,
+                          lang: str = "es") -> int:
+    """Append the symbol-legend (Simbología) folio at the given section order,
+    one row per USED symbol type (glyph + localized name) in the deterministic
+    used-symbol order. Returns 1 when at least one symbol was placed, else 0 (no
+    legend for a symbol-less set, e.g. --no-symbols). The glyph is the actual
+    embedded symbol element, so the legend matches the drawings exactly."""
+    if not used_symbols:
+        return 0
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": SIMBOLOGIA_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    elements = ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")     # legend has glyphs but NO conductors
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+    ids = itertools.count(1)                 # terminal ids unique per diagram
+
+    add_text(inputs, SYM_LABEL_X, 30, SIMBOLOGIA_TITLE.upper(), FONT_HEADER)
+    add_text(inputs, SYM_LABEL_X, SYM_ROW_Y0 - 40, "SÍMBOLO", FONT_SMALL)
+    add_text(inputs, SYM_NAME_X, SYM_ROW_Y0 - 40, "DESCRIPCIÓN", FONT_SMALL)
+    y_rule = SYM_ROW_Y0 - 34
+    add_rect(shapes, SYM_LABEL_X, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
+    for i, entry in enumerate(used_symbols):
+        y = SYM_ROW_Y0 + i * SYM_ROW_DY
+        add_symbol_element(elements, entry, SYM_GLYPH_X, y, "", ids)
+        add_text(inputs, SYM_NAME_X, y, symbol_display_name(entry, lang),
+                 FONT_TEXT)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -1532,10 +1609,16 @@ def main(argv=None):
     # base page; reorder_diagrams_by_position re-sorts the <diagram> children into
     # the natural drawing order below, just before serialization (DA.2). All are
     # built BEFORE attach_titleblocks so they inherit the ISO 7200 title block.
+    # the field symbols actually placed (sym_counts is populated by the drawing
+    # loop) — reused for BOTH the legend folio and the embedded collection.
+    used = [e for e in symbols if e["id"] in sym_counts]
     # Portada (cover) — the project's title-block metadata + controller name;
     # sorts to the very front (section page 0).
     portada_folios = build_portada_folio(project, SECTION_PORTADA, tb_fields,
                                          controller)
+    # Simbología (symbol legend) — one row per used symbol type (glyph + name);
+    # sorts right after the cover (section page 1).
+    symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)
     # supply-rail folio ('Alimentación') — draws the rails the cards' power
     # blocks reference; sits before the card drawings in the final order.
     supply_folios = build_supply_folios(project, SECTION_SUPPLY, io_mods)
@@ -1560,7 +1643,6 @@ def main(argv=None):
     template_text = load_titleblock_template()
     page_total = attach_titleblocks(project, tb_fields, template_text,
                                     filename=Path(out_path).stem)
-    used = [e for e in symbols if e["id"] in sym_counts]
     build_collection(project, used)
 
     # CSV sidecar next to the .qet: <output-base>_bom.csv
@@ -1600,6 +1682,8 @@ def main(argv=None):
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
           f"folio(s), one per card", file=err)
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
+    print(f"simbología : {symbology_folios} legend folio(s), "
+          f"{len(used)} symbol type(s)", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",
