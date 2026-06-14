@@ -8,7 +8,7 @@
 
 - Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O drawing
   set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`. Tests =
-  `src/test_logix_to_qet.py` (**180 tests**, stdlib unittest). Durable task list =
+  `src/test_logix_to_qet.py` (**186 tests**, stdlib unittest). Durable task list =
   `docs/TIER3-tracker.md`.
 - **The Document-assembly theme (DA.1–DA.7 + DA.5a/b/c) is DONE** on branch
   **`feat/doc-assembly`** (off `main` @ `1f24259`, **NOT pushed**). WADDING_1 emits **27
@@ -19,9 +19,11 @@
   `docs/TIER3-tracker.md` for the full T3.1–T3.5 specs and the recommended order
   (T3.1 → T3.2 → T3.3 → T3.4, then T3.5 on demand). **Each Tier-3 item has "Open
   decisions (gate)" — surface those to Abel before/with implementing.**
-- **Two things still need Abel's word (don't act without asking):**
-  1. **Eyeball DA.5c in QET** — the arrow glyphs `◄ ►` rendering, and the bottom-lane
-     clearance on a *full* 16-row drawing folio (card box bottom 645 / ref lane 648).
+- **Things still needing Abel's word (don't act without asking):**
+  1. **Eyeball DA.5c + DA.8 in QET** — DA.5c arrow glyphs `◄ ►` rendering + the bottom-lane
+     clearance on a *full* 16-row drawing folio; DA.8 the top-right power table (esp. the
+     OA16 4-row table and the 2-column IB32 folio 106), the 2-column símbología, and the
+     lifted card-box titles. DA.8 is committed but status `review` until Abel blesses it.
   2. **Pushing / merging `feat/doc-assembly`.** Prior convention: ff-merge the feature
      branch into `main` per theme, then Abel pushes. **Don't push without asking.**
 
@@ -38,8 +40,26 @@
 | DA.6 | Hide schematic grid rulers on the non-schematic list folios | `7b2151b` |
 | DA.7 | Lift the card header so the power band stops overprinting the sub-header | `ad6afe8` |
 | DA.5c | prev/next continuation refs (`◄ pág. X` / `pág. Y ►`) on multi-sheet sections | `c2ba9b7` |
+| DA.8 | PDF-review layout fixes (power table top-right; símbología 2 columns; remove struck-through header rules; lift Alimentación rail labels; lift card-box title off the box top) | `95515a5`, `…` |
 
 Gated decisions live in memory **`da-numbering-decisions`** and **`qet-generator-status`**.
+
+### DA.8 specifics (review fixes from Abel's QET/PDF eyeball — landed, awaiting final look)
+- **F1 power band → top-right boxed table.** The inline lane above the box overlapped on
+  multi-group cards. Now a boxed `ALIMENTACIÓN` table in the clear top-right corner
+  (`POWER_TABLE_*`, x≥815, above `ROW_Y0`), one row per potential (`L1 (G1)` … + `pin __`).
+  **Gated choice (Abel): "corner table".** `add_power_terminals(inputs, shapes, groups)` now
+  draws **text + box only — no terminal element** (these markers were unwired references).
+- **F2 símbología → 2 columns + pagination** (`SYM_COLS_PER_PAGE`, `SYM_ROWS_PER_COL`,
+  `SYM_COL_DX`; column-major fill via `_add_symbology_diagram`). Stops symbols spilling over
+  the cajetín. `build_symbology_folio` now returns the folio count (was 0/1).
+- **F3** removed the header rule that struck through the column headers on símbología /
+  bornero / BOM / historial. **F4** lifted the Alimentación rail labels 22px clear (`y-22`).
+  **Follow-up:** lifted the I/O card-box title to `y1-24` (was overprinting the box top).
+- **Tests:** the old `test_subheader_clears_power_band` was replaced (the band moved away);
+  bounds tests now assert the power table's FULL extent vs the real frame on 1- and
+  2-column cards, the símbología 2-col flow, the removed rules, the rail gap, and the
+  card-box title clearance.
 
 ### DA.5c specifics (just landed — for the QET eyeball)
 - **Gated format (Abel, 2026-06-14):** arrow + SECTION page; `◄ pág. X` points back,
@@ -81,10 +101,11 @@ Gated decisions live in memory **`da-numbering-decisions`** and **`qet-generator
    custom folio number, use a custom property (`%{page}`, filled per folio by
    `apply_titleblock` from `diagram.get("order")`) — never rely on `order` driving the
    display. The committed asset stays standard (re-syncable).
-7. **Card-drawing top band is geometrically tight (~36 px).** Layout above the box must be
-   a single horizontal lane; the regression test `test_subheader_clears_power_band` guards
-   ≥12px clearance. **The bottom band is tight too** — a full 16-row card box bottoms at
-   645 and the frame is 660; the DA.5c continuation lane (648) lives in that 15-px gap.
+7. **Card-drawing bands are geometrically tight.** The per-card power potentials now live in
+   a top-right boxed table (DA.8), NOT the old inline lane above the box. The box title sits
+   at `y1-24`, the sub-header at y≈32; the **bottom band is tight** — a full 16-row card box
+   bottoms at 645 and the frame is 660, so the DA.5c continuation lane (648) lives in that
+   15-px gap. Any new top-of-card text must respect these lanes (bounds tests guard them).
 8. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
    One focused commit per item; doc/handoff changes in their OWN commit.
 
@@ -141,7 +162,7 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
   no zero-length conductors; every element `type` has an embedded `<definition>`; ISO 7200
   title block on every folio with a `<property>` for every custom token (incl. `page`) so
   QET leaks no raw `%{token}`.
-- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**180 tests**).
+- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**186 tests**).
 - Pure helper + integration + regression test for every invariant you claim; assert the
   REAL invariant (full symbol extent vs the real frame; floor numbers from stderr).
 - **Eyeball in QET** (fully restart it) — offer to launch QET on the scratch output.
@@ -159,7 +180,7 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 Continue the PLC → mini-EPLAN product (src/logix_to_qet.py) on branch
 feat/doc-assembly. The Document-assembly theme (DA.1–DA.7 + DA.5a/b/c) is DONE and
 reviewed; 27 folios in natural order with prev/next continuation refs, floor
-10/106/75/0 FP, 180 tests green. NEXT = Tier 3, starting T3.1 (NO/NC correctness).
+10/106/75/0 FP, 186 tests green. NEXT = Tier 3, starting T3.1 (NO/NC correctness).
 
 READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES incl. #6 QET-numbers-by-
 position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.1–T3.5
