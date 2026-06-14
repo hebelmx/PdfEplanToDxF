@@ -1,224 +1,193 @@
-# Handoff — next dev cycle (T3.1 + T3.2 DONE → start T3.3)
+# Handoff — next dev cycle (T3.4 DONE → Tier-3 must-do complete)
 
 > Self-contained handoff so a **fresh agent in a new session** can continue with no
-> prior context. Rewritten 2026-06-14 after **T3.2** (spare-point rendering) landed
-> on branch `feat/t3-no-nc`. Supersedes the T3.1 handoff.
+> prior context. Rewritten 2026-06-14 after **T3.4** (chassis grounding folio) landed
+> on branch `feat/t3-grounding`. Supersedes the T3.1+T3.2 handoff.
 
 ## TL;DR — read this first
 
 - Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O drawing
   set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`. Tests =
-  `src/test_logix_to_qet.py` (**203 tests**, stdlib unittest). Durable task list =
+  `src/test_logix_to_qet.py` (**226 tests**, stdlib unittest). Durable task list =
   `docs/TIER3-tracker.md`.
-- **The Document-assembly theme (DA.1–DA.8) is DONE, ff-merged into `main` (@ `a59e39f`)
-  and PUSHED to origin (2026-06-14).** WADDING_1 emits **27
-  folios** in natural order: **Portada → Simbología → Alimentación → card drawings
-  (101–110) → borneros (200–209) → BOM (300–302) → Historial (900)**, with prev/next
-  continuation refs on the three multi-sheet sections.
-- **T3.1 + T3.2 are DONE and FF-MERGED into `main`** (@ `389071d`, pushed 2026-06-14).
-  T3.1 (`9518e77`) = `_nc` variants for level/flow/pressure/foot/thermostat + fixed the
-  unreachable `limit_switch_nc`. T3.2 (`3aa6187`) = 62 reserve terminals over 10 cards
-  (RESERVA in strip lane + bornero + BOM `spare` category). **Floor held 10/106/75/0**;
-  spares counted separately. WADDING_1 now emits **30 folios** (BOM 3→5, bornero 10→11).
-- **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1).
-  No card in the wild exceeds the 2×16=32 one-folio limit (64-ch cards exist but rare);
-  gated design recorded in the issue. **THE NEXT TASK = `T3.4` (PE / ground potentials).**
-  See `docs/TIER3-tracker.md` for the T3.4/T3.5 specs. **Each item has "Open decisions
-  (gate)" — surface those to Abel before/with implementing.**
-- **Things still needing Abel's word (don't act without asking):**
-  1. **Push the T3.2 commits** on `feat/t3-no-nc` (T3.1 is pushed; T3.2 `3aa6187` +
-     the docs commit are local) — ask before pushing and before any merge to `main`.
-  2. **Eyeball T3.2 in QET** — the spare RESERVA terminals on the card folios, the grown
-     bornero (incl. REM_IN_1's 2-sheet strip), and the 5-folio BOM. This is a real
-     visual change; Abel iterates visually. Offer to launch QET on a scratch render.
+- **Tier 2 + the Document-assembly theme (DA.1–DA.8) + T3.1 + T3.2 are DONE and merged to
+  `main`** (`main @ 89b9208`, pushed to origin 2026-06-14).
+- **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)
+  (no card in the wild >32 ch).
+- **T3.4 (chassis grounding folio) is DONE `778ad2b` on `feat/t3-grounding`** (branched off
+  `main @ 89b9208`). Floor HELD **10/106/75/0 FP**; **226 tests** green; WADDING_1 now emits
+  **32 folios** (was 30) — two new **"Puesta a tierra"** folios, one per chassis. **NOT yet
+  pushed or merged. Status = `review` pending Abel's QET eyeball + the human merge gate.**
+- **With T3.4 the Tier-3 MUST-DO work is complete.** Only **T3.5 (extra languages IT/DE/ZH)**
+  remains and it is **demand-driven** (pure data, pull in only when a real project needs it).
 
-## What was done across this theme (all on `feat/doc-assembly`, floor intact)
+## ⚠️ Things still needing Abel's word (don't act without asking)
 
-| # | Item | Commit |
-|---|------|--------|
-| DA.1 | Title-block template sync → `assets/exxerpro.titleblock` | `44b52e0` |
-| DA.2 | Reorder folios to natural drawing order (`reorder_diagrams_by_position`) | `5fa2e4d` |
-| DA.5a | Designations FOLLOW the printed section page → `-K101.x … -K110.x` | `5fa2e4d` |
-| DA.3 | Portada (cover) folio with title-block metadata + controller name | `2db8219` |
-| DA.4 | Simbología (symbol legend) folio — real glyphs + Spanish names | `39cdd5c` |
-| DA.5b | Section page shown in the cajetín (`sectionize_titleblock_page` → `%{page}`) | `7b2151b` |
-| DA.6 | Hide schematic grid rulers on the non-schematic list folios | `7b2151b` |
-| DA.7 | Lift the card header so the power band stops overprinting the sub-header | `ad6afe8` |
-| DA.5c | prev/next continuation refs (`◄ pág. X` / `pág. Y ►`) on multi-sheet sections | `c2ba9b7` |
-| DA.8 | PDF-review layout fixes (power table top-right; símbología 2 columns; remove struck-through header rules; lift Alimentación rail labels; lift card-box title off the box top) | `95515a5`, `…` |
+1. **Eyeball T3.4 in QET** — the two grounding folios (`Puesta a tierra — Chasis R1 (Local)`
+   at section page 099 and `Chasis R2 (RIO_RCP)` at 100), plus confirm Alimentación reads
+   098 and the cards still read 101+. This is a VISUAL folio and Abel iterates visually.
+   Offer to launch QET on a SCRATCH render. The layout (chassis box → FE/PE leads → Barra de
+   tierra → electrode glyph) is geometry-verified inside the frame but only a render confirms
+   it reads cleanly and the Spanish labels/glyph look right.
+2. **Push + merge `feat/t3-grounding` → `main`** — `778ad2b` (feature) + the docs commit are
+   LOCAL only. Ask before pushing and before any merge to `main`.
+3. **(Earlier, still open) Eyeball T3.2 in QET** — the RESERVA spares, the grown bornero
+   (incl. REM_IN_1's 2-sheet strip) and the 5-folio BOM, if not already done.
 
-Gated decisions live in memory **`da-numbering-decisions`** and **`qet-generator-status`**.
+## What T3.4 did (branch `feat/t3-grounding`, floor intact)
 
-### DA.8 specifics (review fixes from Abel's QET/PDF eyeball — landed, awaiting final look)
-- **F1 power band → top-right boxed table.** The inline lane above the box overlapped on
-  multi-group cards. Now a boxed `ALIMENTACIÓN` table in the clear top-right corner
-  (`POWER_TABLE_*`, x≥815, above `ROW_Y0`), one row per potential (`L1 (G1)` … + `pin __`).
-  **Gated choice (Abel): "corner table".** `add_power_terminals(inputs, shapes, groups)` now
-  draws **text + box only — no terminal element** (these markers were unwired references).
-- **F2 símbología → 2 columns + pagination** (`SYM_COLS_PER_PAGE`, `SYM_ROWS_PER_COL`,
-  `SYM_COL_DX`; column-major fill via `_add_symbology_diagram`). Stops symbols spilling over
-  the cajetín. `build_symbology_folio` now returns the folio count (was 0/1).
-- **F3** removed the header rule that struck through the column headers on símbología /
-  bornero / BOM / historial. **F4** lifted the Alimentación rail labels 22px clear (`y-22`).
-  **Follow-up:** lifted the I/O card-box title to `y1-24` (was overprinting the box top).
-- **Tests:** the old `test_subheader_clears_power_band` was replaced (the band moved away);
-  bounds tests now assert the power table's FULL extent vs the real frame on 1- and
-  2-column cards, the símbología 2-col flow, the removed rules, the rail gap, and the
-  card-box title clearance.
+A dedicated grounding folio **per physical chassis**, modeled on AB **1756-IN621 pp.12-14**
+(`docs/1756-in621_-en-p.pdf`, "Grounding Configuration Example"). Gated decisions (Abel,
+2026-06-14, memory `t3-pe-grounding-decisions`):
 
-### DA.5c specifics (just landed — for the QET eyeball)
-- **Gated format (Abel, 2026-06-14):** arrow + SECTION page; `◄ pág. X` points back,
-  `pág. Y ►` points forward; **both on the bottom lane** near the cajetín; page = the
-  diagram `order` (the SECTION page the cajetín shows since DA.5b), NOT QET position.
-- **Scope:** the three multi-sheet sections — **drawings 101–110, borneros 200–209,
-  BOM 300–302**. Single-folio sections (Portada 0, Simbología 1, Alimentación 100,
-  Historial 900) are excluded; a section that is a single folio gets none.
-- **Code:** `add_continuation_refs(project)` (called in `main()` just before
-  `reorder_diagrams_by_position`) groups `<diagram>`s by `CONTINUATION_RANGES` page
-  bands and stamps each sheet's neighbours' pages as `<input>` text only — pure
-  annotation, so element/terminal/conductor/folio counts are untouched. First sheet
-  of a section omits the back ref, last omits the forward ref. Constants:
-  `CONTINUATION_Y=648`, `CONTINUATION_PREV_X=60`, `CONTINUATION_NEXT_X=860`.
-- **Visual risk to confirm in QET:** the lane is geometrically tight — 648 is only 3 px
-  below a full 16-row card box (bottom 645) and its text descends toward the 660 frame.
-  Tests assert `648 > box_bottom` and `648 < 660`, but only a QET render confirms it
-  reads cleanly. Also confirm the `◄`/`►` glyphs render in QET's Sans-Serif (fallback if
-  not: ASCII `<`/`>`).
+- **One folio PER CHASSIS.** Chassis = a distinct `rack` among `io_mods`
+  (`group_chassis()`); WADDING_1 has 2 — **R1 / parent `Local` / 6 modules** and **R2 /
+  parent `RIO_RCP` / 5 modules**.
+- **Each chassis = a labelled box** (`Chasis R<rack> (<parent>)` + `<n> módulos`, derived
+  from the parse — never invented) with **FE** (Tierra funcional) + **PE** (Tierra de
+  protección) studs, gauge-labelled leads → a central **Barra de tierra** → a lead to the
+  **Sistema de electrodos de tierra** (standard 3-bar earth glyph).
+- **Build pattern:** new `build_grounding_folios()` + `_add_grounding_diagram()` mirror
+  `build_supply_folios` — **text + shape primitives only**, empty `<elements>`/`<conductors>`
+  (so they inherit the ISO 7200 title block, zero floor impact). Only `add_rect`/`add_text`
+  exist (no line/circle helper) — leads are thin 2-px rects, like the supply rails.
+- **Gauges CONFIGURABLE** via `project_template.json` `"grounding"` block
+  (`fe_gauge`/`pe_gauge`/`electrode_gauge`), defaulting to the 1756-IN621 values (FE
+  `8 AWG (8.3 mm²)`, PE `14 AWG (2.1 mm², 1.35 N·m)`, electrode `mín. 8 AWG (8.3 mm²)`).
+  `PROJECT_TEMPLATE_DEFAULTS` gained a nested `"grounding"` dict; `load_project_template`
+  now merges that nested dict gracefully (string sub-values only).
+
+### Numbering — gated "keep cards at -K101.x" (Abel chose this over renumbering the cards)
+
+The card drawings stay at section pages **101..110** (`-K101.x..-K110.x` UNCHANGED). The
+power+grounding block **floats just below 101**:
+
+- `main()` computes `n_grounding = len(group_chassis(io_mods))`, then
+  **`supply_order = SECTION_SUPPLY - n_grounding`** (`SECTION_SUPPLY` constant stays 100).
+  Grounding folios take `supply_order+1 .. 100` in rack order.
+- WADDING_1 (n=2): **Alimentación 098 → grounding 099 (R1) → grounding 100 (R2) → cards
+  101-110.** Reading order Alimentación → Puesta a tierra → cards.
+- **Backward-compatible:** `n_grounding = 0` ⇒ `supply_order = 100` (unchanged).
+- Grounding folios at 099/100 sit **below** the drawings continuation band (101-199), so
+  `add_continuation_refs` does NOT chain them (each chassis folio is a standalone sheet).
+
+### Verified from GROUND TRUTH (not the implementer's summary)
+
+- `python logix_to_qet.py ../Fixtures/WADDING_1.L5X -o ../Fixtures/_gen_check.qet` (scratch,
+  deleted after): floor **10 folios / 106 drawn / 75 matched / 0 FP**; 62 spares; **32
+  folios**; supply order 98, grounding 99..100.
+- Parsed the `.qet`: orders `[0,1,98,99,100,101..110,200..210,300..304,900]`; grounding
+  titles `Puesta a tierra — Chasis R1 (Local)` / `… R2 (RIO_RCP)`; grounding folios have
+  **0 elements / 0 conductors**, `titleblocktemplate="exxerpro"`, **no `%{token}` leak**, no
+  duplicate terminal ids, all conductors resolve. Geometry inside the frame (box 120-640 ×
+  80-200, bus y=380, electrode glyph ends y≈506, bottom label y=530 < 660).
+- `python -m unittest test_logix_to_qet` from `src/`: **226 tests OK (1 skip)**. The 1 skip
+  is the optional 2-column-card right-column spare-extent test — WADDING_1 has no
+  right-column card so it honestly skips (a triaged minor from the T3.1/T3.2 review).
+
+## Phase-boundary adversarial review (T3.1 + T3.2) — CLEARED 2026-06-14
+
+A fresh skeptic re-derived everything from ground truth: **both items SOUND.** Floor held;
+T3.1 is pure data (a JSON `priority 0→1`, no NO/NC logic in Python; the tiebreak resolves all
+adversarial cases correctly and no fixture tag flipped); T3.2 spares carry no conductors,
+blank designation/type, counted separately, no proxy-assertion smell. One **minor** test gap
+(right-column spare extent on a 2-column card — triaged into the T3.4 cycle, test added but
+skips) + two nits (a `ResourceWarning` from an unclosed CSV handle at `test_logix_to_qet.py`
+~452; spare direction/analog derived from `mod.kind` — fine for homogeneous ControlLogix
+cards). Nothing blocking.
 
 ## ⚠️ HARD RULES (these bit us — do not repeat)
 
-1. **NEVER run the generator with `-o Fixtures/WADDING_1.qet`.** That is **Abel's
-   working artifact** (he hand-edits the title block in QET). **Verify to a SCRATCH path**
-   (`-o Fixtures/_gen_check.qet`) and parse THAT; delete the scratch `.qet`/`_bom.csv`
-   after. (Memory: `never-overwrite-working-qet`.)
+1. **NEVER run the generator with `-o Fixtures/WADDING_1.qet`.** That is **Abel's working
+   artifact**. **Verify to a SCRATCH path** (`-o Fixtures/_gen_check.qet`) and parse THAT;
+   delete the scratch `.qet`/`_bom.csv` after. (Memory: `never-overwrite-working-qet`.)
 2. **Don't trust a subagent's `shipReady`/summary.** Re-derive every number from ground
-   truth (run the generator → read stderr; run the tests; eyeball in QET). Prior cycles
-   shipped real geometry bugs that passed the implementer's own short-circuiting test.
+   truth (run the generator → read stderr; run the tests; parse the `.qet`; eyeball in QET).
 3. **Never force / never invent.** Unmatched → generic; missing/ambiguous → graceful
-   fallback. Physical pins stay `"TBD"` → `__`. Multilingual DBs stay language-agnostic
-   (pull display names from the DB). Python 3.10+, **stdlib only.**
+   fallback. Physical pins stay `"TBD"` → `__`. Grounding gauges are standard 1756-IN621
+   defaults (configurable), not per-site data; chassis labels are derived (`rack`/`parent`),
+   never invented Spanish names. Multilingual DBs stay language-agnostic. Python 3.10+,
+   **stdlib only.**
 4. **Public-repo hygiene:** NEVER `git add` anything under `Fixtures/` or any
-   `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / `*.pdf` / personal file. Company
-   assets (`assets/exxerpro.titleblock`, the logo **`.svg`**) ARE committed; the
-   `.png/.bmp/.ai` logo exports are intentionally untracked.
+   `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / `*.pdf` / personal file. Company assets
+   (`assets/exxerpro.titleblock`, the logo **`.svg`**) ARE committed; the `.png/.bmp/.ai`
+   logo exports are intentionally untracked (they show as `??` — leave them).
 5. **QET caches title-block templates at startup** — fully RESTART QET to see template edits.
-6. **QET numbers folios by DOCUMENT POSITION, not the `order` attribute.** To show any
-   custom folio number, use a custom property (`%{page}`, filled per folio by
-   `apply_titleblock` from `diagram.get("order")`) — never rely on `order` driving the
-   display. The committed asset stays standard (re-syncable).
-7. **Card-drawing bands are geometrically tight.** The per-card power potentials now live in
-   a top-right boxed table (DA.8), NOT the old inline lane above the box. The box title sits
-   at `y1-24`, the sub-header at y≈32; the **bottom band is tight** — a full 16-row card box
-   bottoms at 645 and the frame is 660, so the DA.5c continuation lane (648) lives in that
-   15-px gap. Any new top-of-card text must respect these lanes (bounds tests guard them).
+6. **QET numbers folios by DOCUMENT POSITION, not the `order` attribute.** Custom folio
+   numbers go through `%{page}` (filled per folio by `apply_titleblock` from `order`).
+7. **Card / folio bands are geometrically tight.** Drawing folios: power table top-right,
+   box title `y1-24`, continuation lane at 648 in the 15-px gap above the 660 frame. The new
+   grounding folios are roomy (one chassis per sheet) but still keep all text lifted clear of
+   lines (DA.8 lesson) and inside the frame.
 8. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
    One focused commit per item; doc/handoff changes in their OWN commit.
-
-## THE NEXT TASK — Tier 3 (start T3.4; T3.3 deferred → issue #1)
-
-Full specs in `docs/TIER3-tracker.md`. Summary + the decisions to gate with Abel:
-
-- **T3.1 NO/NC correctness on symbols** — ✅ **DONE `9518e77`** (memory `t3-no-nc-decisions`):
-  extend the separate-entry `_nc` pattern; scope = level/flow/pressure/foot/thermostat;
-  ambiguous default stays NO; real QET-library glyphs; fixed the unreachable `limit_switch_nc`.
-- **T3.2 Spare-point rendering** — ✅ **DONE `3aa6187`** (memory `t3-spare-decisions`):
-  spare = empty channel slot (capacity − mapped); RESERVA terminal in the strip lane + on
-  the bornero + a BOM `spare` category (designation/type blank). Floor held 10/106/75/0;
-  62 spares; 30 folios total. **Pending Abel's QET eyeball.**
-- **T3.3 Column pagination on card overflow** — ⏸ **DEFERRED** ([issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)):
-  no card in the wild >32 ch; gated design (`(n/m)` continuation folio; one module BOM row,
-  rows carry their folio; designations continue across sheets) recorded for when needed.
-- **T3.4 PE / ground — chassis grounding folio** *(NEXT, scoped 2026-06-14, memory
-  `t3-pe-grounding-decisions`)* — NOT per-I/O-point PE. A dedicated **grounding folio**
-  modeled on AB **1756-IN621 pp. 12–14** (`docs/1756-in621_-en-p.pdf`): each chassis draws
-  **FE (8 AWG) + PE (14 AWG, opt. 2nd PE)** → a **central Ground Bus** → the
-  **Grounding-electrode System** (min 8 AWG). Build like `build_supply_folios` (text+shapes
-  only). **Still to gate (visual):** Spanish labels; all-chassis vs per-chassis; boxes vs
-  nodes; section-page placement; gauges fixed vs config.
-- **T3.5 Additional languages (IT/DE/ZH)** — pure data, demand-driven only.
 
 ## Code map (current `src/logix_to_qet.py`)
 
 `main()` builds folios in DEPENDENCY order, stamps each with a SECTION page, adds
 continuation refs, then re-sorts into document order before serialization:
 
+- `n_grounding = len(group_chassis(io_mods))`; `supply_order = SECTION_SUPPLY - n_grounding`.
 - Drawing-folio loop: `build_folio(project, page, …)` with `page = SECTION_DRAWINGS+i`
-  (101..110). `page` is ALSO the designation/wire-number prefix (DA.5a). Accumulates
-  `bom_rows`, `drawn_cards`, `sym_counts`.
-- `used = [e for e in symbols if e["id"] in sym_counts]` (shared by legend + collection).
-- `build_portada_folio(project, SECTION_PORTADA=0, tb_fields, controller)` (DA.3).
-- `build_symbology_folio(project, SECTION_SIMBOLOGIA=1, used)` (DA.4) — real glyphs.
-- `build_supply_folios(project, SECTION_SUPPLY=100, io_mods)` — Alimentación.
-- `build_bornero_folios(project, SECTION_BORNERO=200, drawn_cards)` — 200..209.
-- `build_summary_folios(project, SECTION_BOM=300, bom_rows)` — 300..304 (5 folios since T3.2 spares; +`spare_bom_row`).
-- `build_changelog_folios(project, SECTION_CHANGELOG=900, revisions)` — Historial.
-- `add_continuation_refs(project)` (DA.5c) — stamps prev/next refs on `CONTINUATION_RANGES`
-  page bands (drawings/borneros/BOM); pure `<input>` text, run before the reorder.
-- `reorder_diagrams_by_position(project)` — stable sort `<diagram>` by int `order` (DA.2).
-- `sectionize_titleblock_page(load_titleblock_template())` then `attach_titleblocks(...)`
-  (fills `%{page}` per folio, DA.5b), `build_collection`, embed templates verbatim.
+  (101..110); `page` is ALSO the designation/wire-number prefix (DA.5a). Accumulates
+  `bom_rows`, `drawn_cards`, `sym_counts`. Spare RESERVA terminals per unused channel (T3.2).
+- `build_portada_folio(SECTION_PORTADA=0)` (DA.3); `build_symbology_folio(SECTION_SIMBOLOGIA=1)`
+  (DA.4); `build_supply_folios(supply_order)` — Alimentación;
+  **`build_grounding_folios(supply_order+1, io_mods, gauges)`** — one Puesta a tierra folio
+  per chassis (T3.4); `build_bornero_folios(SECTION_BORNERO=200)`;
+  `build_summary_folios(SECTION_BOM=300)`; `build_changelog_folios(SECTION_CHANGELOG=900)`.
+- `add_continuation_refs(project)` — stamps prev/next refs on the 101-199 / 200-299 / 300-899
+  bands (drawings/borneros/BOM); grounding (099/100) is below the band, untouched.
+- `reorder_diagrams_by_position(project)` — stable sort by int `order` (DA.2). Then
+  `sectionize_titleblock_page` + `attach_titleblocks` (fills `%{page}`), `build_collection`,
+  embed templates verbatim.
 
 The "append a folio → inherits the title block" pattern (text + shapes only) is shared by
-`build_summary/changelog/supply/bornero/portada_folios`. The non-schematic list folios set
-`displaycols/displayrows="false"` (DA.6); the drawing folios keep them `"true"`.
+`build_summary/changelog/supply/grounding/bornero/portada_folios`. Non-schematic list folios
+set `displaycols/displayrows="false"` (DA.6); drawing folios keep them `"true"`.
 
 ## Hard gate & guardrails (ALWAYS, after every change)
 
-- **Validation command (SCRATCH output — NOT WADDING_1.qet):**
+- **Validation (SCRATCH output — NOT WADDING_1.qet):**
   `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/_gen_check.qet`
 - **Floor that must NOT regress:** **10 drawing folios / 106 points / 75 matched / 0 FP**,
-  parsed from `main()`'s stderr summary (not a proxy). Since T3.2 also: **62 spare
-  reserve terminals** (separate count) and **30 total folios** (BOM 5, bornero 11) in the
-  section order; terminal ids unique per diagram; every conductor `terminal1/2` resolves;
-  no zero-length conductors; every element `type` has an embedded `<definition>`; ISO 7200
-  title block on every folio with a `<property>` for every custom token (incl. `page`) so
-  QET leaks no raw `%{token}`.
-- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**203 tests**).
-- Pure helper + integration + regression test for every invariant you claim; assert the
-  REAL invariant (full symbol extent vs the real frame; floor numbers from stderr).
+  from `main()`'s stderr summary. Since T3.2: **62 spare RESERVA** (separate count). Since
+  T3.4: **2 grounding folios** and **32 total folios** (supply at 100−n_grounding); terminal
+  ids unique per diagram; every conductor resolves; no zero-length conductors; every element
+  `type` has an embedded `<definition>`; ISO 7200 title block on every folio with a
+  `<property>` for every custom token (incl. `page`) so QET leaks no raw `%{token}`.
+- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**226 tests**).
 - **Eyeball in QET** (fully restart it) — offer to launch QET on the scratch output.
-  Abel's QET reviews caught DA.5b/DA.6/DA.7 that tests alone did not.
 
 ## Git state / how to resume
 
-- **`main` @ `389071d`** — T3.1 + T3.2 (+ DA theme) ff-merged into `main` and PUSHED to
-  origin (2026-06-14). `feat/t3-no-nc == main == origin/main == 389071d`.
-- **T3.3 deferred** (issue #1). **Start T3.4 from a FRESH branch off `main`** (e.g.
-  `feat/t3-grounding`).
+- **`main` @ `89b9208`** — Tier 2 + DA + T3.1 + T3.2, pushed to origin.
+- **`feat/t3-grounding`** (off `main`): `778ad2b` (T3.4 feature) + the docs commit. **NOT
+  pushed, NOT merged** — awaiting Abel's QET eyeball + the human merge gate.
+- **T3.3 deferred** (issue #1). **T3.4 done.** Next actionable backlog = **T3.5 (demand-driven)**.
 
 ## Kickoff prompt — paste into the new session
 
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). T3.1 (NO/NC, 9518e77)
-and T3.2 (spare-point rendering, 3aa6187) are DONE, verified, and FF-MERGED to main
-(@ 389071d, pushed). Floor 10/106/75/0 FP; WADDING_1 emits 30 folios (62 RESERVA
-spares; BOM 5; bornero 11); 203 tests green. T3.3 (column pagination) DEFERRED →
-issue #1. NEXT = T3.4 (PE / ground). Start from a FRESH branch off main (feat/t3-grounding).
+Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). Tier 2 + DA + T3.1 + T3.2 are
+merged to main (89b9208, pushed). T3.3 DEFERRED (issue #1). T3.4 (chassis grounding folio,
+778ad2b on feat/t3-grounding) is DONE & verified — floor 10/106/75/0 FP; 226 tests green;
+WADDING_1 emits 32 folios (2 new "Puesta a tierra" per-chassis folios; Alimentación 098,
+grounding 099/100, cards 101-110 unchanged). NOT pushed/merged — status review pending
+Abel's QET eyeball + the human merge gate. Tier-3 must-do work is COMPLETE; only T3.5
+(extra languages, demand-driven) remains.
 
-READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES incl. #6 QET-numbers-by-
-position and #7 tight bands, code map), docs/TIER3-tracker.md (T3.4 scope + still-to-gate),
-ProductPlanEnhancement.md, memory t3-pe-grounding-decisions + qet-generator-status, and
-docs/1756-in621_-en-p.pdf pages 12-14 (the grounding figure T3.4 is modeled on).
+READ FIRST: docs/HANDOFF-next-cycle.md (this file — state, HARD RULES, code map),
+docs/TIER3-tracker.md, ProductPlanEnhancement.md, memory t3-pe-grounding-decisions +
+qet-generator-status.
 
-T3.4 = a dedicated GROUNDING FOLIO (NOT per-I/O-point PE), modeled on 1756-IN621
-pp.12-14: each chassis draws FE (8 AWG / 8.3 mm²) + PE (14 AWG / 2.1 mm², torque
-1.35 N·m, optional 2nd PE) → a central Ground Bus → the Grounding-electrode System
-(min 8 AWG). Build a new build_grounding_folio(...) like build_supply_folios
-(Alimentación): TEXT + SHAPE PRIMITIVES ONLY, empty <elements>/<conductors>, own
-SECTION page near Alimentación (100-series) — zero floor impact. It is a VISUAL folio,
-so GATE these with Abel before/with coding: Spanish labels (Puesta a tierra / Tierra de
-protección PE / Tierra funcional FE / Barra de tierra / Sistema de electrodos de tierra);
-one folio for all chassis vs per-chassis; chassis as boxes vs labelled nodes; exact
-section-page placement; gauges fixed defaults vs project_template config. Verify from
-ground truth (floor 10/106/75/0 from stderr; 203+ tests), one focused commit, eyeball in QET.
-
-STILL PENDING ABEL: (1) eyeball T3.2 in QET (RESERVA spares, grown bornero/BOM);
-(2) periodic adversarial review on T3.1+T3.2 is due (phase boundary) before/with T3.4.
+PENDING ABEL: (1) eyeball T3.4 in QET (the 2 grounding folios at 099/100, Alimentación 098,
+cards 101+); (2) push + merge feat/t3-grounding → main; (3) if not done, eyeball T3.2.
 
 HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
-(TBD→__, blank cells); stdlib only; never git add Fixtures/ or *.L5X/*.qet/*.pdf/*_bom.csv;
-restart QET to see template edits; don't push without Abel's OK.
+(TBD→__, derived labels, configurable gauge defaults); stdlib only; never git add Fixtures/
+or *.L5X/*.qet/*.pdf/*_bom.csv; restart QET to see template edits; don't push without Abel's OK.
 ```
 
 ---
-*Overwrite this file for the cycle after T3.4.*
+*Overwrite this file for the cycle after the T3.4 merge / T3.5.*

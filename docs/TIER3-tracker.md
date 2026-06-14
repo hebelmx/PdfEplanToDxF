@@ -76,14 +76,16 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | T3.1 | NO/NC correctness on symbols | `done` `9518e77` | Hand-flipping each contact to its real normally-open/closed state |
 | T3.2 | Spare-point rendering | `done` `3aa6187` | Hand-drawing unused/reserved card points so the strip is complete |
 | T3.3 | Column pagination on card overflow | `deferred` [#1](https://github.com/hebelmx/PdfEplanToDxF/issues/1) | Manually splitting a high-point-count card across sheets/columns |
-| T3.4 | PE / ground potentials | `todo` | Hand-drawing the protective-earth / ground references on devices |
+| T3.4 | PE / ground potentials (chassis grounding folio) | `review` `778ad2b` (pending Abel QET eyeball) | Hand-drawing the protective-earth / ground references on devices |
 | T3.5 | Additional languages (IT/DE/ZH) — pure data | `todo` (demand-driven) | Manual re-matching when a project ships in another language |
 
-Recommended order: **T3.1 ✅ → T3.2 ✅ → ~~T3.3~~ (deferred, issue #1) → T3.4**, then
+Recommended order: **T3.1 ✅ → T3.2 ✅ → ~~T3.3~~ (deferred, issue #1) → T3.4 ✅**, then
 **T3.5 only when a project demands it** (the plan calls the extra languages drop-in
 pure data, not a must-do). **T3.3 deferred 2026-06-14** — no card in the wild yet
 exceeds 32 channels (the 2×16 one-folio limit); 64-ch cards exist but are rarely seen,
-so it's tracked in **issue #1** and implemented when needed. **NEXT actionable = T3.4.**
+so it's tracked in **issue #1** and implemented when needed. **T3.4 done `778ad2b`
+2026-06-14** (pending Abel's QET eyeball). **NEXT actionable = T3.5 (demand-driven) — the
+Tier-3 must-do work is COMPLETE pending the eyeball + the human merge gate.**
 
 ---
 
@@ -154,7 +156,31 @@ so it's tracked in **issue #1** and implemented when needed. **NEXT actionable =
 - **Touches:** `COL_X`/`POINTS_PER_COL`/`ROW_*` geometry + `build_folio`. The
   ~660-px folio height is already near-full at 16 rows — mind the box bounds.
 
-## T3.4 — PE / ground (chassis grounding folio)  ← NEXT (scoped, handed off)
+## T3.4 — PE / ground (chassis grounding folio)  ✅ DONE `778ad2b` (review: pending Abel QET eyeball)
+- **DONE `778ad2b` on `feat/t3-grounding`** (gated decisions with Abel 2026-06-14):
+  **one folio PER CHASSIS** (chassis = distinct `rack`; WADDING_1 → 2: R1/Local 6 mods,
+  R2/RIO_RCP 5 mods); each chassis a **labelled box** (identity + module count, derived
+  from `rack`/`parent`, never invented) with **FE + PE studs**, gauge-labelled leads → a
+  **Barra de tierra** → the **Sistema de electrodos de tierra** (3-bar earth glyph).
+  Text+shape primitives only, empty `<elements>`/`<conductors>` (mirrors
+  `build_supply_folios`). Spanish labels per memory. **Gauges CONFIGURABLE** via
+  `project_template.json` `"grounding"` (fe_gauge/pe_gauge/electrode_gauge), defaulting to
+  the 1756-IN621 values (FE 8 AWG, PE 14 AWG/1.35 N·m, electrode min 8 AWG).
+  - **Numbering (gated "keep cards at -K101.x"):** supply order = `100 − n_grounding`; the
+    grounding folios take `supply+1..100` in rack order; cards UNCHANGED at 101-110.
+    Backward-compatible (n=0 ⇒ Alimentación stays 100). WADDING_1: Alimentación **098**,
+    grounding **099** (R1) + **100** (R2), cards 101-110. Grounding sits below the 101-199
+    drawings band so continuation refs don't pick it up.
+  - **Verified from ground truth:** floor HELD 10/106/75/0 FP; 62 spares; **32 folios**
+    (was 30); grounding folios empty elements/conductors, carry the title block, no
+    `%{token}` leak, ids unique, conductors resolve, geometry inside the frame.
+    **226 tests** green (was 203). **Pending Abel: QET eyeball of the 2 grounding folios.**
+- **Triaged from the T3.1/T3.2 adversarial review (minor follow-up):** the right-column
+  spare horizontal extent on a 2-column card (e.g. a >16-ch card) is not asserted vs
+  `POWER_TABLE_LEFT`/frame — a positional test was added but **SKIPS** on WADDING_1 (no
+  right-column card exists). Revisit if/when issue #1 (>32-ch card) lands.
+
+### T3.4 — original scope (for reference)
 - **Scope RESOLVED with Abel 2026-06-14** (memory `t3-pe-grounding-decisions`): NOT
   per-I/O-point PE. Build a dedicated **grounding / "Puesta a tierra" folio** modeled on
   AB **1756-IN621** pp. 12–14 (`docs/1756-in621_-en-p.pdf`, "Grounding Configuration
