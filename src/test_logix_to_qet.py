@@ -1159,6 +1159,19 @@ class BuildFolioPowerRenderTest(unittest.TestCase):
         # each terminal shows the placeholder pin (TBD -> __)
         self.assertGreaterEqual(texts.count(f"pin {q.PIN_PLACEHOLDER}"), 4)
 
+    def test_subheader_clears_power_band(self):
+        # the bug Abel caught: the full-width sub-header line was overprinted by
+        # the inline power band. The sub-header must sit clearly ABOVE the
+        # topmost power-terminal label (the potential name), not on top of it.
+        d = self._diagram("1756-OA16")
+        inputs = d.find("inputs").findall("input")
+        sub = next(i for i in inputs if " — " in (i.get("text") or ""))
+        sub_y = float(sub.get("y"))
+        pot_ys = [float(i.get("y")) for i in inputs if i.get("text") in ("L1", "N")]
+        self.assertTrue(pot_ys)
+        self.assertLess(sub_y, min(pot_ys))
+        self.assertGreaterEqual(min(pot_ys) - sub_y, 12)   # real gap, no overprint
+
     def test_cross_reference_text_points_at_rail_folio(self):
         # OA16 has TWO groups -> the rail annotations carry a (G1)/(G2) suffix so
         # the two isolated L1/N groups stay distinguishable instead of collapsing

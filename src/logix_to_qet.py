@@ -875,11 +875,16 @@ def build_folio(project: ET.Element, order: int, mod, points,
     db = load_module_db(mod.catalog)
     header = (f"{mod.name}   |   {mod.catalog}   |   Rack {mod.rack}"
               f"  Slot {mod.slot}   |   {mod.kind}{mod.points}")
-    add_text(inputs, 40, 30, header, FONT_HEADER)
+    # Header + sub-header sit tight to the top of the sheet. The sub-header is a
+    # full-width line and the inline power band (POWER_BAND_Y, between the two
+    # terminal columns) is wedged between it and the first I/O row's strip label
+    # (~y 87); keeping the header high widens that lane so the power terminals'
+    # glyph + labels clear the sub-header instead of overprinting it.
+    add_text(inputs, 40, 20, header, FONT_HEADER)
     if db:
         sub = " — ".join(s for s in (db.get("vendor"), db.get("description"),
                                      db.get("rtb")) if s)
-        add_text(inputs, 40, 44, sub, FONT_SMALL)
+        add_text(inputs, 40, 32, sub, FONT_SMALL)
     wiring = db["_wiring_by_point"] if db else {}
 
     # (module) BOM row for this I/O card — only data already computed above:
