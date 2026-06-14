@@ -168,5 +168,17 @@
       "pin": "TBD"
     }
   ],
-  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-IB32."
+  "power": {
+    "type": "DC",
+    "groups": [
+      {
+        "points": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+        "supply": "L+",
+        "common": "0V",
+        "supply_pin": "TBD",
+        "common_pin": "TBD"
+      }
+    ]
+  },
+  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-IB32. The 24V DC field supply is the L+ rail with a 0V common; supply_pin/common_pin stay 'TBD' until taken from the same wiring diagram."
 }

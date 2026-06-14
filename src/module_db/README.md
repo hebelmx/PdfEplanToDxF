@@ -34,3 +34,50 @@ in the card header and the physical RTB terminal (pin) next to each point.
 
 Add files for new catalogs as they appear in your projects; unknown catalogs
 simply render without vendor info and with `__` pin placeholders.
+
+## Optional `power` block
+
+A card may declare how its I/O points are powered. The block is **optional** —
+omit it entirely when the supply structure is uncertain (analog and isolated-relay
+cards usually have no single supply/common pair, so they ship without it and
+draw no power terminals — never invent one).
+
+```json
+{
+  "power": {
+    "type": "AC",
+    "groups": [
+      { "points": [0, 1, 2, 3, 4, 5, 6, 7],
+        "supply": "L1", "common": "N",
+        "supply_pin": "TBD", "common_pin": "TBD" },
+      { "points": [8, 9, 10, 11, 12, 13, 14, 15],
+        "supply": "L1", "common": "N",
+        "supply_pin": "TBD", "common_pin": "TBD" }
+    ]
+  }
+}
+```
+
+- `type` — `"AC"` or `"DC"` (documentation/grouping; the rendering is the same).
+- `groups` — one entry per independently-supplied point group. A card with one
+  shared supply has a single group; the **1756-OA16 has two isolated groups of 8**
+  (points 0–7 and 8–15), each with its own `L1`/`N` pair.
+- `points` — the zero-based point indices (same numbering as `wiring[].point`)
+  this group powers.
+- `supply` / `common` — **potential names**, not pins: the rail labels the group
+  hangs off. AC cards use `L1` / `N`; DC cards use `L+` / `0V` (or `24V` / `0V`).
+  Each terminal carries a compact text annotation referencing the rail folio,
+  `→ /Alim <name>` (a label, not a navigable QET cross-reference), and the name is
+  drawn as a rail on the `Alimentación` folio. When a card has **more than one
+  group** the annotation gets a `(G1)`, `(G2)`… suffix so isolated groups that
+  share a potential name (the 1756-OA16's two `L1`/`N` groups) stay distinguishable.
+- `supply_pin` / `common_pin` — the **physical RTB pins** for the supply and the
+  common. **They follow the exact same rule as `wiring[].pin`: keep them `"TBD"`
+  and the folio renders `pin __`.** Never guess a power pin from a manual; fill it
+  from the module's installation-instructions wiring diagram.
+
+A missing or malformed `power` block (absent, not a dict, no/empty `groups`, bad
+point lists) degrades gracefully: **no power terminals are drawn**, never garbage.
+A single group whose `supply` **and** `common` are both blank/non-string is dropped
+the same way (nothing to label or reference); a group keeps rendering as long as it
+has at least one usable potential name.

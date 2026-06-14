@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
@@ -933,6 +934,403 @@ class ChangelogFolioTest(unittest.TestCase):
         d = project.find("diagram")
         self.assertEqual(d.get("order"), "5")
         self.assertIn("revisiones", d.get("title").lower())
+
+
+class ParsePowerBlockTest(unittest.TestCase):
+    """Pure helper: parsing the optional module_db 'power' block returns the
+    groups (points / supply / common potentials / TBD pins), and degrades to NO
+    power groups on missing/malformed input. Mirrors the wiring pattern."""
+
+    def test_well_formed_block_returns_groups_with_potentials_and_pins(self):
+        power = {"type": "AC", "groups": [
+            {"points": [0, 1, 2, 3, 4, 5, 6, 7], "supply": "L1", "common": "N",
+             "supply_pin": "TBD", "common_pin": "TBD"},
+            {"points": [8, 9, 10, 11, 12, 13, 14, 15], "supply": "L1",
+             "common": "N", "supply_pin": "TBD", "common_pin": "TBD"},
+        ]}
+        groups = q.parse_power_block(power)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]["points"], [0, 1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual(groups[0]["supply"], "L1")
+        self.assertEqual(groups[0]["common"], "N")
+        self.assertEqual(groups[0]["supply_pin"], "TBD")
+        self.assertEqual(groups[0]["common_pin"], "TBD")
+        self.assertEqual(groups[1]["points"][0], 8)
+
+    def test_missing_block_yields_no_groups(self):
+        self.assertEqual(q.parse_power_block(None), [])
+
+    def test_non_dict_block_yields_no_groups(self):
+        for bad in ("power", 7, ["groups"], True):
+            self.assertEqual(q.parse_power_block(bad), [])
+
+    def test_missing_or_bad_groups_yields_no_groups(self):
+        self.assertEqual(q.parse_power_block({"type": "AC"}), [])
+        self.assertEqual(q.parse_power_block({"groups": "oops"}), [])
+        self.assertEqual(q.parse_power_block({"groups": []}), [])
+
+    def test_group_without_points_is_dropped(self):
+        power = {"groups": [
+            {"supply": "L1", "common": "N"},            # no points key
+            {"points": [], "supply": "L1"},             # empty points
+            {"points": "x", "supply": "L1"},            # points not a list
+            {"points": [0, 1], "supply": "L+", "common": "0V"},  # valid
+        ]}
+        groups = q.parse_power_block(power)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["points"], [0, 1])
+        self.assertEqual(groups[0]["supply"], "L+")
+
+    def test_non_int_points_are_filtered(self):
+        groups = q.parse_power_block(
+            {"groups": [{"points": [0, "1", 2, None, 3, True], "supply": "L1"}]})
+        # str/None/bool dropped; ints kept (True is a bool, excluded)
+        self.assertEqual(groups[0]["points"], [0, 2, 3])
+
+    def test_missing_pins_default_to_tbd(self):
+        groups = q.parse_power_block(
+            {"groups": [{"points": [0], "supply": "L1", "common": "N"}]})
+        self.assertEqual(groups[0]["supply_pin"], "TBD")
+        self.assertEqual(groups[0]["common_pin"], "TBD")
+
+    def test_group_with_both_potentials_blank_is_dropped(self):
+        # non-string / missing supply AND common -> nothing to label or
+        # reference -> the whole group is dropped (graceful, never a "?" terminal)
+        self.assertEqual(
+            q.parse_power_block(
+                {"groups": [{"points": [0], "supply": 5, "common": None}]}),
+            [])
+        self.assertEqual(
+            q.parse_power_block({"groups": [{"points": [0, 1]}]}), [])
+
+    def test_group_with_one_valid_potential_survives_other_blanked(self):
+        # a single usable potential keeps the group; the bad one is coerced blank
+        groups = q.parse_power_block(
+            {"groups": [{"points": [0], "supply": "L+", "common": None}]})
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["supply"], "L+")
+        self.assertEqual(groups[0]["common"], "")
+
+    def test_deterministic_repeat(self):
+        power = {"groups": [{"points": [0, 1], "supply": "L1", "common": "N"}]}
+        self.assertEqual(q.parse_power_block(power), q.parse_power_block(power))
+
+
+class LoadModuleDbPowerTest(unittest.TestCase):
+    """load_module_db must expose the parsed power structure as power_groups,
+    and the shipped card files must be modelled per AC #5."""
+
+    def test_oa16_has_two_groups_of_eight_with_l1_n_and_tbd_pins(self):
+        db = q.load_module_db("1756-OA16")
+        groups = db["power_groups"]
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]["points"], list(range(0, 8)))
+        self.assertEqual(groups[1]["points"], list(range(8, 16)))
+        for g in groups:
+            self.assertEqual(g["supply"], "L1")
+            self.assertEqual(g["common"], "N")
+            # GUARDRAIL: pins ship as TBD (render __)
+            self.assertEqual(g["supply_pin"], "TBD")
+            self.assertEqual(g["common_pin"], "TBD")
+
+    def test_ia16_single_ac_group_l1_n(self):
+        db = q.load_module_db("1756-IA16")
+        groups = db["power_groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["points"], list(range(16)))
+        self.assertEqual(groups[0]["supply"], "L1")
+        self.assertEqual(groups[0]["common"], "N")
+
+    def test_ib32_dc_group_uses_dc_potentials(self):
+        db = q.load_module_db("1756-IB32")
+        groups = db["power_groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["points"], list(range(32)))
+        self.assertIn(groups[0]["supply"], ("L+", "24V"))
+        self.assertIn(groups[0]["common"], ("0V", "N"))
+
+    def test_analog_and_relay_cards_omit_power_block(self):
+        """1756-IF16 / 1756-OX8I omit the block entirely (uncertain structure):
+        graceful — no power groups, never invented."""
+        for cat in ("1756-IF16", "1756-OX8I"):
+            db = q.load_module_db(cat)
+            self.assertEqual(db["power_groups"], [],
+                             f"{cat} should ship no power block")
+
+    def test_all_shipped_pins_are_tbd(self):
+        """No physical power pin is ever guessed in a shipped card file."""
+        import glob
+        for f in glob.glob(str(q.MODULE_DB_DIR / "*.json")):
+            db = q.load_module_db(Path(f).stem)
+            for g in db["power_groups"]:
+                self.assertEqual(g["supply_pin"], "TBD")
+                self.assertEqual(g["common_pin"], "TBD")
+
+
+class PowerPinLabelTest(unittest.TestCase):
+    """The 'pin __' rule for power terminals: TBD (case-insensitive) and
+    blank/missing render as the __ placeholder; a real pin renders verbatim."""
+
+    def test_tbd_renders_placeholder_case_insensitive(self):
+        for v in ("TBD", "tbd", " Tbd "):
+            self.assertEqual(q._power_pin_label(v), q.PIN_PLACEHOLDER)
+
+    def test_blank_or_missing_renders_placeholder(self):
+        for v in ("", "   ", None, 7):
+            self.assertEqual(q._power_pin_label(v), q.PIN_PLACEHOLDER)
+
+    def test_real_pin_renders_verbatim(self):
+        self.assertEqual(q._power_pin_label("34"), "34")
+        self.assertEqual(q._power_pin_label(" L1-0 "), "L1-0")
+
+
+class BuildFolioPowerRenderTest(unittest.TestCase):
+    """Integration: build_folio draws one supply + one common terminal per power
+    group (labelled with the potential, 'pin __', and a cross-reference), placed
+    outside the I/O-row and card-box bounds; a card with no power block draws
+    none."""
+
+    @staticmethod
+    def _diagram(catalog, npoints=16, kind="DO"):
+        mod = SimpleNamespace(rack=1, slot=5, name="CARD", catalog=catalog,
+                              kind=kind, points=npoints, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pts = [SimpleNamespace(module=mod, index=0, tag="ZZZ_NOMATCH",
+                               direction="O", description="", analog=False)]
+        project = ET.Element("project")
+        q.build_folio(project, 2, mod, pts, [], {}, {},
+                      wire_scheme="address", wire_counters={})
+        return project.find("diagram")
+
+    def _texts(self, d):
+        return [i.get("text") for i in d.find("inputs").findall("input")]
+
+    def test_oa16_draws_two_supply_two_common_terminals(self):
+        d = self._diagram("1756-OA16")
+        texts = self._texts(d)
+        # 2 groups -> 2 L1 supply labels + 2 N common labels
+        self.assertEqual(texts.count("L1"), 2)
+        self.assertEqual(texts.count("N"), 2)
+        # each terminal shows the placeholder pin (TBD -> __)
+        self.assertGreaterEqual(texts.count(f"pin {q.PIN_PLACEHOLDER}"), 4)
+
+    def test_cross_reference_text_points_at_rail_folio(self):
+        # OA16 has TWO groups -> the rail annotations carry a (G1)/(G2) suffix so
+        # the two isolated L1/N groups stay distinguishable instead of collapsing
+        # into identical references.
+        d = self._diagram("1756-OA16")
+        xrefs = [t for t in self._texts(d) if t and "/Alim" in t]
+        self.assertIn("→ /Alim L1 (G1)", xrefs)
+        self.assertIn("→ /Alim L1 (G2)", xrefs)
+        self.assertIn("→ /Alim N (G1)", xrefs)
+        self.assertIn("→ /Alim N (G2)", xrefs)
+        # the two groups' references are distinct (isolation survives)
+        self.assertEqual(len(set(xrefs)), len(xrefs))
+        # no drawn conductor spanning folios was added for the annotation
+        # (only the field-device conductors, here zero for a no-match point)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+
+    def test_single_group_card_has_no_group_suffix(self):
+        # IA16 is a single L1/N group -> no (G1) suffix (suffix only when >1)
+        d = self._diagram("1756-IA16")
+        xrefs = [t for t in self._texts(d) if t and "/Alim" in t]
+        self.assertIn("→ /Alim L1", xrefs)
+        self.assertIn("→ /Alim N", xrefs)
+        self.assertFalse(any("(G" in t for t in xrefs))
+
+    def test_no_power_block_draws_no_power_terminals(self):
+        d = self._diagram("FAKE-NODB")
+        texts = self._texts(d)
+        self.assertFalse(any(t and "/Alim" in t for t in texts))
+
+    def test_blank_potential_group_draws_no_question_mark_terminal(self):
+        # a group whose supply is the only usable potential draws ONLY the supply
+        # terminal; the blank common is skipped (no "?" terminal, no orphan xref)
+        groups = [{"points": [0, 1], "supply": "L+", "common": "",
+                   "supply_pin": "TBD", "common_pin": "TBD"}]
+        elements, inputs = ET.Element("e"), ET.Element("i")
+        positions = q.add_power_terminals(elements, inputs, groups,
+                                          iter(range(1000)))
+        self.assertEqual(len(positions), 1)   # supply only
+        texts = [i.get("text") for i in inputs.findall("input")]
+        self.assertNotIn("?", texts)
+        self.assertIn("L+", texts)
+
+    def test_power_terminals_clear_card_box_and_sheet(self):
+        """No overlap, no off-sheet: every power terminal's full pin extent
+        (centre y ± 10) stays above the card box top, the terminal is on-sheet
+        (non-negative x), and the whole strip sits above the first I/O row."""
+        positions = q.add_power_terminals(
+            ET.Element("e"), ET.Element("i"),
+            q.load_module_db("1756-OA16")["power_groups"], iter(range(1000)))
+        self.assertTrue(positions)
+        box_top = q.ROW_Y0 - 20
+        for x, y in positions:
+            # the FULL pin extent (borne_2 pins reach y + 10) clears the box top
+            self.assertLessEqual(y + 10, box_top,
+                                 f"power terminal {(x, y)} pin extent crosses "
+                                 f"the card box top ({box_top})")
+            # on-sheet: the terminal is not off the left edge
+            self.assertGreaterEqual(x, 0,
+                                    f"power terminal {(x, y)} is off the left "
+                                    f"sheet edge")
+            # above the first I/O row entirely
+            self.assertLess(y, q.ROW_Y0)
+
+    def test_power_terminals_reuse_borne_2_definition(self):
+        d = self._diagram("1756-OA16")
+        types = {el.get("type")
+                 for el in d.find("elements").findall("element")}
+        self.assertIn(q.TERMINAL_TYPE, types)
+
+
+class CollectSupplyRailsTest(unittest.TestCase):
+    def test_includes_defaults_and_card_potentials(self):
+        mods = [SimpleNamespace(catalog="1756-IB32"),
+                SimpleNamespace(catalog="1756-OA16")]
+        rails = q.collect_supply_rails(mods)
+        for r in ("L1", "N", "L+", "24V", "0V", "PE"):
+            self.assertIn(r, rails)
+        # de-duplicated
+        self.assertEqual(len(rails), len(set(rails)))
+
+    def test_card_with_no_power_block_contributes_nothing(self):
+        rails = q.collect_supply_rails([SimpleNamespace(catalog="1756-IF16")])
+        self.assertEqual(rails, list(q.SUPPLY_DEFAULT_RAILS))
+
+    def test_no_mods_returns_defaults(self):
+        self.assertEqual(q.collect_supply_rails(None),
+                         list(q.SUPPLY_DEFAULT_RAILS))
+
+
+class SupplyFolioTest(unittest.TestCase):
+    """The 'Alimentación' rail folio: appended after the changelog, text+shape
+    primitives only, empty <elements>/<conductors>, titled 'Alimentación'."""
+
+    def test_appends_one_folio_titled_alimentacion(self):
+        project = ET.Element("project")
+        n = q.build_supply_folios(project, 7, rails=["L1", "N", "L+"])
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(d.get("order"), "7")
+        self.assertEqual(d.get("title"), "Alimentación")
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_supply_folios(project, 1, rails=list(q.SUPPLY_DEFAULT_RAILS))
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        for rail in q.SUPPLY_DEFAULT_RAILS:
+            self.assertIn(rail, texts)
+
+    def test_empty_rails_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_supply_folios(project, 1, rails=[]), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_inherits_titleblock_when_attached(self):
+        """The supply folio must be stamped by attach_titleblocks like any other
+        folio (it is appended before attach_titleblocks in main)."""
+        project = ET.Element("project")
+        q.build_supply_folios(project, 1, rails=["L1", "N"])
+        fields = q.resolve_title_block_fields(
+            {**q.PROJECT_TEMPLATE_DEFAULTS, "company": "Exxerpro Solutions"}, "C")
+        n = q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        d = project.find("diagram")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        self.assertIsNotNone(d.find("properties"))
+
+
+class WaddingRegressionTest(unittest.TestCase):
+    """End-to-end floor: the WADDING_1 fixture must still produce 10 drawing
+    folios / 106 points / 75 matched / 0 false positives, with the summary +
+    changelog + NEW supply folio present, the title block on every folio, no raw
+    %{token} leaks, and the supply folio touching no element/conductor. Skipped
+    if the fixture is absent (public-repo hygiene: it is never committed)."""
+
+    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "w.qet"
+            with redirect_stderr(buf):
+                rc = q.main([str(self.FIXTURE), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), xml, buf.getvalue()
+
+    def test_floor_folio_and_point_counts(self):
+        root, _, err = self._run()
+        diagrams = root.findall("diagram")
+        # 10 drawing folios (one per I/O card with mapped tags)
+        drawing = [d for d in diagrams
+                   if d.get("title", "").startswith("R")]
+        self.assertEqual(len(drawing), 10)
+        # Mechanically enforce the WADDING_1 floor from main()'s own summary so a
+        # future change that drops symbol matches (or adds a false positive) turns
+        # this test red. Exact equality on the match count guards BOTH directions:
+        # a drop is a regression, an increase past 75 is a false positive.
+        m_pts = re.search(r"points\s*:\s*(\d+)\s+drawn", err)
+        m_sym = re.search(r"symbols\s*:\s*(\d+)\s+matched", err)
+        self.assertIsNotNone(m_pts, f"no point count in summary:\n{err}")
+        self.assertIsNotNone(m_sym, f"no symbol count in summary:\n{err}")
+        self.assertEqual(int(m_pts.group(1)), 106)   # floor: 106 points drawn
+        self.assertEqual(int(m_sym.group(1)), 75)     # floor: 75 matched, 0 FPs
+        # the new supply folio is present alongside the drawing folios
+        titles = [d.get("title") for d in diagrams]
+        self.assertIn("Alimentación", titles)
+
+    def test_supply_folio_present_and_clean(self):
+        root, _, _ = self._run()
+        sup = [d for d in root.findall("diagram")
+               if d.get("title") == "Alimentación"]
+        self.assertEqual(len(sup), 1)
+        s = sup[0]
+        self.assertEqual(len(s.find("elements").findall("element")), 0)
+        self.assertEqual(len(s.find("conductors").findall("conductor")), 0)
+        # carries the title block
+        self.assertEqual(s.get("titleblocktemplate"), "exxerpro")
+        self.assertIsNotNone(s.find("properties"))
+
+    def test_changelog_and_summary_folios_intact(self):
+        root, _, _ = self._run()
+        titles = [d.get("title") for d in root.findall("diagram")]
+        self.assertTrue(any("revisiones" in (t or "").lower() for t in titles))
+        self.assertTrue(any("BOM" in (t or "") for t in titles))
+
+    def test_title_block_on_every_folio_no_raw_token_leak(self):
+        root, xml, _ = self._run()
+        for d in root.findall("diagram"):
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        # the only %{...} allowed are inside the embedded template + the %id/%total
+        # folio attribute; no diagram property text should be a raw placeholder.
+        for d in root.findall("diagram"):
+            for prop in d.find("properties").findall("property"):
+                self.assertNotIn("%{", prop.text or "")
+
+    def test_structural_invariants_hold(self):
+        root, _, _ = self._run()
+        collection = root.find("collection")
+        def_names = {el.get("name") for el in collection.iter("element")
+                     if el.find("definition") is not None}
+        for d in root.findall("diagram"):
+            ids = [t.get("id") for t in d.find("elements").iter("terminal")]
+            self.assertEqual(len(ids), len(set(ids)))   # unique per diagram
+            idset = set(ids)
+            for c in d.find("conductors").findall("conductor"):
+                self.assertIn(c.get("terminal1"), idset)
+                self.assertIn(c.get("terminal2"), idset)
+            for el in d.find("elements").findall("element"):
+                self.assertIn(el.get("type").split("/")[-1], def_names)
 
 
 if __name__ == "__main__":

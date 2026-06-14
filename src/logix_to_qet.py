@@ -153,6 +153,62 @@ def match_symbol(symbols: list[dict], tag: str, description: str,
     return best
 
 
+def parse_power_block(power) -> list[dict]:
+    """Normalize an OPTIONAL module_db "power" block into a flat list of power
+    groups, gracefully. Each returned group is a dict:
+
+        {"points": [int, ...], "supply": str, "common": str,
+         "supply_pin": str, "common_pin": str}
+
+    where `points` are the zero-based I/O point indices the group powers,
+    `supply`/`common` are POTENTIAL NAMES (e.g. 'L1', 'N', 'L+', '24V', '0V')
+    and `supply_pin`/`common_pin` are the physical RTB pins (kept "TBD" until an
+    engineer fills them in from the module's installation instructions).
+
+    Pure and stdlib-only. A missing OR malformed block — `power` not a dict, no
+    'groups', 'groups' not a list, a group not a dict, a bad/empty point list —
+    yields NO power groups (an empty list), never garbage and never an
+    exception. Groups with an empty point list are dropped (nothing to power),
+    and so is a group whose supply AND common are both blank/non-string (nothing
+    to label or reference — it would otherwise render as a guessed "?" terminal).
+    Pins are coerced to clean strings; a missing pin defaults to 'TBD' so it
+    renders as the __ placeholder exactly like wiring[] pins."""
+    if not isinstance(power, dict):
+        return []
+    raw_groups = power.get("groups")
+    if not isinstance(raw_groups, list):
+        return []
+    groups = []
+    for raw in raw_groups:
+        if not isinstance(raw, dict):
+            continue
+        raw_points = raw.get("points")
+        if not isinstance(raw_points, list):
+            continue
+        points = [p for p in raw_points if isinstance(p, int)
+                  and not isinstance(p, bool)]
+        if not points:
+            continue
+        group = {
+            "points": points,
+            "supply": raw.get("supply") if isinstance(raw.get("supply"), str)
+                      else "",
+            "common": raw.get("common") if isinstance(raw.get("common"), str)
+                      else "",
+            "supply_pin": raw.get("supply_pin")
+                          if isinstance(raw.get("supply_pin"), str) else "TBD",
+            "common_pin": raw.get("common_pin")
+                          if isinstance(raw.get("common_pin"), str) else "TBD",
+        }
+        # A group with NO usable potential name (both supply and common blank or
+        # non-string) has nothing to label or cross-reference, so drop it rather
+        # than render a guessed "?" terminal — graceful degradation, never garbage.
+        if not group["supply"] and not group["common"]:
+            continue
+        groups.append(group)
+    return groups
+
+
 def load_module_db(catalog: str) -> dict | None:
     """Load module_db/<catalog-base>.json (e.g. 1756-IB32/B -> 1756-IB32)."""
     base = catalog.split("/")[0].strip()
@@ -165,6 +221,9 @@ def load_module_db(catalog: str) -> dict | None:
         print(f"warning: ignoring {path.name}: {exc}", file=sys.stderr)
         return None
     db["_wiring_by_point"] = {w.get("point"): w for w in db.get("wiring", [])}
+    # OPTIONAL power block, normalized as gracefully as _wiring_by_point: a
+    # missing/malformed block yields an empty list (no power terminals drawn).
+    db["power_groups"] = parse_power_block(db.get("power"))
     return db
 
 
@@ -243,6 +302,24 @@ ROW_Y0, ROW_DY = 100, 35    # first row y and per-point pitch
 POINTS_PER_COL = 16
 BOX_LEFT, BOX_RIGHT = 60, 10   # card box extents relative to terminal x
 PIN_PLACEHOLDER = "__"
+
+# Inline power/common terminals: a horizontal strip ABOVE the card box, in the
+# free band between the sub-header (y≈44) and the box top edge (ROW_Y0-20 = 80).
+# A group's supply and common terminals sit side by side on ONE lane, so the
+# full borne_2 pin extent (y ± 10) stays clear of the box top and the strip
+# never runs off the left sheet edge or into the I/O-point rows below. Stacking
+# supply OVER common (a second lane) does not fit this 36-px band, hence the
+# side-by-side layout. One supply + one common terminal per power group.
+POWER_BAND_Y = 60              # the single lane y; pins span 50..70, box top = 80
+POWER_X0 = 150                 # first terminal x (positive — on-sheet, clear left)
+POWER_PAIR_DX = 80             # supply -> common spacing within one group
+POWER_GROUP_DX = 180           # start-to-start spacing between successive groups
+
+# Spanish supply-rail label and the compact text-annotation prefix that
+# references the rail folio ('Alimentación') from each inline power terminal.
+# It is a LABEL, not a navigable QET cross-reference. Data, not logic.
+SUPPLY_FOLIO_TITLE = "Alimentación"
+POWER_XREF_PREFIX = "→ /Alim "
 
 
 # ── Cajetín / title block (native QElectroTech ISO 7200) ─────────────────────
@@ -648,6 +725,62 @@ def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int,
     })
 
 
+def _power_pin_label(pin) -> str:
+    """The 'pin __' text for a power terminal: a physical pin renders verbatim,
+    but the un-filled "TBD" sentinel (case-insensitive) renders as the __
+    PIN_PLACEHOLDER, exactly like wiring[] pins. A blank/missing pin is also __
+    (never guessed)."""
+    if not isinstance(pin, str) or not pin.strip() or pin.strip().upper() == "TBD":
+        return PIN_PLACEHOLDER
+    return pin.strip()
+
+
+def add_power_terminals(elements, inputs, power_groups: list, ids) -> list:
+    """Draw the inline power/common terminals for a card's power groups.
+
+    For each group, places ONE supply terminal and ONE common terminal side by
+    side on a single horizontal lane above the card box (reusing
+    add_terminal_element / add_text and the borne_2 definition already embedded
+    in the collection — no new element type). Each terminal is labelled with its
+    POTENTIAL NAME (e.g. L1, N, L+, 0V), shows 'pin __' until the physical pin is
+    filled (TBD -> __), and carries a compact text annotation referencing the
+    rail folio ('→ /Alim <potential>') — a LABEL only, NOT a drawn conductor and
+    NOT a navigable QET cross-reference. When the card has more than one group
+    the annotation carries a '(G<n>)' suffix so electrically-isolated groups that
+    share a potential name (e.g. the 1756-OA16's two L1/N output groups) stay
+    distinguishable in the drawing instead of collapsing into one reference.
+
+    Terminals sit in the free band between the sub-header and the box top, so the
+    full borne_2 pin extent stays clear of the card box and the I/O-point rows
+    (see POWER_* geometry) and never runs off the left sheet edge. A group whose
+    potential is blank draws NOTHING for that role (graceful — never a guessed
+    "?" terminal). Returns the list of (x, y) center positions of the placed
+    terminals so an integration test can assert they clear the box / sheet
+    bounds. Cards with no/omitted/malformed power block draw NOTHING (empty)."""
+    positions = []
+    multi = len(power_groups) > 1
+    for gi, group in enumerate(power_groups):
+        gx0 = POWER_X0 + gi * POWER_GROUP_DX
+        gsuffix = f" (G{gi + 1})" if multi else ""
+        for role, dx in (("supply", 0), ("common", POWER_PAIR_DX)):
+            potential = group.get(role) or ""
+            if not potential:
+                continue   # never draw a blank/"?" power terminal (graceful)
+            x = gx0 + dx
+            y = POWER_BAND_Y
+            pin = _power_pin_label(group.get(f"{role}_pin"))
+            # the terminal symbol itself (reuses borne_2 / add_terminal_element)
+            add_terminal_element(elements, x, y, potential, potential, ids)
+            # potential name, physical-pin placeholder, and the compact rail-folio
+            # text annotation — three short lines that stay inside the band
+            add_text(inputs, x + 11, y - 9, potential, FONT_SMALL)
+            add_text(inputs, x + 11, y + 2, f"pin {pin}", FONT_SMALL)
+            add_text(inputs, x + 11, y + 12,
+                     f"{POWER_XREF_PREFIX}{potential}{gsuffix}", FONT_SMALL)
+            positions.append((x, y))
+    return positions
+
+
 def build_folio(project: ET.Element, order: int, mod, points,
                 symbols: list[dict], sym_counts: dict, designations: dict,
                 wire_scheme: str = "address", wire_counters: dict | None = None,
@@ -658,8 +791,10 @@ def build_folio(project: ET.Element, order: int, mod, points,
     traversal (no second pass, no recomputation): one (module) row for the
     card, then one (device) row per matched field device or one (generic) row
     per unmatched/analog point, in the deterministic folio/point order. The
-    accumulator is data-only — appending to it does not touch the emitted XML,
-    so the drawing folios stay byte-for-byte identical."""
+    accumulator is data-only — appending to it does not touch the emitted XML
+    (the BOM rows are a pure side-channel; a card's own elements, including the
+    inline power terminals drawn from its module_db power block, are unaffected
+    by the accumulator)."""
     title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
@@ -711,6 +846,12 @@ def build_folio(project: ET.Element, order: int, mod, points,
         box_title = f"-{mod.name}" if n_cols == 1 else \
                     f"-{mod.name}  ({col * POINTS_PER_COL}…{col * POINTS_PER_COL + pts_in_col - 1})"
         add_text(inputs, x - BOX_LEFT, y1 - 14, box_title, FONT_TEXT)
+
+    # inline power/common terminals from the (optional) module_db power block:
+    # one supply + one common per group on a horizontal lane above the card box,
+    # clear of the I/O rows and the box. Empty/omitted block -> nothing drawn.
+    add_power_terminals(elements, inputs, (db.get("power_groups") if db else []),
+                        ids)
 
     for pt in points:
         cp = pt.index + 1
@@ -976,6 +1117,91 @@ def build_changelog_folios(project: ET.Element, start_order: int,
     return total
 
 
+# ── Supply-rail folio ('Alimentación') ───────────────────────────────────────
+# A dedicated sheet drawing the project's supply rails/potentials as labelled
+# horizontal lines, so the inline power terminals' '→ /Alimentación <potential>'
+# cross-references have a target. Rendered like the summary/changelog folios —
+# text + shape primitives ONLY, empty <elements>/<conductors> — so it inherits
+# the ISO 7200 title block automatically and adds zero element/conductor
+# instances. Spanish labels; the rail set defaults to the AC + DC potentials the
+# cards use (L1, N, L+, 24V, 0V) plus the safety earth PE.
+SUPPLY_DEFAULT_RAILS = ("L1", "N", "L+", "24V", "0V", "PE")
+SUPPLY_RAIL_Y0 = 90          # y of the first rail
+SUPPLY_RAIL_DY = 70          # pitch between rails
+SUPPLY_RAIL_X1 = 80          # rail left x
+SUPPLY_RAIL_X2 = 900         # rail right x
+
+
+def collect_supply_rails(io_mods, *, default=SUPPLY_DEFAULT_RAILS) -> list:
+    """Ordered, de-duplicated list of supply potentials to draw on the rail
+    folio. Starts from the standard set (L1, N, L+, 24V, 0V, PE) and appends any
+    additional supply/common potential a loaded card's power block declares that
+    is not already present, so the rails always cover what the cards reference.
+    Pure: card power blocks are read via load_module_db (graceful — a card with
+    no/omitted power block contributes nothing)."""
+    rails = list(default)
+    seen = set(rails)
+    for mod in io_mods or []:
+        db = load_module_db(getattr(mod, "catalog", "") or "")
+        if not db:
+            continue
+        for group in db.get("power_groups", []):
+            for name in (group.get("supply"), group.get("common")):
+                if isinstance(name, str) and name and name not in seen:
+                    seen.add(name)
+                    rails.append(name)
+    return rails
+
+
+def _add_supply_diagram(project: ET.Element, order: int, rails: list) -> ET.Element:
+    """Render the single supply-rail folio: each potential drawn as a labelled
+    horizontal rail (a thin rectangle + its name) using ONLY text + shape
+    primitives. Empty <elements>/<conductors> containers keep the schema matching
+    the other folios (zero element/terminal/conductor instances). Title is
+    'Alimentación'."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": SUPPLY_FOLIO_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, SUPPLY_RAIL_X1, 30, SUPPLY_FOLIO_TITLE.upper(), FONT_HEADER)
+    for i, name in enumerate(rails):
+        y = SUPPLY_RAIL_Y0 + i * SUPPLY_RAIL_DY
+        # the rail itself: a thin (2 px tall) rectangle — a horizontal line
+        add_rect(shapes, SUPPLY_RAIL_X1, y, SUPPLY_RAIL_X2, y + 2)
+        # the potential label at the left end of the rail
+        add_text(inputs, SUPPLY_RAIL_X1, y - 12, name, FONT_TEXT)
+    return diagram
+
+
+def build_supply_folios(project: ET.Element, start_order: int,
+                        io_mods=None, rails=None) -> int:
+    """Append the dedicated supply-rail folio AFTER the changelog folios (order
+    numbers continue past them). Mirrors build_summary_folios /
+    build_changelog_folios: a single folio drawn with text + shape primitives
+    only (empty <elements>/<conductors>), titled 'Alimentación'. Returns the
+    count appended (1). `rails` may be supplied directly (tests); otherwise it is
+    collected from the cards via collect_supply_rails."""
+    if rails is None:
+        rails = collect_supply_rails(io_mods)
+    if not rails:
+        return 0
+    _add_supply_diagram(project, start_order, rails)
+    return 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a ControlLogix L5X export to a QElectroTech project.")
@@ -1052,6 +1278,11 @@ def main(argv=None):
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = build_changelog_folios(project, order, revisions)
     order += changelog_folios
+    # supply-rail folio ('Alimentación') comes AFTER the changelog (order
+    # continues) and BEFORE attach_titleblocks, so it inherits the ISO 7200
+    # title block too. Draws the rails the cards' power blocks reference.
+    supply_folios = build_supply_folios(project, order, io_mods)
+    order += supply_folios
     # cajetín: reference the ISO 7200 template from EVERY folio (drawing +
     # summary). QET renders the framed block + SVG logo + auto sheet number
     # itself; values (company, drawing no., rev, static date…) ride along as
@@ -1095,6 +1326,8 @@ def main(argv=None):
           f"{n_gen} generic) over {summary_folios} summary folio(s)", file=err)
     print(f"changelog  : {len(revisions)} revision(s) over "
           f"{changelog_folios} folio(s)", file=err)
+    print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s)",
+          file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

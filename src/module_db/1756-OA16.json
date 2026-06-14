@@ -88,5 +88,24 @@
       "pin": "TBD"
     }
   ],
-  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-OA16."
+  "power": {
+    "type": "AC",
+    "groups": [
+      {
+        "points": [0, 1, 2, 3, 4, 5, 6, 7],
+        "supply": "L1",
+        "common": "N",
+        "supply_pin": "TBD",
+        "common_pin": "TBD"
+      },
+      {
+        "points": [8, 9, 10, 11, 12, 13, 14, 15],
+        "supply": "L1",
+        "common": "N",
+        "supply_pin": "TBD",
+        "common_pin": "TBD"
+      }
+    ]
+  },
+  "notes": "Fill 'pin' with the RTB terminal number from the Rockwell installation instructions wiring diagram for 1756-OA16. This module has TWO isolated output groups (points 0-7 and 8-15) each with its own L1 supply common; supply_pin/common_pin stay 'TBD' until taken from the same wiring diagram."
 }
