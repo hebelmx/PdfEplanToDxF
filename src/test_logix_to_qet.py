@@ -1831,8 +1831,12 @@ class BuildFolioStripInlineTest(unittest.TestCase):
         d = self._diagram([pt])
         types = [el.get("type")
                  for el in d.find("elements").findall("element")]
-        # the I/O terminal + the strip terminal are BOTH borne_2 (no new type)
-        self.assertEqual(types.count(q.TERMINAL_TYPE), 2)
+        # the I/O terminal + the strip terminal + every SPARE reserve terminal
+        # are all borne_2 (T3.2 introduces NO new element type). One mapped point
+        # on a 16-channel card -> card(1) + strip(1) + spares(15) = 17 borne_2,
+        # and NO other element type (the generic point places no device symbol).
+        self.assertEqual(types.count(q.TERMINAL_TYPE), 17)
+        self.assertEqual(set(types), {q.TERMINAL_TYPE})
 
     def test_sequential_scheme_numbers_generic_points_too(self):
         """Documented behaviour: under --wire-scheme sequential EVERY drawn
@@ -2009,15 +2013,19 @@ class WaddingBorneroFloorTest(unittest.TestCase):
         drawing = [d for d in root.findall("diagram")
                    if d.get("title", "").startswith("R")]
         self.assertEqual(len(drawing), 10)
-        # the bornero summary line is honest about what it drew: 10 cards drawn
-        # -> 10 bornero folios
+        # the bornero summary line is honest about what it drew. T3.2: borneros
+        # now list mapped + RESERVA terminals in channel order, so a wide card
+        # paginates — REM_IN_1 (32-channel) needs a second sheet -> 11 folios for
+        # the 10 cards (NOT 10). The floor (106/75) above is what must not move.
         m = re.search(r"bornero\s*:\s*(\d+)\s+terminal-strip", err)
         self.assertIsNotNone(m, f"no bornero line in summary:\n{err}")
-        self.assertEqual(int(m.group(1)), 10)
-        # one bornero diagram per card, each titled 'Bornero -<name> (-X1)'
+        self.assertEqual(int(m.group(1)), 11)
         borneros = [d for d in root.findall("diagram")
                     if (d.get("title") or "").startswith("Bornero")]
-        self.assertEqual(len(borneros), 10)
+        self.assertEqual(len(borneros), 11)
+        # exactly one card paginated (its sheets carry an (n/total) suffix)
+        paged = [d for d in borneros if "(2/" in (d.get("title") or "")]
+        self.assertEqual(len(paged), 1)
 
     def test_bornero_folios_carry_titleblock_no_raw_tokens(self):
         root, _ = self._run()
@@ -2232,6 +2240,218 @@ class NcContactVariantTest(unittest.TestCase):
         self.assertEqual(
             q.match_symbol(self.db, "FC01", "LIMIT SWITCH", "I")["id"],
             "limit_switch")
+
+
+class SparePointRenderingTest(unittest.TestCase):
+    """T3.2 — spare-point rendering: every UNUSED card channel (a slot in
+    range(mod.points) with no mapped point) is drawn as a plain RESERVA reserve
+    terminal so the physical strip is complete, WITHOUT inventing a device/tag,
+    and counted SEPARATELY from the matched/mapped floor."""
+
+    @staticmethod
+    def _build(pts, *, points=16, kind="DI", name="CARD"):
+        mod = SimpleNamespace(rack=1, slot=2, name=name, catalog="FAKE-NODB",
+                              kind=kind, points=points, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        for pt in pts:
+            pt.module = mod
+        project = ET.Element("project")
+        bom_rows, spare_counter = [], {}
+        q.build_folio(project, 101, mod, pts, q.load_symbol_db(), {}, {},
+                      wire_scheme="address", wire_counters={},
+                      bom_rows=bom_rows, spare_counter=spare_counter)
+        return project.find("diagram"), bom_rows, spare_counter, mod
+
+    def _texts(self, d):
+        return [i.get("text") for i in d.find("inputs").findall("input")]
+
+    def test_spare_terminal_drawn_for_each_empty_channel(self):
+        # one mapped point on a 16-channel card -> 15 spare reserve terminals,
+        # each labelled -X1:<channel> with a RESERVA word, NO device symbol.
+        pt = SimpleNamespace(module=None, index=0, tag="ZZZ_NOMATCH",
+                             direction="I", description="", analog=False)
+        d, bom_rows, spare_counter, _ = self._build([pt])
+        self.assertEqual(spare_counter["CARD"], 15)
+        texts = self._texts(d)
+        for ch in range(1, 16):
+            self.assertIn(f"-X1:{ch}", texts)
+        self.assertEqual(texts.count("RESERVA"), 15)
+        # spares add terminals but NO conductors (a spare carries no field wire):
+        # only the one mapped generic point's single card->strip conductor.
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 1)
+
+    def test_spares_never_inflate_the_floor(self):
+        # spare_counter is its OWN counter — sym_counts and the points list are
+        # untouched by spares (the floor lives there).
+        pt = SimpleNamespace(module=None, index=0, tag="LS1", direction="I",
+                             description="", analog=False)
+        sym_counts = {}
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog="FAKE-NODB",
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pt.module = mod
+        project = ET.Element("project")
+        spare_counter = {}
+        q.build_folio(project, 101, mod, [pt], q.load_symbol_db(), sym_counts,
+                      {}, wire_scheme="address", wire_counters={}, bom_rows=[],
+                      spare_counter=spare_counter)
+        # the one matched point counts in sym_counts; the 15 spares do NOT.
+        self.assertEqual(sum(sym_counts.values()), 1)
+        self.assertEqual(spare_counter["CARD"], 15)
+
+    def test_spare_full_extent_inside_card_box_vertical_band(self):
+        # POSITIONAL: a spare reserve terminal's FULL pin extent (the borne_2
+        # pins span x..x+10, y±10 about the slot hotspot) must stay inside the
+        # card box's VERTICAL band — the box is sized to FULL capacity, so even
+        # the LAST channel's spare sits within it. Asserted on the real pin
+        # extent (not just the hotspot) against the real box rectangle, for the
+        # tightest case: a fully-empty 16-channel card (box spans all rows).
+        d, _, spare_counter, mod = self._build([])  # no mapped points -> 16 spares
+        self.assertEqual(spare_counter["CARD"], 16)
+        # the card box rectangle (single column, full capacity)
+        x = q.COL_X[0]
+        y1 = q.ROW_Y0 - 20
+        y2 = q.ROW_Y0 + (mod.points - 1) * q.ROW_DY + 20
+        # locate the spare terminal elements and check every pin's absolute y
+        terms = d.find("elements").findall("element")
+        self.assertEqual(len(terms), 16)            # 16 spares, nothing else
+        for el in terms:
+            ex, ey = int(el.get("x")), int(el.get("y"))
+            for term in el.findall("terminals/terminal"):
+                py = ey + int(term.get("y"))
+                self.assertGreaterEqual(py, y1,
+                    f"spare pin y={py} escapes box top {y1}")
+                self.assertLessEqual(py, y2,
+                    f"spare pin y={py} escapes box bottom {y2}")
+            # and the spare sits in the SAME strip lane as the mapped strip
+            # terminals (to the RIGHT of the card box, never overlapping it).
+            self.assertEqual(ex, x + q.STRIP_X_OFF)
+            self.assertGreater(ex, x + q.BOX_RIGHT)
+
+    def test_spare_bom_rows_have_no_invented_identity(self):
+        # GUARDRAIL: every spare BOM row is category 'spare' with designation AND
+        # catalog_or_type BLANK (never a fabricated device), description RESERVA.
+        pt = SimpleNamespace(module=None, index=2, tag="LS1", direction="I",
+                             description="", analog=False)
+        _, bom_rows, _, _ = self._build([pt])
+        spares = [r for r in bom_rows if r["category"] == "spare"]
+        self.assertEqual(len(spares), 15)
+        for r in spares:
+            self.assertEqual(r["designation"], "")
+            self.assertEqual(r["catalog_or_type"], "")
+            self.assertEqual(r["description"], "RESERVA")
+            self.assertTrue(r["tag"].startswith("-X1:"))
+            # the unused channel's EPLAN address is derived (digital I-card)
+            self.assertRegex(r["address"], r"^I\d+\.\d+$")
+
+    def test_bornero_lists_spares_marked_reserva_in_channel_order(self):
+        # the bornero folio lists mapped AND unused channels in CHANNEL order;
+        # the unused ones are marked RESERVA.
+        pts = [SimpleNamespace(module=None, index=i, tag=f"T{i}", direction="I",
+                               description="", analog=False) for i in (1, 4)]
+        mod = SimpleNamespace(rack=1, slot=2, name="A", catalog="FAKE-NODB",
+                              kind="DI", points=8)
+        for p in pts:
+            p.module = mod
+        rows = q._bornero_rows(mod, pts)
+        self.assertEqual([ch for ch, _t, _s in rows], [0, 1, 2, 3, 4, 5, 6, 7])
+        spare_channels = [ch for ch, _t, is_sp in rows if is_sp]
+        self.assertEqual(spare_channels, [0, 2, 3, 5, 6, 7])
+        for ch, text, is_sp in rows:
+            if is_sp:
+                self.assertEqual(text, "RESERVA")
+
+    def test_spare_output_is_byte_identical_across_runs(self):
+        # DETERMINISM: a repeat build produces byte-identical spare output.
+        def render():
+            pt = SimpleNamespace(module=None, index=3, tag="ZZZ_NOMATCH",
+                                 direction="I", description="", analog=False)
+            d, _, _, _ = self._build([pt])
+            # strip the volatile element uuids before comparing (uuids are
+            # random by design; the SPARE texts/labels are what must be stable)
+            return [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertEqual(render(), render())
+
+
+class WaddingSpareFloorTest(unittest.TestCase):
+    """T3.2 floor + spare totals end-to-end on the WADDING_1 fixture: the real
+    matched/mapped floor (106 drawn / 75 matched / 0 FP / 10 drawing folios)
+    must NOT move, and the SEPARATE spare counter must read 62 (capacity-mapped
+    summed over the 10 cards), with REM_AN_IN_1 contributing 14."""
+
+    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "w.qet"
+            with redirect_stderr(buf):
+                rc = q.main([str(self.FIXTURE), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def test_floor_unchanged_and_spares_reported(self):
+        root, err = self._run()
+        # the matched/mapped FLOOR must read EXACTLY these numbers (not a proxy)
+        self.assertRegex(err, r"points\s*:\s*106\s+drawn")
+        self.assertRegex(err, r"symbols\s*:\s*75\s+matched")
+        self.assertRegex(err, r"31\s+generic terminal")   # 0 false positives
+        drawing = [d for d in root.findall("diagram")
+                   if (d.get("title") or "").startswith("R")]
+        self.assertEqual(len(drawing), 10)                 # 10 drawing folios
+        # the SEPARATE spare counter: 62 reserves over 10 cards
+        m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
+        self.assertIsNotNone(m, f"no spare line in summary:\n{err}")
+        self.assertEqual(int(m.group(1)), 62)
+
+    def test_spare_count_matches_capacity_minus_mapped(self):
+        # compute the expected spare total straight from the I/O map and assert
+        # the per-card REM_AN_IN_1 = 14 plus the project total = 62.
+        import logix_to_eplan_csv as l2e
+        controller, modules, ctrl_tags, program_tags = l2e.load_l5x(
+            str(self.FIXTURE))
+        io_mods = l2e.assign_racks_and_addresses(modules)
+        points, _ = l2e.collect_points(modules, ctrl_tags, program_tags)
+        per = {}
+        seen = set()
+        for pt in points:
+            k = (pt.module.name, pt.direction, pt.index, pt.analog)
+            if k in seen:
+                continue
+            seen.add(k)
+            per.setdefault(pt.module.name, []).append(pt)
+        total, an_in_1 = 0, None
+        for m in io_mods:
+            pts = per.get(m.name)
+            if not pts:
+                continue
+            spare = m.points - len({p.index for p in pts})
+            total += spare
+            if m.name == "REM_AN_IN_1":
+                an_in_1 = spare
+        self.assertEqual(an_in_1, 14)
+        self.assertEqual(total, 62)
+
+    def test_spare_rows_present_in_bom_and_summary(self):
+        root, err = self._run()
+        # the BOM breakdown line counts spares as their own category
+        self.assertRegex(err, r"bom\s*:\s*\d+\s+rows.*\b62 spare\b")
+        # a spare row reaches the summary (BOM / device index) folios as a
+        # RESERVA line — confirm RESERVA text appears on a BOM folio.
+        bom_folios = [d for d in root.findall("diagram")
+                      if (d.get("title") or "").startswith("BOM")]
+        self.assertTrue(bom_folios)
+        reserva_seen = any(
+            (i.get("text") or "") == "RESERVA"
+            for d in bom_folios for i in d.find("inputs").findall("input"))
+        self.assertTrue(reserva_seen, "no RESERVA row reached a BOM summary folio")
 
 
 if __name__ == "__main__":

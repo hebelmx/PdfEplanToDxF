@@ -475,6 +475,18 @@ def generic_bom_row(folio: int, *, tag: str, address: str) -> dict:
     return _bom_row("generic", folio, tag=tag, address=address)
 
 
+def spare_bom_row(folio: int, *, channel: int, address: str = "") -> dict:
+    """(spare) one row per UNUSED card channel — an empty slot in the strip drawn
+    as a RESERVA reserve terminal. T3.2: counted honestly and SEPARATELY from the
+    matched/mapped floor. Only the strip terminal label (-X1:<channel>) goes in
+    `tag` and (when cleanly derivable) the unused channel's EPLAN address goes in
+    `address`; description is the fixed Spanish word 'RESERVA'. Guardrail — both
+    designation AND catalog_or_type stay BLANK: a spare is a reserved terminal,
+    never an invented device or tag."""
+    return _bom_row("spare", folio, tag=strip_terminal_label(channel),
+                    address=address, description="RESERVA")
+
+
 def new_uuid() -> str:
     return "{%s}" % uuid.uuid4()
 
@@ -837,7 +849,7 @@ def add_power_terminals(inputs, shapes, power_groups: list) -> list:
 def build_folio(project: ET.Element, order: int, mod, points,
                 symbols: list[dict], sym_counts: dict, designations: dict,
                 wire_scheme: str = "address", wire_counters: dict | None = None,
-                bom_rows: list | None = None):
+                bom_rows: list | None = None, spare_counter: dict | None = None):
     """One diagram per I/O card; points already sorted.
 
     If `bom_rows` is given, schema rows are appended to it DURING this single
@@ -987,6 +999,42 @@ def build_folio(project: ET.Element, order: int, mod, points,
             # never invent a device for a point that matched no symbol.
             if bom_rows is not None:
                 bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
+
+    # T3.2 — SPARE / RESERVA terminals: every empty channel slot in the card's
+    # full-capacity box (a channel in range(mod.points) with no mapped point) is
+    # drawn as a plain reserve terminal so the physical strip is complete for the
+    # panel builder. A spare is NEVER a device or a tag: it adds one borne_2
+    # terminal (reused via add_terminal_element) in the SAME strip slot geometry
+    # as the inline strip terminal above, the Spanish word RESERVA + the channel
+    # number, and a (spare) BOM row — but NO point/pin texts, NO device symbol,
+    # and NO conductor (a terminal with no conductor is valid; spares carry no
+    # field wire). Spares are counted SEPARATELY from the matched/mapped floor:
+    # they are never added to per_module / the points lists / sym_counts.
+    mapped = {pt.index for pt in points}
+    direction = "I" if mod.kind in ("DI", "AI") else "O"
+    analog = mod.kind in ("AI", "AO")
+    for index in sorted(set(range(mod.points)) - mapped):
+        cp = index + 1
+        col = (cp - 1) // POINTS_PER_COL
+        row = (cp - 1) % POINTS_PER_COL
+        x = COL_X[min(col, len(COL_X) - 1)]
+        y = ROW_Y0 + row * ROW_DY
+        strip_label = strip_terminal_label(index)
+        # the reserve terminal occupies the SAME strip slot as a mapped point's
+        # inline strip terminal; reuses borne_2 (no new element type); ids stay
+        # diagram-unique via the shared `ids` counter. function = 'RESERVA'.
+        add_terminal_element(elements, x + STRIP_X_OFF, y, strip_label, "RESERVA",
+                             ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
+        add_text(inputs, x + STRIP_X_OFF + 14, y, "RESERVA", FONT_SMALL)
+        if spare_counter is not None:
+            spare_counter[mod.name] = spare_counter.get(mod.name, 0) + 1
+        if bom_rows is not None:
+            # the unused channel's EPLAN address is cleanly derivable from the
+            # module geometry (same call the mapped points use); the spare row
+            # records it for the panel builder. designation/catalog stay blank.
+            address = l2e.eplan_address(mod, direction, index, analog)
+            bom_rows.append(spare_bom_row(order, channel=index, address=address))
 
     return diagram
 
@@ -1293,15 +1341,43 @@ BORNERO_ROW_Y0 = 90          # y of the first terminal row
 BORNERO_ROW_DY = 24          # pitch between terminal rows
 BORNERO_TERM_X = 90          # terminal-designation column x
 BORNERO_FUNC_X = 220         # function/tag column x
+# Rows per bornero folio, DERIVED from the geometry (same page height + bottom
+# margin as the summary folios) so a card whose strip now carries spares too may
+# push past one sheet and gets paginated deterministically rather than overrun
+# the frame. T3.2: REM_IN_1 (17 mapped + 15 spare = 32 terminals) needs two
+# sheets at this pitch.
+BORNERO_ROWS_PER_PAGE = (SUMMARY_HEIGHT - BORNERO_ROW_Y0
+                         - SUMMARY_BOTTOM_MARGIN) // BORNERO_ROW_DY
 
 
-def _add_bornero_diagram(project: ET.Element, order: int, mod, points) -> ET.Element:
-    """Render one bornero folio for a card: a legible list of the card's strip
-    '-X1' terminals (-X1:<channel> + the point's tag/function) drawn with ONLY
-    text + shape primitives (empty <elements>/<conductors>), so it carries the
-    title block and touches no element/conductor instance. Terminal order is the
-    card's drawn-point order; channel is the point index (point-mirrored)."""
-    title = f"{BORNERO_TITLE_PREFIX} -{mod.name} ({STRIP_DESIGNATION})"
+def _bornero_rows(mod, points) -> list[tuple[int, str, bool]]:
+    """The card's full strip listing in CHANNEL order: one (channel, text,
+    is_spare) tuple per terminal. Every mapped point contributes its
+    function/tag; every UNUSED channel (a slot in range(mod.points) with no
+    mapped point — T3.2) contributes a 'RESERVA' row, so the bornero lists the
+    complete physical strip. Pure and deterministic (sorted by channel)."""
+    by_index = {pt.index: pt for pt in points}
+    rows: list[tuple[int, str, bool]] = []
+    for ch in sorted(set(by_index) | set(range(mod.points))):
+        pt = by_index.get(ch)
+        if pt is not None:
+            function = pt.description or l2e.humanize(pt.tag)
+            rows.append((ch, f"{function}   ({pt.tag})", False))
+        else:
+            rows.append((ch, "RESERVA", True))
+    return rows
+
+
+def _add_bornero_diagram(project: ET.Element, order: int, mod, page_rows,
+                         page_no: int = 1, page_total: int = 1) -> ET.Element:
+    """Render one bornero folio (or sheet) for a card: a legible list of the
+    card's strip '-X1' terminals (-X1:<channel> + the point's tag/function, or
+    'RESERVA' for an unused channel — T3.2) drawn with ONLY text + shape
+    primitives (empty <elements>/<conductors>), so it carries the title block and
+    touches no element/conductor instance. `page_rows` is a slice of
+    _bornero_rows in channel order."""
+    suffix = "" if page_total == 1 else f" ({page_no}/{page_total})"
+    title = f"{BORNERO_TITLE_PREFIX} -{mod.name} ({STRIP_DESIGNATION}){suffix}"
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -1319,36 +1395,44 @@ def _add_bornero_diagram(project: ET.Element, order: int, mod, points) -> ET.Ele
     shapes = ET.SubElement(diagram, "shapes")
     inputs = ET.SubElement(diagram, "inputs")
 
-    add_text(inputs, BORNERO_TERM_X, 30,
-             f"{BORNERO_TITLE_PREFIX.upper()} -{mod.name}   {STRIP_DESIGNATION}",
-             FONT_HEADER)
+    head = f"{BORNERO_TITLE_PREFIX.upper()} -{mod.name}   {STRIP_DESIGNATION}"
+    if page_total != 1:
+        head += f"   ({page_no}/{page_total})"
+    add_text(inputs, BORNERO_TERM_X, 30, head, FONT_HEADER)
     add_text(inputs, BORNERO_TERM_X, BORNERO_ROW_Y0 - 18, "BORNE", FONT_SMALL)
     add_text(inputs, BORNERO_FUNC_X, BORNERO_ROW_Y0 - 18, "FUNCIÓN / TAG",
              FONT_SMALL)
     # (no header rule — the rule struck through the header text; DA.8 review fix)
-    for i, pt in enumerate(points):
+    for i, (ch, text, _is_spare) in enumerate(page_rows):
         y = BORNERO_ROW_Y0 + i * BORNERO_ROW_DY
-        add_text(inputs, BORNERO_TERM_X, y, strip_terminal_label(pt.index),
-                 FONT_TEXT)
-        function = pt.description or l2e.humanize(pt.tag)
-        add_text(inputs, BORNERO_FUNC_X, y, f"{function}   ({pt.tag})", FONT_SMALL)
+        add_text(inputs, BORNERO_TERM_X, y, strip_terminal_label(ch), FONT_TEXT)
+        add_text(inputs, BORNERO_FUNC_X, y, text, FONT_SMALL)
     return diagram
 
 
 def build_bornero_folios(project: ET.Element, start_order: int,
                          cards) -> int:
-    """Append one dedicated terminal-strip (bornero) folio per card AFTER the
-    supply folio (order numbers continue past it). `cards` is an ordered list of
+    """Append the dedicated terminal-strip (bornero) folios AFTER the supply
+    folio (order numbers continue past it). `cards` is an ordered list of
     (mod, points) pairs in the same deterministic order as the drawing folios, so
-    the bornero folios mirror the drawing order. Mirrors build_supply_folios:
-    text + shape primitives only (empty <elements>/<conductors>). Returns the
-    count appended (one per non-empty card)."""
+    the bornero folios mirror the drawing order. Each card lists every strip
+    terminal in CHANNEL order — mapped points AND unused-channel RESERVA rows
+    (T3.2) — paginated at BORNERO_ROWS_PER_PAGE so a wide card spans extra sheets
+    rather than overrunning the frame. Mirrors build_supply_folios: text + shape
+    primitives only (empty <elements>/<conductors>). Returns the count of folios
+    appended."""
     n = 0
     for mod, pts in cards or []:
         if not pts:
             continue
-        _add_bornero_diagram(project, start_order + n, mod, pts)
-        n += 1
+        rows = _bornero_rows(mod, pts)
+        pages = [rows[i:i + BORNERO_ROWS_PER_PAGE]
+                 for i in range(0, len(rows), BORNERO_ROWS_PER_PAGE)] or [[]]
+        total = len(pages)
+        for pno, page_rows in enumerate(pages, start=1):
+            _add_bornero_diagram(project, start_order + n, mod, page_rows,
+                                 pno, total)
+            n += 1
     return n
 
 
@@ -1693,6 +1777,10 @@ def main(argv=None):
     # so each folio numbers its own devices from 1; filled in the deterministic
     # folio/point traversal below
     designations: dict[tuple[int, str], int] = {}
+    # T3.2 spare/RESERVA terminals counted SEPARATELY from the matched/mapped
+    # floor: keyed by module name -> count of unused channels drawn as reserves.
+    # NEVER folded into per_module / the points lists / sym_counts.
+    spare_counter: dict[str, int] = {}
     # per-folio wire-number counter keyed by page -> last sequential number,
     # so each folio numbers its own field conductors from 1 (sequential scheme)
     wire_counters: dict[int, int] = {}
@@ -1723,7 +1811,8 @@ def main(argv=None):
         if not pts:
             continue
         build_folio(project, page, mod, pts, symbols, sym_counts, designations,
-                    args.wire_scheme, wire_counters, bom_rows=bom_rows)
+                    args.wire_scheme, wire_counters, bom_rows=bom_rows,
+                    spare_counter=spare_counter)
         drawn_cards.append((mod, pts))
         page += 1
         folios += 1
@@ -1801,17 +1890,25 @@ def main(argv=None):
                            sorted(sym_counts.items(), key=lambda kv: -kv[1]))
         print(f"symbols    : {matched} matched ({detail}), "
               f"{n_points - matched} generic terminal", file=err)
+    # T3.2: spare/RESERVA reserve terminals — a SEPARATE counter, reported on its
+    # own stderr line so the matched/mapped floor (106 drawn / 75 matched) is
+    # never inflated by reserves.
+    n_spare = sum(spare_counter.values())
+    print(f"spare      : {n_spare} reserve terminal(s) (RESERVA) over "
+          f"{len(spare_counter)} card(s)", file=err)
     n_mod = sum(1 for r in bom_rows if r["category"] == "module")
     n_dev = sum(1 for r in bom_rows if r["category"] == "device")
     n_gen = sum(1 for r in bom_rows if r["category"] == "generic")
+    n_spr = sum(1 for r in bom_rows if r["category"] == "spare")
     print(f"bom        : {len(bom_rows)} rows ({n_mod} module, {n_dev} device, "
-          f"{n_gen} generic) over {summary_folios} summary folio(s)", file=err)
+          f"{n_gen} generic, {n_spr} spare) over {summary_folios} summary "
+          f"folio(s)", file=err)
     print(f"changelog  : {len(revisions)} revision(s) over "
           f"{changelog_folios} folio(s)", file=err)
     print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s)",
           file=err)
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
-          f"folio(s), one per card", file=err)
+          f"folio(s), mapped + RESERVA in channel order", file=err)
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
     print(f"simbología : {symbology_folios} legend folio(s), "
           f"{len(used)} symbol type(s)", file=err)
