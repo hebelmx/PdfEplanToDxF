@@ -1,0 +1,18 @@
+{
+  "id": "thermostat_nc",
+  "description": "Thermostat / temperature switch / thermal contact, NC contact",
+  "dt": "B",
+  "element": "thermostat_nc.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/15_sensors_temperature/thermostat_nc.elmt",
+  "direction": "I",
+  "priority": 1,
+  "suffixes": [],
+  "keywords": [
+    "thermostat nc",
+    "thermostat closed",
+    "termostato nc",
+    "termostato cerrado",
+    "temperatura nc",
+    "temperatura cerrado"
+  ]
+}

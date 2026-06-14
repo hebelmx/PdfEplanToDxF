@@ -1,0 +1,16 @@
+{
+  "id": "foot_switch_nc",
+  "description": "Foot switch / pedal, NC contact",
+  "dt": "S",
+  "element": "foot_switch_nc.elmt",
+  "qet_source": "10_electric/10_allpole/380_signaling_operating/20_push_buttons/foot_nc.elmt",
+  "direction": "I",
+  "priority": 1,
+  "suffixes": [],
+  "keywords": [
+    "foot switch nc",
+    "foot switch closed",
+    "pedal nc",
+    "pedal cerrado"
+  ]
+}

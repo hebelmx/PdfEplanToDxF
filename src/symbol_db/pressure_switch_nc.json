@@ -1,0 +1,18 @@
+{
+  "id": "pressure_switch_nc",
+  "description": "Pressure switch, NC contact",
+  "dt": "B",
+  "element": "pressure_switch_nc.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/13_sensors_pressure/pressostat_nc.elmt",
+  "direction": "I",
+  "priority": 1,
+  "suffixes": [],
+  "keywords": [
+    "pressure switch nc",
+    "pressure switch closed",
+    "presostato nc",
+    "presostato cerrado",
+    "presion nc",
+    "presion cerrado"
+  ]
+}

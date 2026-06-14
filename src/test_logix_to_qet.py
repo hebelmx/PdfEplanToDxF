@@ -2115,5 +2115,124 @@ class ContinuationRefsTest(unittest.TestCase):
         self.assertEqual(len(project.findall("diagram")), before)
 
 
+class NcContactVariantTest(unittest.TestCase):
+    """T3.1 — NO/NC correctness. The five field switches (level/flow/pressure/
+    foot/thermostat) gained separate `_nc` symbol_db entries, exactly like the
+    pre-existing limit_switch_nc / push_button_nc pattern. The matcher stays
+    data-driven: an `_nc` entry only wins when the tag/description carries an
+    explicit NC signal (EN "NC"/"closed" or ES "cerrado"); a plain tag still
+    picks the base NO entry, and the existing NO matches are untouched."""
+
+    NC_IDS = ("level_switch_nc", "flow_switch_nc", "pressure_switch_nc",
+              "foot_switch_nc", "thermostat_nc")
+    # (nc_id, base_id, base_elmt, nc_tag, nc_desc, base_tag, base_desc)
+    PAIRS = (
+        ("level_switch_nc", "level_switch", "level_switch.elmt",
+         "LSH01", "LEVEL SWITCH NC", "LSH01", "LEVEL SWITCH"),
+        ("flow_switch_nc", "flow_switch", "flow_switch.elmt",
+         "FS01", "FLOW SWITCH NC", "FS01", "FLOW SWITCH"),
+        ("pressure_switch_nc", "pressure_switch", "pressure_switch.elmt",
+         "PS01", "PRESSURE SWITCH NC", "PS01", "PRESSURE SWITCH"),
+        ("foot_switch_nc", "foot_switch", "foot_switch.elmt",
+         "FT01", "FOOT SWITCH NC", "FT01", "FOOT SWITCH"),
+        ("thermostat_nc", "thermostat", "thermostat.elmt",
+         "TS01", "THERMOSTAT NC", "TS01", "THERMOSTAT"),
+    )
+    # an ES "cerrado" signal must also flip to the NC variant
+    ES_NC = (
+        ("level_switch_nc", "B01", "NIVEL CERRADO"),
+        ("flow_switch_nc", "B01", "CAUDAL CERRADO"),
+        ("pressure_switch_nc", "B01", "PRESOSTATO CERRADO"),
+        ("foot_switch_nc", "S01", "PEDAL CERRADO"),
+        ("thermostat_nc", "B01", "TERMOSTATO CERRADO"),
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = q.load_symbol_db()
+        cls.by_id = {e["id"]: e for e in cls.db}
+
+    def _term_count(self, elmt_name):
+        path = (Path(q.__file__).resolve().parent
+                / "symbol_db" / "elements" / elmt_name)
+        defn = ET.fromstring(path.read_text(encoding="utf-8"))
+        return len(list(defn.find("description").iter("terminal")))
+
+    def test_db_includes_five_nc_entries_with_valid_definitions(self):
+        for nc_id in self.NC_IDS:
+            with self.subTest(nc_id=nc_id):
+                self.assertIn(nc_id, self.by_id, f"{nc_id} missing from db")
+                entry = self.by_id[nc_id]
+                defn = entry.get("_definition")
+                self.assertIsNotNone(defn, f"{nc_id} has no embedded definition")
+                self.assertEqual(defn.tag, "definition")
+                # element_def must be non-empty XML with a description
+                self.assertIsNotNone(defn.find("description"))
+                self.assertTrue(len(entry.get("_terminals", [])) > 0)
+
+    def test_nc_terminal_count_matches_base(self):
+        for nc_id, base_id, base_elmt, *_ in self.PAIRS:
+            with self.subTest(nc_id=nc_id):
+                nc_terms = len(self.by_id[nc_id]["_terminals"])
+                base_terms = self._term_count(base_elmt)
+                self.assertEqual(nc_terms, base_terms,
+                                 f"{nc_id} terminal count != {base_id}")
+                # each NC switch is a 2-terminal contact
+                self.assertEqual(nc_terms, 2)
+
+    def test_nc_dt_matches_base(self):
+        for nc_id, base_id, *_ in self.PAIRS:
+            with self.subTest(nc_id=nc_id):
+                self.assertEqual(self.by_id[nc_id]["dt"],
+                                 self.by_id[base_id]["dt"])
+
+    def test_explicit_nc_signal_selects_nc_variant(self):
+        for nc_id, _base, _elmt, nc_tag, nc_desc, *_ in self.PAIRS:
+            with self.subTest(nc_id=nc_id):
+                r = q.match_symbol(self.db, nc_tag, nc_desc, "I")
+                self.assertIsNotNone(r)
+                self.assertEqual(r["id"], nc_id)
+
+    def test_spanish_cerrado_selects_nc_variant(self):
+        for nc_id, tag, desc in self.ES_NC:
+            with self.subTest(nc_id=nc_id):
+                r = q.match_symbol(self.db, tag, desc, "I")
+                self.assertIsNotNone(r)
+                self.assertEqual(r["id"], nc_id)
+
+    def test_plain_tag_still_selects_base_no_variant(self):
+        for nc_id, base_id, _elmt, _nt, _nd, base_tag, base_desc in self.PAIRS:
+            with self.subTest(base_id=base_id):
+                r = q.match_symbol(self.db, base_tag, base_desc, "I")
+                self.assertIsNotNone(r)
+                self.assertEqual(r["id"], base_id,
+                                 f"plain {base_tag!r} must not pick {nc_id}")
+
+    def test_existing_no_matches_unchanged_regression(self):
+        # guard: ordinary tags for all five still resolve to the NO base,
+        # i.e. the new NC keywords never steal a generic match
+        for _nc, base_id, _elmt, _nt, _nd, base_tag, base_desc in self.PAIRS:
+            with self.subTest(base_id=base_id):
+                self.assertEqual(
+                    q.match_symbol(self.db, base_tag, base_desc, "I")["id"],
+                    base_id)
+
+    def test_limit_switch_nc_is_reachable(self):
+        # The pre-existing limit_switch_nc keywords ("limit switch nc")
+        # OVERLAP the base ("limit switch"), so both scored an identical key
+        # and the base won by id-sort order -> the NC entry could NEVER fire.
+        # priority=1 breaks that tie ONLY when the NC keyword actually hits;
+        # a plain limit-switch tag carries no NC signal so the base still wins.
+        self.assertEqual(
+            q.match_symbol(self.db, "FC01", "LIMIT SWITCH NC", "I")["id"],
+            "limit_switch_nc")
+        self.assertEqual(
+            q.match_symbol(self.db, "FC01", "FIN DE CARRERA CERRADO", "I")["id"],
+            "limit_switch_nc")
+        self.assertEqual(
+            q.match_symbol(self.db, "FC01", "LIMIT SWITCH", "I")["id"],
+            "limit_switch")
+
+
 if __name__ == "__main__":
     unittest.main()

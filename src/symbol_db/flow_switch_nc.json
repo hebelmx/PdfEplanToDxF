@@ -1,0 +1,18 @@
+{
+  "id": "flow_switch_nc",
+  "description": "Flow switch (fluid), NC contact",
+  "dt": "B",
+  "element": "flow_switch_nc.elmt",
+  "qet_source": "10_electric/10_allpole/390_sensors_instruments/11_sensors_flow/debit_fluide_nf.elmt",
+  "direction": "I",
+  "priority": 1,
+  "suffixes": [],
+  "keywords": [
+    "flow switch nc",
+    "flow switch closed",
+    "flujo nc",
+    "flujo cerrado",
+    "caudal nc",
+    "caudal cerrado"
+  ]
+}
