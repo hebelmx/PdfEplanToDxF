@@ -543,6 +543,27 @@ TITLEBLOCK_BUILTIN_TOKENS = frozenset({
 })
 
 
+# DA.5b: the title-block page cell ships with QET's built-in %{folio-id}, which
+# numbers folios by DOCUMENT POSITION (1..N) and so ignores our section page
+# scheme (Portada 000, drawings 101.., BOM 300..). Rewriting that token to a
+# custom %{page} — populated per diagram from its order attribute — makes the
+# cajetín display the section page instead. Applied to the EMBEDDED copy only;
+# the committed asset stays standard ISO 7200 (re-syncable from QET).
+PAGE_TOKEN = "page"
+
+
+def sectionize_titleblock_page(template_text):
+    """Rewrite the title block's page-number field to show the SECTION page (the
+    diagram order) instead of QET's position counter: replace
+    %{folio-id}/%{folio-total} (and a bare %{folio-id}) with the custom %{page}
+    token. No-op when the template is None or carries no folio-id token (graceful
+    — the page cell then keeps whatever it had)."""
+    if template_text is None:
+        return None
+    text = template_text.replace("%{folio-id}/%{folio-total}", "%{" + PAGE_TOKEN + "}")
+    return text.replace("%{folio-id}", "%{" + PAGE_TOKEN + "}")
+
+
 def titleblock_custom_tokens(template_text: str) -> list:
     """Ordered, unique list of the template's CUSTOM %{token} names — every
     %{...} a field references, minus the QET built-ins. EVERY one must get a
@@ -592,8 +613,17 @@ def apply_titleblock(diagram: ET.Element, fields: dict, custom_tokens: list,
     values = titleblock_properties(fields)
     props = ET.Element("properties")
     for token in custom_tokens:
+        text = values.get(token, "")
+        if token == PAGE_TOKEN:
+            # the section page (DA.5b): this diagram's order, zero-padded to the
+            # gated 3-digit scheme (Portada 000, Simbología 001, drawings 101…)
+            order = diagram.get("order", "")
+            try:
+                text = f"{int(order):03d}"
+            except (TypeError, ValueError):
+                text = order
         ET.SubElement(props, "property",
-                      {"name": token, "show": "1"}).text = values.get(token, "")
+                      {"name": token, "show": "1"}).text = text
     diagram.insert(0, props)   # QET writes <properties> as the first diagram child
 
 
@@ -1018,8 +1048,8 @@ def _add_summary_diagram(project: ET.Element, order: int, page_rows: list[dict],
         "order": str(order),
         "title": f"BOM / device index ({page_no}/{page_total})",
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1124,8 +1154,8 @@ def _add_changelog_diagram(project: ET.Element, order: int, page_rows: list,
         "order": str(order),
         "title": f"Historial de revisiones ({page_no}/{page_total})",
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1212,8 +1242,8 @@ def _add_supply_diagram(project: ET.Element, order: int, rails: list) -> ET.Elem
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": SUPPLY_FOLIO_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1277,8 +1307,8 @@ def _add_bornero_diagram(project: ET.Element, order: int, mod, points) -> ET.Ele
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1368,8 +1398,8 @@ def build_portada_folio(project: ET.Element, order: int, fields: dict,
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": PORTADA_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1453,8 +1483,8 @@ def build_symbology_folio(project: ET.Element, order: int, used_symbols: list,
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": SIMBOLOGIA_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
-        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
-        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
         "version": "0.100",
     })
     ET.SubElement(diagram, "defaultconductor", {
@@ -1640,7 +1670,10 @@ def main(argv=None):
     # itself; values (company, drawing no., rev, static date…) ride along as
     # per-diagram attributes/properties. The template element is injected
     # verbatim into the serialized XML further down (preserves the SVG).
-    template_text = load_titleblock_template()
+    # DA.5b: show the SECTION page in the cajetín (QET's %{folio-id} would number
+    # by position); rewrite the embedded copy's page token to %{page}, populated
+    # per folio from its order. The committed asset is untouched (re-syncable).
+    template_text = sectionize_titleblock_page(load_titleblock_template())
     page_total = attach_titleblocks(project, tb_fields, template_text,
                                     filename=Path(out_path).stem)
     build_collection(project, used)

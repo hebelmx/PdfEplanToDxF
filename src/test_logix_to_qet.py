@@ -721,6 +721,34 @@ class TitleblockCustomTokensTest(unittest.TestCase):
             self.assertNotIn(b, toks)
 
 
+class SectionizeTitleblockPageTest(unittest.TestCase):
+    """DA.5b: the page-number field is rewritten to the custom %{page} token so
+    the cajetín shows the SECTION page instead of QET's position counter."""
+
+    def test_replaces_folio_id_total_pair(self):
+        self.assertEqual(
+            q.sectionize_titleblock_page("<v>%{folio-id}/%{folio-total}</v>"),
+            "<v>%{page}</v>")
+
+    def test_replaces_bare_folio_id(self):
+        self.assertEqual(q.sectionize_titleblock_page("x %{folio-id} y"),
+                         "x %{page} y")
+
+    def test_none_is_noop(self):
+        self.assertIsNone(q.sectionize_titleblock_page(None))
+
+    def test_template_without_token_unchanged(self):
+        self.assertEqual(q.sectionize_titleblock_page("<v>%{ref}</v>"),
+                         "<v>%{ref}</v>")
+
+    def test_real_template_gains_page_loses_folio_id(self):
+        out = q.sectionize_titleblock_page(q.load_titleblock_template())
+        self.assertIn("%{page}", out)
+        self.assertNotIn("%{folio-id}", out)
+        # %{page} is now a CUSTOM token, so apply_titleblock will fill it
+        self.assertIn("page", q.titleblock_custom_tokens(out))
+
+
 class ApplyTitleblockTest(unittest.TestCase):
     @staticmethod
     def _diagram():
@@ -775,6 +803,15 @@ class ApplyTitleblockTest(unittest.TestCase):
         # ...unfilled ones are empty strings, not missing / not a raw token
         for blank in ("department", "type", "status", "code", "country", "ref"):
             self.assertEqual(props[blank], "")
+
+    def test_page_token_renders_zero_padded_section_order(self):
+        # DA.5b: with %{page} among the custom tokens, the property is the
+        # diagram's order zero-padded to 3 digits (here the folio was built at
+        # order 1 → "001").
+        d = self._diagram()
+        q.apply_titleblock(d, self._fields(), self.TOKENS + [q.PAGE_TOKEN])
+        props = {p.get("name"): p.text for p in d.find("properties")}
+        self.assertEqual(props[q.PAGE_TOKEN], "001")
 
     def test_does_not_touch_electrical_content(self):
         """The title block must not alter <elements>/<conductors> — it only adds
@@ -1540,6 +1577,27 @@ class WaddingRegressionTest(unittest.TestCase):
         self.assertLess(i_born, i_bom)
         self.assertLess(i_bom, i_chg)
         self.assertEqual(i_chg, len(titles) - 1)   # changelog is LAST
+
+    def test_cajetin_shows_section_page_not_position(self):
+        # DA.5b: every folio's page property equals its order zero-padded to 3
+        # digits, and QET's position counter token is gone from the embedded
+        # template (so the cajetín shows 000/100/101… not 1/27).
+        root, xml, _ = self._run()
+        self.assertNotIn("%{folio-id}", xml)
+        self.assertIn("%{page}", xml)
+        for d in root.findall("diagram"):
+            props = {p.get("name"): p.text for p in d.find("properties")}
+            self.assertEqual(props.get("page"), f"{int(d.get('order')):03d}")
+
+    def test_list_folios_hide_grid_rulers_drawings_keep_them(self):
+        # the "out of the box" fix: non-schematic list/front-matter folios hide
+        # QET's grid rulers (0–16 / A–H); the card drawings keep them.
+        root, _, _ = self._run()
+        for d in root.findall("diagram"):
+            is_drawing = (d.get("title") or "").startswith("R")
+            want = "true" if is_drawing else "false"
+            self.assertEqual(d.get("displaycols"), want, d.get("title"))
+            self.assertEqual(d.get("displayrows"), want, d.get("title"))
 
     def test_symbology_lists_only_used_symbols(self):
         # DA.4: the legend carries exactly one glyph per USED symbol type, and
