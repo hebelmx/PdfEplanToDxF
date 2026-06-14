@@ -572,15 +572,32 @@ class LoadProjectTemplateTest(unittest.TestCase):
 
     def test_absent_file_returns_all_blank_defaults(self):
         tmpl = q.load_project_template(Path("does-not-exist-anywhere.json"))
-        self.assertEqual(tmpl, q.PROJECT_TEMPLATE_DEFAULTS)
-        # every documented field is present (so the title block never KeyErrors)
-        self.assertEqual(set(tmpl), set(q.PROJECT_TEMPLATE_DEFAULTS))
+        # every documented field present and blank (title block never KeyErrors)
+        for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items():
+            self.assertEqual(tmpl[k], v)
+        # plus an empty revisions list for the changelog
+        self.assertEqual(tmpl["revisions"], [])
 
     def test_malformed_file_degrades_to_defaults(self):
         with tempfile.TemporaryDirectory() as d:
             p = self._write(d, "{ this is not json")
-            self.assertEqual(q.load_project_template(p),
-                             q.PROJECT_TEMPLATE_DEFAULTS)
+            tmpl = q.load_project_template(p)
+            for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items():
+                self.assertEqual(tmpl[k], v)
+            self.assertEqual(tmpl["revisions"], [])
+
+    def test_revisions_list_is_loaded(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"revisions": [{"rev": "00", '
+                               '"description": "Primera emisión"}]}')
+            tmpl = q.load_project_template(p)
+            self.assertEqual(len(tmpl["revisions"]), 1)
+            self.assertEqual(tmpl["revisions"][0]["rev"], "00")
+
+    def test_revisions_non_list_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"revisions": "oops"}')
+            self.assertEqual(q.load_project_template(p)["revisions"], [])
 
     def test_present_file_merges_string_values(self):
         with tempfile.TemporaryDirectory() as d:
@@ -846,6 +863,76 @@ class EmbedTitleblockTemplatesTest(unittest.TestCase):
         xml = '<project version="0.80">\n<diagram/>\n</project>\n'
         out = q.embed_titleblock_templates(xml, template)
         self.assertIn(template, out)             # exact substring -> verbatim
+
+
+class NormalizeRevisionsTest(unittest.TestCase):
+    def _fields(self, **over):
+        return {**q.PROJECT_TEMPLATE_DEFAULTS, **over}
+
+    def test_configured_revisions_are_used_and_coerced(self):
+        revs = q.normalize_revisions(
+            [{"rev": "00", "date": "2026-06-13", "description": "Primera emisión",
+              "drawn": "ES", "approved": "JD"},
+             {"rev": "01", "description": "Cambio de bornero"}],   # missing keys
+            self._fields())
+        self.assertEqual(len(revs), 2)
+        self.assertEqual(revs[0]["approved"], "JD")
+        # missing keys are blank, never fabricated
+        self.assertEqual(revs[1]["date"], "")
+        self.assertEqual(revs[1]["drawn"], "")
+        self.assertEqual(revs[1]["description"], "Cambio de bornero")
+        # every row has exactly the revision columns
+        for r in revs:
+            self.assertEqual(set(r), set(q.REVISION_COLUMNS))
+
+    def test_no_config_synthesises_first_emission_from_fields(self):
+        revs = q.normalize_revisions(
+            None, self._fields(revision="00", date="2026-06-13", drawn_by="ES"))
+        self.assertEqual(len(revs), 1)
+        self.assertEqual(revs[0]["rev"], "00")
+        self.assertEqual(revs[0]["date"], "2026-06-13")
+        self.assertEqual(revs[0]["drawn"], "ES")
+        self.assertEqual(revs[0]["description"], "Primera emisión")
+
+    def test_empty_list_also_synthesises(self):
+        self.assertEqual(len(q.normalize_revisions([], self._fields())), 1)
+
+    def test_deterministic(self):
+        f = self._fields(revision="00", date="2026-06-13")
+        self.assertEqual(q.normalize_revisions(None, f),
+                         q.normalize_revisions(None, f))
+
+
+class ChangelogFolioTest(unittest.TestCase):
+    @staticmethod
+    def _rows(n):
+        return [{"rev": f"{i:02d}", "date": "2026-06-13",
+                 "description": f"cambio {i}", "drawn": "ES", "approved": ""}
+                for i in range(n)]
+
+    def test_emits_a_folio_with_only_text_and_shapes(self):
+        project = ET.Element("project")
+        n = q.build_changelog_folios(project, 1, self._rows(2))
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        for label in ("REV", "FECHA", "DESCRIPCIÓN", "DIBUJÓ", "APROBÓ"):
+            self.assertIn(label, texts)
+        self.assertIn("cambio 0", texts)
+
+    def test_empty_revisions_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_changelog_folios(project, 1, []), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_title_is_changelog_not_bom(self):
+        project = ET.Element("project")
+        q.build_changelog_folios(project, 5, self._rows(1))
+        d = project.find("diagram")
+        self.assertEqual(d.get("order"), "5")
+        self.assertIn("revisiones", d.get("title").lower())
 
 
 if __name__ == "__main__":

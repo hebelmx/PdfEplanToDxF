@@ -175,10 +175,11 @@ def load_project_template(path=PROJECT_TEMPLATE_PATH) -> dict:
     """Load the cajetín (title-block) config, merged over the blank built-in
     defaults. Mirrors load_module_db/load_symbol_db: stdlib json, utf-8-sig, and
     a graceful fallback so a missing OR malformed file yields all-default fields
-    (every value a clean string, never garbage). Only string values for known
-    keys are taken; unknown keys are ignored and missing keys keep their blank
-    default, so the title block always has every field present."""
+    (every string value clean, `revisions` an empty list — never garbage). Only
+    string values for known field keys are taken, plus a `revisions` list for the
+    changelog; unknown keys are ignored and missing keys keep their default."""
     tmpl = dict(PROJECT_TEMPLATE_DEFAULTS)
+    tmpl["revisions"] = []
     p = Path(path)
     if not p.is_file():
         return tmpl
@@ -188,10 +189,12 @@ def load_project_template(path=PROJECT_TEMPLATE_PATH) -> dict:
         print(f"warning: ignoring {p.name}: {exc}", file=sys.stderr)
         return tmpl
     if isinstance(data, dict):
-        for key in tmpl:
+        for key in PROJECT_TEMPLATE_DEFAULTS:
             value = data.get(key)
             if isinstance(value, str):
                 tmpl[key] = value
+        if isinstance(data.get("revisions"), list):
+            tmpl["revisions"] = data["revisions"]
     return tmpl
 
 # Terminal element embedded into the generated project (official QET
@@ -876,6 +879,103 @@ def build_summary_folios(project: ET.Element, start_order: int,
     return total
 
 
+# ── Changelog / revision-history folio ───────────────────────────────────────
+# A final traceability sheet listing the document's revision history: once the
+# first version is released, every reissue adds a line so the record carries who
+# changed what, when. Driven by a `revisions` array in project_template.json;
+# when none is configured a single first-emission row is synthesised from the
+# title-block fields, so every project still gets a traceability sheet. Rendered
+# like the summary folios — text + shapes only — so it carries the title block.
+REVISION_COLUMNS = ("rev", "date", "description", "drawn", "approved")
+REVISION_FOLIO_COLUMNS = (
+    ("rev", 10, 6),
+    ("date", 70, 12),
+    ("description", 180, 100),
+    ("drawn", 760, 14),
+    ("approved", 880, 14),
+)
+REVISION_FOLIO_LABELS = {
+    "rev": "REV", "date": "FECHA", "description": "DESCRIPCIÓN",
+    "drawn": "DIBUJÓ", "approved": "APROBÓ",
+}
+
+
+def normalize_revisions(tmpl_revisions, fields: dict) -> list:
+    """Return the revision-history rows (each a dict over REVISION_COLUMNS).
+
+    Configured `revisions` entries win — each coerced to the five columns with
+    missing keys left blank (never fabricated). When none are configured, a
+    single first-emission row is synthesised from the title-block fields (rev /
+    date / drawn / approved as-is, description 'Primera emisión') so the sheet is
+    never empty. Deterministic and pure."""
+    rows = []
+    for entry in tmpl_revisions or []:
+        if isinstance(entry, dict):
+            rows.append({k: str(entry.get(k, "") or "") for k in REVISION_COLUMNS})
+    if rows:
+        return rows
+    return [{
+        "rev": fields.get("revision", "") or "",
+        "date": fields.get("date", "") or "",
+        "description": "Primera emisión",
+        "drawn": fields.get("drawn_by", "") or "",
+        "approved": fields.get("approved_by", "") or "",
+    }]
+
+
+def _add_changelog_diagram(project: ET.Element, order: int, page_rows: list,
+                           page_no: int, page_total: int) -> ET.Element:
+    """Render one changelog folio: a legible revision-history table (REV / FECHA
+    / DESCRIPCIÓN / DIBUJÓ / APROBÓ) drawn with ONLY text + shape primitives —
+    no <element>/terminal instances, no <conductor> — mirroring the summary
+    folios so it shares the page geometry and the title block."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order),
+        "title": f"Historial de revisiones ({page_no}/{page_total})",
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    x0 = REVISION_FOLIO_COLUMNS[0][1]
+    add_text(inputs, x0, 30, "HISTORIAL DE REVISIONES", FONT_HEADER)
+    for key, x, _w in REVISION_FOLIO_COLUMNS:
+        add_text(inputs, x, SUMMARY_ROW_Y0, REVISION_FOLIO_LABELS[key], FONT_SMALL)
+    y_rule = SUMMARY_ROW_Y0 + 6
+    add_rect(shapes, x0, y_rule, SUMMARY_PAGE_WIDTH, y_rule + 2)
+    for i, row in enumerate(page_rows):
+        y = SUMMARY_ROW_Y0 + (i + 1) * SUMMARY_ROW_DY
+        for key, x, w in REVISION_FOLIO_COLUMNS:
+            value = _ellipsize(row.get(key, ""), w)
+            if value:
+                add_text(inputs, x, y, value, FONT_SMALL)
+    return diagram
+
+
+def build_changelog_folios(project: ET.Element, start_order: int,
+                           revisions: list) -> int:
+    """Append the paginated changelog folio(s) AFTER the summary folios (order
+    numbers continue past them). normalize_revisions guarantees at least one row,
+    so at least one folio is always emitted. Returns the count appended."""
+    if not revisions:
+        return 0
+    pages = [revisions[i:i + SUMMARY_ROWS_PER_PAGE]
+             for i in range(0, len(revisions), SUMMARY_ROWS_PER_PAGE)]
+    total = len(pages)
+    for n, page_rows in enumerate(pages, start=1):
+        _add_changelog_diagram(project, start_order + n - 1, page_rows, n, total)
+    return total
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a ControlLogix L5X export to a QElectroTech project.")
@@ -922,7 +1022,8 @@ def main(argv=None):
 
     # cajetín / title-block fields: project_template.json merged over blank
     # defaults, with project/machine falling back to the parsed controller name
-    tb_fields = resolve_title_block_fields(load_project_template(), controller)
+    tmpl = load_project_template()
+    tb_fields = resolve_title_block_fields(tmpl, controller)
 
     project = ET.Element("project",
                          {"title": tb_fields["project"], "version": "0.80"})
@@ -945,6 +1046,12 @@ def main(argv=None):
     # summary folio(s) come AFTER the drawing folios (order continues past
     # them); the drawing folios' XML is untouched.
     summary_folios = build_summary_folios(project, order, bom_rows)
+    order += summary_folios
+    # changelog / revision-history folio comes last (order continues), so the
+    # whole document carries a traceability sheet.
+    revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
+    changelog_folios = build_changelog_folios(project, order, revisions)
+    order += changelog_folios
     # cajetín: reference the ISO 7200 template from EVERY folio (drawing +
     # summary). QET renders the framed block + SVG logo + auto sheet number
     # itself; values (company, drawing no., rev, static date…) ride along as
@@ -986,6 +1093,8 @@ def main(argv=None):
     n_gen = sum(1 for r in bom_rows if r["category"] == "generic")
     print(f"bom        : {len(bom_rows)} rows ({n_mod} module, {n_dev} device, "
           f"{n_gen} generic) over {summary_folios} summary folio(s)", file=err)
+    print(f"changelog  : {len(revisions)} revision(s) over "
+          f"{changelog_folios} folio(s)", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",
