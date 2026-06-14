@@ -10,8 +10,8 @@
   set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`. Tests =
   `src/test_logix_to_qet.py` (**186 tests**, stdlib unittest). Durable task list =
   `docs/TIER3-tracker.md`.
-- **The Document-assembly theme (DA.1–DA.7 + DA.5a/b/c) is DONE** on branch
-  **`feat/doc-assembly`** (off `main` @ `1f24259`, **NOT pushed**). WADDING_1 emits **27
+- **The Document-assembly theme (DA.1–DA.8) is DONE, ff-merged into `main` (@ `a59e39f`)
+  and PUSHED to origin (2026-06-14).** WADDING_1 emits **27
   folios** in natural order: **Portada → Simbología → Alimentación → card drawings
   (101–110) → borneros (200–209) → BOM (300–302) → Historial (900)**, with prev/next
   continuation refs on the three multi-sheet sections.
@@ -24,8 +24,8 @@
      clearance on a *full* 16-row drawing folio; DA.8 the top-right power table (esp. the
      OA16 4-row table and the 2-column IB32 folio 106), the 2-column símbología, and the
      lifted card-box titles. DA.8 is committed but status `review` until Abel blesses it.
-  2. **Pushing / merging `feat/doc-assembly`.** Prior convention: ff-merge the feature
-     branch into `main` per theme, then Abel pushes. **Don't push without asking.**
+  2. ~~Pushing / merging `feat/doc-assembly`~~ — **DONE 2026-06-14**: ff-merged into `main`
+     and pushed to origin (`a59e39f`).
 
 ## What was done across this theme (all on `feat/doc-assembly`, floor intact)
 
@@ -170,9 +170,10 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 
 ## Git state / how to resume
 
-- `main` @ `1f24259` (bornero Tier 2 #6; **not pushed**).
-- Branch `feat/doc-assembly` (off `main`) — all DA.1–DA.7 + DA.5a/b/c commits + doc/tracker
-  commits. **NOT pushed** — ask Abel before pushing/merging.
+- **`main` @ `a59e39f` — the whole Document-assembly theme (DA.1–DA.8) is ff-merged into
+  `main` and PUSHED to origin (2026-06-14).** `feat/doc-assembly` is at the same commit and
+  also pushed; `origin/main == origin/feat/doc-assembly == a59e39f`.
+- Start the next cycle (Tier 3 / T3.1) from a fresh branch off `main`.
 
 ## Kickoff prompt — paste into the new session
 
