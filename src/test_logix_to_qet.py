@@ -561,5 +561,292 @@ class DrawingFolioUnchangedTest(unittest.TestCase):
                          self._normalized_xml(True))
 
 
+class LoadProjectTemplateTest(unittest.TestCase):
+    """The cajetín config loader mirrors load_module_db: graceful defaults when
+    absent/malformed, string-only merge of known keys when present."""
+
+    def _write(self, d, text):
+        p = Path(d) / "project_template.json"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_absent_file_returns_all_blank_defaults(self):
+        tmpl = q.load_project_template(Path("does-not-exist-anywhere.json"))
+        self.assertEqual(tmpl, q.PROJECT_TEMPLATE_DEFAULTS)
+        # every documented field is present (so the title block never KeyErrors)
+        self.assertEqual(set(tmpl), set(q.PROJECT_TEMPLATE_DEFAULTS))
+
+    def test_malformed_file_degrades_to_defaults(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, "{ this is not json")
+            self.assertEqual(q.load_project_template(p),
+                             q.PROJECT_TEMPLATE_DEFAULTS)
+
+    def test_present_file_merges_string_values(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"company": "Exxerpro Solutions", '
+                               '"drawn_by": "ES", "revision": "00"}')
+            tmpl = q.load_project_template(p)
+            self.assertEqual(tmpl["company"], "Exxerpro Solutions")
+            self.assertEqual(tmpl["drawn_by"], "ES")
+            self.assertEqual(tmpl["revision"], "00")
+            # a field not in the file keeps its blank default
+            self.assertEqual(tmpl["client"], "")
+
+    def test_unknown_keys_ignored_and_nonstring_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"company": "X", "bogus": "Y", "revision": 7}')
+            tmpl = q.load_project_template(p)
+            self.assertNotIn("bogus", tmpl)
+            self.assertEqual(tmpl["company"], "X")
+            # a non-string value is ignored, keeping the blank default
+            self.assertEqual(tmpl["revision"], "")
+
+    def test_shipped_template_loads(self):
+        """The committed src/project_template.json must be valid and carry the
+        Exxerpro company name (the configured default for this repo)."""
+        tmpl = q.load_project_template()   # default path
+        self.assertEqual(tmpl["company"], "Exxerpro Solutions")
+
+
+class ResolveTitleBlockFieldsTest(unittest.TestCase):
+    def test_blank_project_and_machine_fall_back_to_controller(self):
+        fields = q.resolve_title_block_fields(
+            dict(q.PROJECT_TEMPLATE_DEFAULTS), "WADDING_1")
+        self.assertEqual(fields["project"], "WADDING_1 I/O")
+        self.assertEqual(fields["machine"], "WADDING_1")
+
+    def test_explicit_project_and_machine_kept(self):
+        tmpl = dict(q.PROJECT_TEMPLATE_DEFAULTS)
+        tmpl["project"] = "Line 4 Retrofit"
+        tmpl["machine"] = "Palletizer A"
+        fields = q.resolve_title_block_fields(tmpl, "WADDING_1")
+        self.assertEqual(fields["project"], "Line 4 Retrofit")
+        self.assertEqual(fields["machine"], "Palletizer A")
+
+
+class YyyymmddTest(unittest.TestCase):
+    def test_iso_date_becomes_compact(self):
+        self.assertEqual(q._yyyymmdd("2026-06-13"), "20260613")
+
+    def test_blank_or_malformed_becomes_null(self):
+        for bad in ("", None, "2026-6", "garbage", "2026/06/13/1"):
+            self.assertEqual(q._yyyymmdd(bad), "null")
+
+    def test_already_compact_passes(self):
+        self.assertEqual(q._yyyymmdd("20260613"), "20260613")
+
+
+class TitleblockPropertiesTest(unittest.TestCase):
+    """Pure mapping of our config onto the ISO 7200 custom %{token} property
+    names (pure ISO 7200 — no client/revised cells), dropping blanks."""
+
+    def test_maps_config_to_iso7200_tokens(self):
+        fields = q.resolve_title_block_fields({
+            **q.PROJECT_TEMPLATE_DEFAULTS,
+            "company": "Exxerpro Solutions", "drawing_number": "PL-001",
+            "revision": "00", "approved_by": "JD"}, "WADDING_1")
+        props = q.titleblock_properties(fields)
+        self.assertEqual(props["owner"], "Exxerpro Solutions")   # EMPRESA
+        self.assertEqual(props["name"], "WADDING_1 I/O")         # drawing name
+        self.assertEqual(props["ref"], "PL-001")                 # PLANO N.º
+        self.assertEqual(props["rev"], "00")                     # REV
+        self.assertEqual(props["approval"], "JD")                # APROBÓ
+
+    def test_blank_fields_are_dropped_not_emitted_empty(self):
+        props = q.titleblock_properties(
+            q.resolve_title_block_fields(dict(q.PROJECT_TEMPLATE_DEFAULTS), "C"))
+        # no company/drawing_number/revision/approved -> those keys absent
+        for absent in ("owner", "ref", "rev", "approval"):
+            self.assertNotIn(absent, props)
+        # 'name' is present because project/machine fall back to the controller
+        self.assertEqual(props["name"], "C I/O")
+
+    def test_no_builtin_tokens_in_properties(self):
+        """author/title/date/filename/folio come from diagram attrs or QET, so
+        they must never be emitted as custom properties (would double up)."""
+        props = q.titleblock_properties(q.resolve_title_block_fields(
+            {**q.PROJECT_TEMPLATE_DEFAULTS, "drawn_by": "ES",
+             "date": "2026-06-13"}, "C"))
+        for builtin in ("author", "title", "date", "filename",
+                        "folio-id", "folio-total"):
+            self.assertNotIn(builtin, props)
+
+
+class TitleblockCustomTokensTest(unittest.TestCase):
+    def test_extracts_customs_and_excludes_builtins(self):
+        tpl = ('<x><value>%{owner}</value><value>%{author}</value>'
+               '<value>%{ref}</value><value>%{folio-id}/%{folio-total}</value>'
+               '<value>%{owner}</value></x>')   # owner repeated
+        toks = q.titleblock_custom_tokens(tpl)
+        self.assertIn("owner", toks)
+        self.assertIn("ref", toks)
+        self.assertEqual(toks.count("owner"), 1)            # de-duplicated
+        for builtin in ("author", "folio-id", "folio-total"):
+            self.assertNotIn(builtin, toks)
+
+    def test_real_template_tokens(self):
+        toks = q.titleblock_custom_tokens(q.load_titleblock_template())
+        # the ISO 7200 customs we must fill/blank
+        for t in ("department", "ref", "owner", "type", "status", "code",
+                  "name", "rev", "country", "approval"):
+            self.assertIn(t, toks)
+        # built-ins must be excluded
+        for b in ("author", "title", "date", "filename", "folio-id"):
+            self.assertNotIn(b, toks)
+
+
+class ApplyTitleblockTest(unittest.TestCase):
+    @staticmethod
+    def _diagram():
+        symbols = q.load_symbol_db()
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog="FAKE-NODB",
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pts = [SimpleNamespace(module=mod, index=0, tag="LS1", direction="I",
+                               description="", analog=False)]
+        project = ET.Element("project")
+        q.build_folio(project, 1, mod, pts, symbols, {}, {},
+                      wire_scheme="address", wire_counters={})
+        return project.find("diagram")
+
+    def _fields(self):
+        return q.resolve_title_block_fields({
+            **q.PROJECT_TEMPLATE_DEFAULTS, "company": "Exxerpro Solutions",
+            "drawn_by": "ES", "date": "2026-06-13", "revision": "00"}, "WADDING_1")
+
+    # the ISO 7200 custom fields the real template carries
+    TOKENS = ["department", "ref", "approval", "owner", "type", "status",
+              "code", "name", "rev", "country"]
+
+    def test_sets_native_titleblock_attributes(self):
+        d = self._diagram()
+        q.apply_titleblock(d, self._fields(), self.TOKENS, filename="WADDING_1")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        self.assertEqual(d.get("titleblocktemplateCollection"), "embedded")
+        self.assertEqual(d.get("displayAt"), "bottom")
+        self.assertEqual(d.get("date"), "20260613")     # static, compact
+        self.assertEqual(d.get("author"), "ES")
+        self.assertEqual(d.get("filename"), "WADDING_1")
+
+    def test_properties_block_is_first_child_with_values(self):
+        d = self._diagram()
+        q.apply_titleblock(d, self._fields(), self.TOKENS)
+        self.assertEqual(list(d)[0].tag, "properties")   # QET writes it first
+        props = {p.get("name"): p.text for p in d.find("properties")}
+        self.assertEqual(props["owner"], "Exxerpro Solutions")
+        self.assertEqual(props["rev"], "00")
+        self.assertEqual(props["name"], "WADDING_1 I/O")
+
+    def test_every_custom_token_gets_a_property_blank_if_no_data(self):
+        """The placeholder-leak fix: EVERY custom token must get a <property>
+        (empty when we have no value) so QET never renders the raw %{token}."""
+        d = self._diagram()
+        q.apply_titleblock(d, self._fields(), self.TOKENS)
+        props = {p.get("name"): (p.text or "") for p in d.find("properties")}
+        # every template token is present...
+        self.assertEqual(set(props), set(self.TOKENS))
+        # ...unfilled ones are empty strings, not missing / not a raw token
+        for blank in ("department", "type", "status", "code", "country", "ref"):
+            self.assertEqual(props[blank], "")
+
+    def test_does_not_touch_electrical_content(self):
+        """The title block must not alter <elements>/<conductors> — it only adds
+        attributes + a <properties> block."""
+        d = self._diagram()
+        before_el = ET.tostring(d.find("elements"))
+        before_co = ET.tostring(d.find("conductors"))
+        q.apply_titleblock(d, self._fields(), self.TOKENS)
+        self.assertEqual(ET.tostring(d.find("elements")), before_el)
+        self.assertEqual(ET.tostring(d.find("conductors")), before_co)
+
+
+class LoadTitleblockTemplateTest(unittest.TestCase):
+    def test_shipped_template_loads_as_text(self):
+        text = q.load_titleblock_template()      # default assets/exxerpro.titleblock
+        self.assertIsNotNone(text)
+        self.assertIn('<titleblocktemplate name="exxerpro"', text)
+        self.assertIn("<svg", text)              # the embedded SVG logo
+
+    def test_absent_file_returns_none(self):
+        self.assertIsNone(q.load_titleblock_template(
+            Path("nope-no-such.titleblock")))
+
+    def test_malformed_file_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "bad.titleblock"
+            p.write_text("<titleblocktemplate><not closed", encoding="utf-8")
+            self.assertIsNone(q.load_titleblock_template(p))
+
+
+class AttachTitleblocksTest(unittest.TestCase):
+    @staticmethod
+    def _project():
+        symbols = q.load_symbol_db()
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog="FAKE-NODB",
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pts = [SimpleNamespace(module=mod, index=0, tag="LS1", direction="I",
+                               description="", analog=False)]
+        project = ET.Element("project")
+        bom = []
+        q.build_folio(project, 1, mod, pts, symbols, {}, {},
+                      wire_scheme="address", wire_counters={}, bom_rows=bom)
+        q.build_summary_folios(project, 2, bom)
+        return project
+
+    def _fields(self):
+        return q.resolve_title_block_fields(
+            {**q.PROJECT_TEMPLATE_DEFAULTS, "company": "Exxerpro Solutions"},
+            "WADDING_1")
+
+    def test_references_template_from_every_folio(self):
+        project = self._project()
+        template = q.load_titleblock_template()
+        n = q.attach_titleblocks(project, self._fields(), template)
+        diagrams = project.findall("diagram")
+        self.assertEqual(n, len(diagrams))
+        for d in diagrams:                       # drawing AND summary folios
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+            self.assertIsNotNone(d.find("properties"))
+
+    def test_unavailable_template_is_a_clean_noop(self):
+        project = self._project()
+        n = q.attach_titleblocks(project, self._fields(), None)
+        self.assertEqual(n, 0)
+        for d in project.findall("diagram"):
+            self.assertIsNone(d.get("titleblocktemplate"))
+
+    def test_folio_geometry_unchanged_no_reserved_band(self):
+        """Native QET draws the block, so the folio keeps height 660 / rows 8 —
+        we did NOT reserve a band (the previous hand-drawn approach did)."""
+        d = self._project().find("diagram")
+        self.assertEqual(d.get("height"), "660")
+        self.assertEqual(d.get("rows"), "8")
+
+
+class EmbedTitleblockTemplatesTest(unittest.TestCase):
+    def test_template_injected_verbatim_after_project_tag(self):
+        xml = '<?xml version="1.0" ?>\n<project title="t" version="0.80">\n<diagram/>\n</project>\n'
+        template = '<titleblocktemplate name="exxerpro"><logos/></titleblocktemplate>\n'
+        out = q.embed_titleblock_templates(xml, template)
+        self.assertIn("<titleblocktemplates>", out)
+        # verbatim (not reserialized): the exact template text survives
+        self.assertIn('<titleblocktemplate name="exxerpro"><logos/></titleblocktemplate>',
+                      out)
+        # injected before the first diagram, after the project open tag
+        self.assertLess(out.index("<titleblocktemplates>"), out.index("<diagram/>"))
+
+    def test_real_template_svg_survives_byte_for_byte(self):
+        """The whole point of text injection: the embedded SVG logo is NOT
+        round-tripped through ElementTree (which would rewrite ns prefixes)."""
+        template = q.load_titleblock_template()
+        xml = '<project version="0.80">\n<diagram/>\n</project>\n'
+        out = q.embed_titleblock_templates(xml, template)
+        self.assertIn(template, out)             # exact substring -> verbatim
+
+
 if __name__ == "__main__":
     unittest.main()

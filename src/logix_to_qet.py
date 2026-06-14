@@ -167,6 +167,33 @@ def load_module_db(catalog: str) -> dict | None:
     db["_wiring_by_point"] = {w.get("point"): w for w in db.get("wiring", [])}
     return db
 
+
+PROJECT_TEMPLATE_PATH = Path(__file__).resolve().parent / "project_template.json"
+
+
+def load_project_template(path=PROJECT_TEMPLATE_PATH) -> dict:
+    """Load the cajetín (title-block) config, merged over the blank built-in
+    defaults. Mirrors load_module_db/load_symbol_db: stdlib json, utf-8-sig, and
+    a graceful fallback so a missing OR malformed file yields all-default fields
+    (every value a clean string, never garbage). Only string values for known
+    keys are taken; unknown keys are ignored and missing keys keep their blank
+    default, so the title block always has every field present."""
+    tmpl = dict(PROJECT_TEMPLATE_DEFAULTS)
+    p = Path(path)
+    if not p.is_file():
+        return tmpl
+    try:
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"warning: ignoring {p.name}: {exc}", file=sys.stderr)
+        return tmpl
+    if isinstance(data, dict):
+        for key in tmpl:
+            value = data.get(key)
+            if isinstance(value, str):
+                tmpl[key] = value
+    return tmpl
+
 # Terminal element embedded into the generated project (official QET
 # collection element 10_electric/10_allpole/130_terminals_terminal_strips/
 # borne_2.elmt, license: see http://qelectrotech.org/wiki/doc/elements_license)
@@ -213,6 +240,42 @@ ROW_Y0, ROW_DY = 100, 35    # first row y and per-point pitch
 POINTS_PER_COL = 16
 BOX_LEFT, BOX_RIGHT = 60, 10   # card box extents relative to terminal x
 PIN_PLACEHOLDER = "__"
+
+
+# ── Cajetín / title block (native QElectroTech ISO 7200) ─────────────────────
+# Instead of hand-drawing the title block, we use QElectroTech's own title-block
+# template mechanism. The project embeds the Exxerpro ISO 7200 template
+# (assets/exxerpro.titleblock — built by build_titleblock.py with the fitted SVG
+# logo) and every folio references it (titleblocktemplate=… displayAt="bottom"),
+# exactly the way QET writes it (cf. examples/iso_sfc_example.qet). QET then
+# renders the framed block, the SVG logo and the auto sheet number
+# %{folio-id}/%{folio-total} itself — no reserved band, the folio keeps its
+# height. Per-project values (company, drawing no., rev, date…) are supplied as
+# <property> entries on each diagram, keyed by the template's %{token} names.
+# Pure ISO 7200: no separate CLIENTE/REVISÓ cells. A missing template file
+# degrades gracefully to a valid project with no title block.
+TITLEBLOCK_PATH = (Path(__file__).resolve().parent.parent
+                   / "assets" / "exxerpro.titleblock")
+TITLEBLOCK_NAME = "exxerpro"
+
+# Built-in defaults used when project_template.json is absent or a field is
+# missing. Every value a clean string ("" -> a blank cell, never garbage).
+# 'project'/'machine' fall back to the parsed controller name at render time
+# (see resolve_title_block_fields), so they stay "" here.
+PROJECT_TEMPLATE_DEFAULTS = {
+    "company": "",
+    "company_logo": "",
+    "client": "",
+    "client_logo": "",
+    "project": "",
+    "machine": "",
+    "drawn_by": "",
+    "revised_by": "",
+    "approved_by": "",
+    "date": "",
+    "drawing_number": "",
+    "revision": "",
+}
 
 
 # ── BOM / device-index folio ────────────────────────────────────────────────
@@ -335,6 +398,137 @@ def add_rect(shapes: ET.Element, x1: int, y1: int, x2: int, y2: int,
     ET.SubElement(shape, "pen", {"color": "#000000", "widthF": width,
                                  "style": "SolidLine"})
     ET.SubElement(shape, "brush", {"color": "#000000", "style": "NoBrush"})
+
+
+def resolve_title_block_fields(tmpl: dict, controller: str) -> dict:
+    """Fill the render-time fallbacks the static template can't know: an unset
+    project title becomes '<controller> I/O' and an unset machine becomes the
+    controller name (both real, parsed data — never invented). Everything else
+    is taken verbatim from the loaded template."""
+    fields = dict(tmpl)
+    fields["project"] = tmpl.get("project") or f"{controller} I/O"
+    fields["machine"] = tmpl.get("machine") or controller
+    return fields
+
+
+def load_titleblock_template(path=TITLEBLOCK_PATH):
+    """Return the title-block template XML TEXT verbatim, or None if the file is
+    absent or not well-formed (graceful: the project then carries no title
+    block). We keep the raw text rather than an ElementTree element because the
+    embedded SVG logo declares many namespace prefixes (inkscape/sodipodi/xlink
+    …); round-tripping it through ElementTree would rewrite those and risk a
+    broken logo. The text is embedded verbatim by embed_titleblock_templates."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    text = p.read_text(encoding="utf-8")
+    try:
+        ET.fromstring(text)        # validate well-formed; keep the original text
+    except ET.ParseError as exc:
+        print(f"warning: ignoring {p.name}: {exc}", file=sys.stderr)
+        return None
+    return text
+
+
+def _yyyymmdd(date_str: str) -> str:
+    """'2026-06-13' -> '20260613' (QET diagram `date` attribute). Anything that
+    is not exactly eight digits degrades to 'null' (QET's empty-date sentinel),
+    never a malformed date."""
+    digits = re.sub(r"\D", "", date_str or "")
+    return digits if len(digits) == 8 else "null"
+
+
+# QET resolves these title-block tokens itself (from the diagram attributes or
+# the project), so they must NOT be emitted as custom <property> entries.
+TITLEBLOCK_BUILTIN_TOKENS = frozenset({
+    "author", "title", "date", "filename", "folio", "folio-id", "folio-total",
+    "projecttitle", "machine", "locmach", "plant", "id", "total", "version",
+    "indexrev", "date-creation",
+})
+
+
+def titleblock_custom_tokens(template_text: str) -> list:
+    """Ordered, unique list of the template's CUSTOM %{token} names — every
+    %{...} a field references, minus the QET built-ins. EVERY one must get a
+    <property> on the diagram (blank when we have no value) so QET never renders
+    the bare %{token} placeholder for an unfilled field."""
+    seen, out = set(), []
+    for tok in re.findall(r"%\{([^}]+)\}", template_text):
+        if tok in TITLEBLOCK_BUILTIN_TOKENS or tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
+
+
+def titleblock_properties(fields: dict) -> dict:
+    """Map our config fields onto the ISO 7200 template's CUSTOM %{token}
+    property names (pure ISO 7200 — no client/revised cells). Built-in tokens
+    (%{author}/%{title}/%{date}/%{filename}, %{folio-id}/%{folio-total}) are NOT
+    here: they come from the diagram attributes / QET itself. Blank values are
+    dropped here; apply_titleblock still emits an empty property for any custom
+    token without data, so it renders blank rather than as a raw placeholder."""
+    raw = {
+        "owner": fields.get("company", ""),         # EMPRESA / legal owner
+        "name": fields.get("project", ""),          # drawing name (project id)
+        "ref": fields.get("drawing_number", ""),    # PLANO N.º / reference
+        "rev": fields.get("revision", ""),          # REV
+        "approval": fields.get("approved_by", ""),  # APROBÓ
+    }
+    return {k: v for k, v in raw.items() if v}
+
+
+def apply_titleblock(diagram: ET.Element, fields: dict, custom_tokens: list,
+                     *, filename: str = ""):
+    """Point one diagram at the embedded template and supply its values the way
+    QElectroTech writes them: title-block attributes on the <diagram> (built-in
+    tokens) plus a <properties> block. EVERY custom token gets a property — our
+    value if we have one, else empty — so an unfilled ISO 7200 cell renders
+    blank, never as a raw %{token}. The date is the static config/release date,
+    deterministic, not 'today'."""
+    diagram.set("titleblocktemplate", TITLEBLOCK_NAME)
+    diagram.set("titleblocktemplateCollection", "embedded")
+    diagram.set("displayAt", "bottom")
+    diagram.set("date", _yyyymmdd(fields.get("date", "")))
+    diagram.set("author", fields.get("drawn_by", ""))
+    if filename:
+        diagram.set("filename", filename)
+    values = titleblock_properties(fields)
+    props = ET.Element("properties")
+    for token in custom_tokens:
+        ET.SubElement(props, "property",
+                      {"name": token, "show": "1"}).text = values.get(token, "")
+    diagram.insert(0, props)   # QET writes <properties> as the first diagram child
+
+
+def attach_titleblocks(project: ET.Element, fields: dict, template_text,
+                       *, filename: str = "") -> int:
+    """Reference the embedded template from EVERY folio (per-diagram attributes
+    + <properties>). The template element itself is injected verbatim as text
+    afterwards (embed_titleblock_templates), to preserve the SVG. Returns the
+    number of folios stamped, or 0 when no template is available (graceful
+    degradation — a valid project with no title block)."""
+    if template_text is None:
+        return 0
+    custom_tokens = titleblock_custom_tokens(template_text)
+    diagrams = project.findall("diagram")
+    for diagram in diagrams:
+        apply_titleblock(diagram, fields, custom_tokens, filename=filename)
+    return len(diagrams)
+
+
+def embed_titleblock_templates(project_xml: str, template_text: str) -> str:
+    """Inject <titleblocktemplates>…</titleblocktemplates> verbatim as the first
+    child of <project> (right after the serialized open tag), so the embedded
+    SVG logo is preserved exactly. String surgery, not ElementTree, on purpose
+    (see load_titleblock_template)."""
+    m = re.search(r"<project\b[^>]*>", project_xml)
+    if not m:
+        return project_xml
+    i = m.end()
+    block = ("\n  <titleblocktemplates>\n" + template_text
+             + "  </titleblocktemplates>")
+    return project_xml[:i] + block + project_xml[i:]
 
 
 def _add_element(elements: ET.Element, type_path: str, x: int, y: int,
@@ -726,7 +920,12 @@ def main(argv=None):
     # so each folio numbers its own field conductors from 1 (sequential scheme)
     wire_counters: dict[int, int] = {}
 
-    project = ET.Element("project", {"title": f"{controller} I/O", "version": "0.80"})
+    # cajetín / title-block fields: project_template.json merged over blank
+    # defaults, with project/machine falling back to the parsed controller name
+    tb_fields = resolve_title_block_fields(load_project_template(), controller)
+
+    project = ET.Element("project",
+                         {"title": tb_fields["project"], "version": "0.80"})
     order = 1
     folios = 0
     # BOM rows accumulated DURING the folio/point traversal below (no second
@@ -746,6 +945,14 @@ def main(argv=None):
     # summary folio(s) come AFTER the drawing folios (order continues past
     # them); the drawing folios' XML is untouched.
     summary_folios = build_summary_folios(project, order, bom_rows)
+    # cajetín: reference the ISO 7200 template from EVERY folio (drawing +
+    # summary). QET renders the framed block + SVG logo + auto sheet number
+    # itself; values (company, drawing no., rev, static date…) ride along as
+    # per-diagram attributes/properties. The template element is injected
+    # verbatim into the serialized XML further down (preserves the SVG).
+    template_text = load_titleblock_template()
+    page_total = attach_titleblocks(project, tb_fields, template_text,
+                                    filename=Path(out_path).stem)
     used = [e for e in symbols if e["id"] in sym_counts]
     build_collection(project, used)
 
@@ -757,6 +964,9 @@ def main(argv=None):
         .toprettyxml(indent="    ")
     # drop blank lines minidom likes to add around preserved text nodes
     pretty = "\n".join(l for l in pretty.splitlines() if l.strip())
+    # inject the title-block template verbatim (the SVG must not be reserialized)
+    if template_text:
+        pretty = embed_titleblock_templates(pretty, template_text)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(pretty + "\n")
 
@@ -776,6 +986,12 @@ def main(argv=None):
     n_gen = sum(1 for r in bom_rows if r["category"] == "generic")
     print(f"bom        : {len(bom_rows)} rows ({n_mod} module, {n_dev} device, "
           f"{n_gen} generic) over {summary_folios} summary folio(s)", file=err)
+    if page_total:
+        print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
+              f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",
+              file=err)
+    else:
+        print(f"title block: none ({TITLEBLOCK_PATH.name} absent)", file=err)
     print(f"output     : {out_path}", file=err)
     print(f"bom csv    : {bom_path}", file=err)
     return 0
