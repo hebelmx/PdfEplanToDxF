@@ -29,11 +29,21 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | DA.6 | Hide schematic grid rulers (0–16 / A–H) on the non-schematic list/front-matter folios — they drew tables "out of the box" over the rulers | `done` `7b2151b` | — (review fix) |
 | DA.7 | Lift the card header so the inline power band stops overprinting the sub-header on I/O drawings | `done` | — (review fix) |
 | DA.5c | prev/next continuation refs ("viene de / sigue en") | `done` `c2ba9b7` | Hand-writing the continuation references |
+| DA.8 | PDF-review layout fixes (power table top-right; símbología 2 columns; remove struck-through header rules; lift Alimentación rail labels) | `review` `95515a5` | Hand-fixing each readability defect after a print review |
 
 - **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
   WADDING_1 now emits **27 folios** in the gated order: Portada → Simbología →
   Alimentación → drawings (101–110) → borneros (200–209) → BOM (300–302) →
-  Historial (900). Full suite **180 tests** green (DA.5c continuation refs added).
+  Historial (900). Full suite **185 tests** green (DA.5c + DA.8 review fixes).
+- **DA.8 (review fixes, `95515a5`, status `review` pending Abel's re-eyeball):**
+  from Abel's QET/PDF review — (F1) the inline power band overlapped on
+  multi-group cards → moved to a boxed table in the clear top-right corner
+  (gated choice; text+box only, no terminal element); (F2) símbología ran
+  symbols off the page into the cajetín → 2 columns/folio + pagination; (F3)
+  the header rule struck through the header text on símbología/bornero/BOM/
+  historial → removed; (F4) Alimentación rail labels touched their lines →
+  lifted 22px clear. Floor + 27 folios unchanged; geometry re-verified from
+  the generated .qet.
 - **DA.1 decision:** extract Abel's newest embedded template (82KB) from
   `Fixtures/WADDING_1.qet` into the committed asset (76KB, stale, older logo SVG).
 - **Gated decisions (2026-06-14):** section page scheme = sectioned-with-gaps
