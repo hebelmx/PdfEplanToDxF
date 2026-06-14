@@ -1334,6 +1334,247 @@ class SupplyFolioTest(unittest.TestCase):
         self.assertIsNotNone(d.find("properties"))
 
 
+def _mod(rack, parent, slot=0, name=None, points=16):
+    """A minimal module stand-in for the grounding/chassis tests."""
+    return SimpleNamespace(rack=rack, parent=parent, slot=slot,
+                           name=name or f"M{rack}{slot}", catalog="FAKE",
+                           kind="DI", points=points)
+
+
+class GroupChassisTest(unittest.TestCase):
+    """T3.4: group_chassis groups I/O modules into chassis (= distinct rack),
+    sorted by rack, with the identity DERIVED from the parsed data — never an
+    invented friendly name."""
+
+    def test_real_fixture_yields_two_chassis_with_right_labels(self):
+        fixture = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+        if not fixture.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+        import logix_to_eplan_csv as l2e
+        _, modules, _, _ = l2e.load_l5x(str(fixture))
+        io_mods = l2e.assign_racks_and_addresses(modules)
+        chassis = q.group_chassis(io_mods)
+        self.assertEqual(len(chassis), 2)
+        self.assertEqual(chassis[0]["rack"], 1)
+        self.assertEqual(chassis[0]["parent"], "Local")
+        self.assertEqual(chassis[0]["count"], 6)
+        self.assertEqual(chassis[0]["label"], "Chasis R1 (Local)")
+        self.assertEqual(chassis[1]["rack"], 2)
+        self.assertEqual(chassis[1]["parent"], "RIO_RCP")
+        self.assertEqual(chassis[1]["count"], 5)
+        self.assertEqual(chassis[1]["label"], "Chasis R2 (RIO_RCP)")
+
+    def test_sorted_by_rack_and_counts_modules(self):
+        mods = [_mod(2, "RIO"), _mod(1, "Local"), _mod(1, "Local"), _mod(2, "RIO")]
+        chassis = q.group_chassis(mods)
+        self.assertEqual([c["rack"] for c in chassis], [1, 2])
+        self.assertEqual([c["count"] for c in chassis], [2, 2])
+
+    def test_empty_input_yields_no_chassis(self):
+        self.assertEqual(q.group_chassis([]), [])
+        self.assertEqual(q.group_chassis(None), [])
+
+
+class GroundingPageMathTest(unittest.TestCase):
+    """T3.4 numbering: the power+grounding block floats just below the card
+    drawings band. supply_order = 100 - n_grounding; grounding folios take
+    supply_order+1 .. 100; the drawings stay fixed at 101. Backward-compatible:
+    n_grounding=0 ⇒ supply_order=100 (unchanged)."""
+
+    def test_two_chassis_places_supply_98_grounding_99_100_drawings_101(self):
+        n_grounding = 2
+        supply_order = q.SECTION_SUPPLY - n_grounding
+        self.assertEqual(supply_order, 98)
+        grounding_orders = list(range(supply_order + 1, q.SECTION_SUPPLY + 1))
+        self.assertEqual(grounding_orders, [99, 100])
+        self.assertEqual(q.SECTION_DRAWINGS, 101)   # cards unchanged
+
+    def test_zero_chassis_keeps_supply_at_100(self):
+        n_grounding = 0
+        self.assertEqual(q.SECTION_SUPPLY - n_grounding, 100)
+
+
+class GroundingFolioTest(unittest.TestCase):
+    """T3.4: each chassis grounding folio is VISUAL-only (text + shape primitives,
+    empty <elements>/<conductors>), drawn inside the page frame with labels lifted
+    clear of their lines, gauges configurable via the project_template."""
+
+    def _gauges(self):
+        return dict(q.PROJECT_TEMPLATE_DEFAULTS["grounding"])
+
+    def test_builds_one_folio_per_chassis(self):
+        mods = [_mod(1, "Local"), _mod(2, "RIO")]
+        project = ET.Element("project")
+        n = q.build_grounding_folios(project, 99, mods, self._gauges())
+        self.assertEqual(n, 2)
+        diags = project.findall("diagram")
+        self.assertEqual([d.get("order") for d in diags], ["99", "100"])
+        for d in diags:
+            self.assertTrue(d.get("title").startswith("Puesta a tierra — Chasis"))
+
+    def test_empty_io_mods_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_grounding_folios(project, 99, [], self._gauges()), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+
+    def test_spanish_labels_present(self):
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        d = project.find("diagram")
+        texts = " | ".join(i.get("text") for i in d.find("inputs").findall("input"))
+        self.assertIn("Tierra funcional (FE)", texts)
+        self.assertIn("Tierra de protección (PE)", texts)
+        self.assertIn("Barra de tierra", texts)
+        self.assertIn("Sistema de electrodos de tierra", texts)
+        self.assertIn("Chasis R1 (Local)", texts)
+
+    def test_module_count_label_uses_real_count(self):
+        project = ET.Element("project")
+        mods = [_mod(1, "Local"), _mod(1, "Local"), _mod(1, "Local")]
+        q.build_grounding_folios(project, 99, mods, self._gauges())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("3 módulos", texts)
+
+    def test_full_extent_inside_page_frame(self):
+        # Assert the FULL extent (chassis box corners, FE/PE leads, ground bus,
+        # electrode) lies inside the real page frame — not a single hotspot.
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        d = project.find("diagram")
+        xs, ys = [], []
+        for s in d.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in d.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), 1010)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)   # 660
+
+    def test_labels_lifted_clear_of_their_lines(self):
+        # The FE/PE/bus/electrode labels must NOT sit on the line they name. The
+        # bus label sits a clear gap ABOVE the bus bar; the chassis label above
+        # the box top edge; the FE/PE gauge labels beside (not on) their leads.
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        d = project.find("diagram")
+        ins = {i.get("text"): (float(i.get("x")), float(i.get("y")))
+               for i in d.find("inputs").findall("input")}
+        # bus label clear above the bus bar
+        bus_label_y = ins["Barra de tierra"][1]
+        self.assertLessEqual(bus_label_y + 10, q.GND_BUS_Y)
+        # chassis label clear above the box top edge
+        self.assertLessEqual(ins["Chasis R1 (Local)"][1] + 10, q.GND_BOX_Y1)
+        # FE/PE leads run at GND_FE_X/GND_PE_X; their labels are offset to the
+        # RIGHT (x+10), so the label x is strictly past the lead x.
+        self.assertGreater(ins["Tierra funcional (FE)"][0], q.GND_FE_X)
+        self.assertGreater(ins["Tierra de protección (PE)"][0], q.GND_PE_X)
+
+    def test_gauge_defaults_appear_on_folio(self):
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        g = q.PROJECT_TEMPLATE_DEFAULTS["grounding"]
+        self.assertIn(g["fe_gauge"], texts)
+        self.assertIn(g["pe_gauge"], texts)
+        self.assertIn(g["electrode_gauge"], texts)
+
+    def test_gauge_override_changes_rendered_text(self):
+        gauges = {"fe_gauge": "6 AWG (FE-X)", "pe_gauge": "12 AWG (PE-X)",
+                  "electrode_gauge": "4 AWG (EL-X)"}
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], gauges)
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("6 AWG (FE-X)", texts)
+        self.assertIn("12 AWG (PE-X)", texts)
+        self.assertIn("4 AWG (EL-X)", texts)
+        # the defaults must be GONE when overridden
+        self.assertNotIn(q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["fe_gauge"], texts)
+
+    def test_default_gauges_used_when_omitted(self):
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")])   # no gauges
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn(q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["fe_gauge"], texts)
+
+    def test_inherits_titleblock_and_no_token_leak(self):
+        project = ET.Element("project")
+        q.build_grounding_folios(project, 99, [_mod(1, "Local")], self._gauges())
+        fields = q.resolve_title_block_fields(
+            {**{k: v for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items()
+                if isinstance(v, str)}, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        d = project.find("diagram")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        for prop in d.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+
+
+class LoadProjectTemplateGroundingTest(unittest.TestCase):
+    """T3.4: the nested 'grounding' object merges gracefully — string sub-values
+    override, missing/absent/malformed entries keep the documented defaults, and
+    an override never mutates the shared module-level default."""
+
+    def _write(self, d, text):
+        p = Path(d) / "project_template.json"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_absent_file_keeps_grounding_defaults(self):
+        tmpl = q.load_project_template(Path("does-not-exist-anywhere.json"))
+        self.assertEqual(tmpl["grounding"],
+                         q.PROJECT_TEMPLATE_DEFAULTS["grounding"])
+
+    def test_partial_override_merges_per_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"grounding": {"fe_gauge": "6 AWG custom"}}')
+            tmpl = q.load_project_template(p)
+            self.assertEqual(tmpl["grounding"]["fe_gauge"], "6 AWG custom")
+            # the two un-overridden keys keep their defaults
+            self.assertEqual(tmpl["grounding"]["pe_gauge"],
+                             q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["pe_gauge"])
+            self.assertEqual(
+                tmpl["grounding"]["electrode_gauge"],
+                q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["electrode_gauge"])
+
+    def test_non_string_subvalues_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"grounding": {"fe_gauge": 7, "pe_gauge": "ok"}}')
+            tmpl = q.load_project_template(p)
+            self.assertEqual(tmpl["grounding"]["fe_gauge"],
+                             q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["fe_gauge"])
+            self.assertEqual(tmpl["grounding"]["pe_gauge"], "ok")
+
+    def test_malformed_grounding_block_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"grounding": "not a dict"}')
+            tmpl = q.load_project_template(p)
+            self.assertEqual(tmpl["grounding"],
+                             q.PROJECT_TEMPLATE_DEFAULTS["grounding"])
+
+    def test_override_does_not_mutate_shared_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, '{"grounding": {"fe_gauge": "MUTANT"}}')
+            q.load_project_template(p)
+            # the module-level default must be untouched by the override
+            self.assertNotEqual(
+                q.PROJECT_TEMPLATE_DEFAULTS["grounding"]["fe_gauge"], "MUTANT")
+
+
 class SymbolDisplayNameTest(unittest.TestCase):
     """DA.4: localized name pulled from the embedded .elmt <names>, language
     agnostic with a graceful fallback chain (lang → en → any → description → id),
@@ -1618,6 +1859,64 @@ class WaddingRegressionTest(unittest.TestCase):
         titles = [d.get("title") for d in root.findall("diagram")]
         self.assertTrue(any("revisiones" in (t or "").lower() for t in titles))
         self.assertTrue(any("BOM" in (t or "") for t in titles))
+
+    def test_grounding_folios_present_clean_and_numbered(self):
+        # T3.4: 2 chassis grounding folios at orders 99 & 100, Alimentación
+        # floated down to 98, and the card drawings STILL at order 101 (cards
+        # unchanged). Each grounding folio is visual-only and title-blocked.
+        root, _, err = self._run()
+        diagrams = root.findall("diagram")
+        gnd = [d for d in diagrams
+               if (d.get("title") or "").startswith("Puesta a tierra")]
+        self.assertEqual(len(gnd), 2)
+        self.assertEqual(sorted(int(d.get("order")) for d in gnd), [99, 100])
+        # Alimentación floated to 98
+        ali = [d for d in diagrams if d.get("title") == "Alimentación"]
+        self.assertEqual(len(ali), 1)
+        self.assertEqual(ali[0].get("order"), "98")
+        # the card drawings are UNCHANGED at order 101 (first drawing folio)
+        draw_orders = sorted(int(d.get("order")) for d in diagrams
+                             if (d.get("title") or "").startswith("R"))
+        self.assertEqual(draw_orders[0], 101)
+        # the floor is still 106 drawn / 75 matched (parsed from main()'s summary)
+        self.assertEqual(int(re.search(r"points\s*:\s*(\d+)\s+drawn",
+                                       err).group(1)), 106)
+        self.assertEqual(int(re.search(r"symbols\s*:\s*(\d+)\s+matched",
+                                       err).group(1)), 75)
+        for d in gnd:
+            self.assertEqual(len(d.find("elements").findall("element")), 0)
+            self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+            # the chassis identity is derived from the L5X (rack + adapter), not
+            # an invented Spanish friendly name
+            self.assertRegex(d.get("title"),
+                             r"Chasis R\d+ \((Local|RIO_RCP)\)")
+
+    def test_two_column_card_right_column_spare_extent_inside_frame(self):
+        # Optional positional assertion (folds in a review finding): on a
+        # two-column card the right column's drawn content (incl. the right-column
+        # strip terminal extent COL_X[1]+STRIP_X_OFF+10) and the power-table band
+        # (POWER_TABLE_LEFT..) must both stay inside the real page frame (≈1010).
+        # The two bands may share x but never collide (the power table sits ABOVE
+        # the I/O rows in y); this asserts the frame containment that matters.
+        root, _, _ = self._run()
+        right_x = q.COL_X[1]
+        strip_right = right_x + q.STRIP_X_OFF + 10
+        # the power table band starts at POWER_TABLE_LEFT and runs to the frame
+        for d in root.findall("diagram"):
+            if not (d.get("title") or "").startswith("R"):
+                continue
+            shapes = d.find("shapes").findall("shape")
+            if any(abs(float(s.get("x1")) - right_x) < 5 for s in shapes):
+                # found a two-column card: assert both bands sit on-sheet
+                self.assertLess(strip_right, 1010)
+                self.assertLess(q.POWER_TABLE_LEFT, 1010)
+                # every shape on this folio is inside the frame width
+                xs = [float(s.get(k)) for s in shapes for k in ("x1", "x2")]
+                self.assertLessEqual(max(xs), 1010)
+                self.assertGreaterEqual(min(xs), 0)
+                return
+        self.skipTest("no two-column card in fixture")
 
     def test_title_block_on_every_folio_no_raw_token_leak(self):
         root, xml, _ = self._run()

@@ -239,6 +239,9 @@ def load_project_template(path=PROJECT_TEMPLATE_PATH) -> dict:
     changelog; unknown keys are ignored and missing keys keep their default."""
     tmpl = dict(PROJECT_TEMPLATE_DEFAULTS)
     tmpl["revisions"] = []
+    # fresh copy of the nested grounding dict so an override never mutates the
+    # shared module-level default (T3.4)
+    tmpl["grounding"] = dict(PROJECT_TEMPLATE_DEFAULTS["grounding"])
     p = Path(path)
     if not p.is_file():
         return tmpl
@@ -248,12 +251,25 @@ def load_project_template(path=PROJECT_TEMPLATE_PATH) -> dict:
         print(f"warning: ignoring {p.name}: {exc}", file=sys.stderr)
         return tmpl
     if isinstance(data, dict):
-        for key in PROJECT_TEMPLATE_DEFAULTS:
+        for key, default in PROJECT_TEMPLATE_DEFAULTS.items():
+            # "grounding" is a nested dict, merged separately below — never as a
+            # flat string field (a stray string there must not clobber it).
+            if not isinstance(default, str):
+                continue
             value = data.get(key)
             if isinstance(value, str):
                 tmpl[key] = value
         if isinstance(data.get("revisions"), list):
             tmpl["revisions"] = data["revisions"]
+        # nested "grounding" object (T3.4): merge GRACEFULLY — take only string
+        # sub-values for the known gauge keys, keep the default for any missing /
+        # absent / malformed entry. A non-dict "grounding" is ignored entirely.
+        g_over = data.get("grounding")
+        if isinstance(g_over, dict):
+            for gkey in PROJECT_TEMPLATE_DEFAULTS["grounding"]:
+                gval = g_over.get(gkey)
+                if isinstance(gval, str):
+                    tmpl["grounding"][gkey] = gval
     return tmpl
 
 # Terminal element embedded into the generated project (official QET
@@ -372,6 +388,16 @@ PROJECT_TEMPLATE_DEFAULTS = {
     "date": "",
     "drawing_number": "",
     "revision": "",
+    # T3.4 chassis-grounding gauges (standard reference values from Allen-Bradley
+    # 1756-IN621 pp.12-14 — documented manual spec used as configurable defaults,
+    # NOT per-site invented data). Overridable via a nested "grounding" object in
+    # project_template.json (see load_project_template). A nested dict, so it is
+    # merged separately from the flat string fields above.
+    "grounding": {
+        "fe_gauge": "8 AWG (8.3 mm²)",
+        "pe_gauge": "14 AWG (2.1 mm², 1.35 N·m)",
+        "electrode_gauge": "mín. 8 AWG (8.3 mm²)",
+    },
 }
 
 
@@ -1328,6 +1354,161 @@ def build_supply_folios(project: ET.Element, start_order: int,
     return 1
 
 
+# ── Chassis grounding folio ('Puesta a tierra'), ONE PER CHASSIS (T3.4) ───────
+# A dedicated infrastructure sheet PER CHASSIS, modelled on Allen-Bradley
+# 1756-IN621 pp.12-14 ("Grounding Configuration Example"). Like the supply folio
+# it is VISUAL only — text + shape primitives, empty <elements>/<conductors> — so
+# it inherits the title block and adds zero element/conductor instances (zero
+# floor impact). Each chassis is drawn as a labelled box with two earth studs:
+# a Functional Earth (FE) and a Protective Earth (PE), each running on a lead
+# (labelled with its gauge) down to a horizontal Ground Bus ('Barra de tierra'),
+# from which a further lead drops to the ground-electrode system ('Sistema de
+# electrodos de tierra'), drawn as the standard earth symbol (a stack of three
+# decreasing horizontal bars). Chassis identity + gauges are DERIVED from the
+# parsed L5X / project_template — never invented friendly names.
+GROUNDING_TITLE_PREFIX = "Puesta a tierra"
+GROUNDING_FE_LABEL = "Tierra funcional (FE)"
+GROUNDING_PE_LABEL = "Tierra de protección (PE)"
+GROUNDING_BUS_LABEL = "Barra de tierra"
+GROUNDING_ELECTRODE_LABEL = "Sistema de electrodos de tierra"
+
+# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). Chassis box up top,
+# FE+PE studs drop to the Ground Bus across the middle, electrode symbol at the
+# bottom. Every text label is LIFTED clear of its line (y-offset), per the DA.8
+# repo lesson — a line must never strike through its label.
+GND_BOX_X1, GND_BOX_Y1 = 120, 80      # chassis box top-left
+GND_BOX_X2, GND_BOX_Y2 = 640, 200     # chassis box bottom-right
+GND_FE_X = 240                        # FE stud / lead x
+GND_PE_X = 520                        # PE stud / lead x
+GND_STUD_Y = GND_BOX_Y2               # studs sit on the box bottom edge
+GND_BUS_Y = 380                       # Ground Bus y (horizontal bar)
+GND_BUS_X1, GND_BUS_X2 = 120, 640     # Ground Bus extent
+GND_ELEC_X = 380                      # electrode lead / symbol centre x
+GND_ELEC_TOP_Y = 470                  # top of the electrode symbol stack
+GND_ELEC_DY = 18                      # vertical pitch between earth bars
+GND_ELEC_HALF = (70, 45, 22)         # half-widths of the 3 decreasing bars
+
+
+def group_chassis(io_mods) -> list:
+    """Group I/O modules into chassis for the grounding folios. A chassis is a
+    distinct `rack` among the modules; data-driven, sorted by rack. Returns a
+    list of dicts (one per chassis) with the derived identity — NEVER invented
+    friendly names: `rack` (int), `parent` (the modules' common adapter string
+    from the L5X, joined if a rack somehow mixes parents), `count` (module count)
+    and `label` ('Chasis R<rack> (<parent>)'). Pure and deterministic."""
+    by_rack: dict = {}
+    for m in io_mods or []:
+        by_rack.setdefault(m.rack, []).append(m)
+    chassis = []
+    for rack in sorted(by_rack, key=lambda r: (r is None, r)):
+        mods = by_rack[rack]
+        # common parent adapter string(s); preserve first-seen order, de-duped
+        parents = list(dict.fromkeys(
+            str(getattr(mm, "parent", "") or "") for mm in mods))
+        parents = [p for p in parents if p]
+        parent = " / ".join(parents) if parents else ""
+        label = f"Chasis R{rack}" + (f" ({parent})" if parent else "")
+        chassis.append({
+            "rack": rack, "parent": parent, "count": len(mods),
+            "label": label, "modules": mods,
+        })
+    return chassis
+
+
+def _add_grounding_diagram(project: ET.Element, order: int, chassis: dict,
+                           gauges: dict) -> ET.Element:
+    """Render ONE chassis grounding folio (text + shape primitives only, empty
+    <elements>/<conductors>). Draws the chassis box (labelled with the derived
+    identity + module count), the FE & PE studs and their gauge-labelled leads
+    down to the Ground Bus, and the lead from the bus to the ground-electrode
+    symbol. `chassis` is one entry from group_chassis; `gauges` carries
+    fe_gauge/pe_gauge/electrode_gauge strings (from project_template)."""
+    fe_gauge = gauges.get("fe_gauge", "")
+    pe_gauge = gauges.get("pe_gauge", "")
+    electrode_gauge = gauges.get("electrode_gauge", "")
+    title = f"{GROUNDING_TITLE_PREFIX} — {chassis['label']}"
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": title,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    # folio header (lifted near the top frame)
+    add_text(inputs, GND_BOX_X1, 30, title.upper(), FONT_HEADER)
+
+    # chassis box + identity labels (lifted ABOVE the box top edge)
+    add_rect(shapes, GND_BOX_X1, GND_BOX_Y1, GND_BOX_X2, GND_BOX_Y2)
+    add_text(inputs, GND_BOX_X1, GND_BOX_Y1 - 22, chassis["label"], FONT_TEXT)
+    add_text(inputs, GND_BOX_X1, GND_BOX_Y1 - 6,
+             f"{chassis['count']} módulos", FONT_SMALL)
+
+    # FE + PE studs (small rects on the box bottom edge) and their leads (thin
+    # 2-px-tall vertical rects) running down to the Ground Bus. Labels lifted to
+    # the LEFT of each lead, between the box and the bus, never on the line.
+    for stud_x, stud_label, gauge in (
+            (GND_FE_X, GROUNDING_FE_LABEL, fe_gauge),
+            (GND_PE_X, GROUNDING_PE_LABEL, pe_gauge)):
+        # stud: a small solid-ish rect straddling the box bottom edge
+        add_rect(shapes, stud_x - 4, GND_STUD_Y - 4, stud_x + 4, GND_STUD_Y + 4)
+        # lead: a thin vertical rect from the stud down to the bus
+        add_rect(shapes, stud_x, GND_STUD_Y, stud_x + 2, GND_BUS_Y)
+        # labels lifted to the right of the lead, clear of the line
+        ymid = (GND_STUD_Y + GND_BUS_Y) // 2
+        add_text(inputs, stud_x + 10, ymid - 12, stud_label, FONT_SMALL)
+        add_text(inputs, stud_x + 10, ymid + 4, gauge, FONT_SMALL)
+
+    # Ground Bus: a horizontal bar (thin rect) the FE + PE leads land on.
+    add_rect(shapes, GND_BUS_X1, GND_BUS_Y, GND_BUS_X2, GND_BUS_Y + 4)
+    add_text(inputs, GND_BUS_X1, GND_BUS_Y - 18, GROUNDING_BUS_LABEL, FONT_TEXT)
+
+    # lead from the bus down to the ground-electrode symbol, labelled with the
+    # electrode gauge (min 8 AWG)
+    add_rect(shapes, GND_ELEC_X, GND_BUS_Y, GND_ELEC_X + 2, GND_ELEC_TOP_Y)
+    add_text(inputs, GND_ELEC_X + 10, (GND_BUS_Y + GND_ELEC_TOP_Y) // 2 - 8,
+             electrode_gauge, FONT_SMALL)
+
+    # ground-electrode symbol: the standard earth glyph — a stack of 3 decreasing
+    # horizontal bars centred on the lead.
+    cx = GND_ELEC_X + 1
+    for i, half in enumerate(GND_ELEC_HALF):
+        y = GND_ELEC_TOP_Y + i * GND_ELEC_DY
+        add_rect(shapes, cx - half, y, cx + half, y + 2)
+    # electrode label lifted clear BELOW the symbol stack
+    elec_bottom = GND_ELEC_TOP_Y + (len(GND_ELEC_HALF) - 1) * GND_ELEC_DY
+    add_text(inputs, GND_BOX_X1, elec_bottom + 24,
+             GROUNDING_ELECTRODE_LABEL, FONT_TEXT)
+    return diagram
+
+
+def build_grounding_folios(project: ET.Element, start_order: int,
+                           io_mods=None, gauges=None) -> int:
+    """Append ONE chassis grounding folio per distinct rack/chassis found in
+    `io_mods`, at orders start_order, start_order+1, … in rack order. Mirrors
+    build_supply_folios: text + shape primitives only (empty
+    <elements>/<conductors>), zero floor impact. `gauges` is the grounding gauge
+    dict (fe_gauge/pe_gauge/electrode_gauge) from the loaded project_template;
+    falls back to the documented defaults if omitted. Returns the count appended
+    (= number of distinct chassis; 0 when there are no I/O modules)."""
+    if gauges is None:
+        gauges = dict(PROJECT_TEMPLATE_DEFAULTS["grounding"])
+    chassis_list = group_chassis(io_mods)
+    for n, chassis in enumerate(chassis_list):
+        _add_grounding_diagram(project, start_order + n, chassis, gauges)
+    return len(chassis_list)
+
+
 # ── Dedicated terminal-strip (bornero) folio, one per card ───────────────────
 # A classic EPLAN strip sheet: one folio per I/O card listing that card's strip
 # '-X1' and every terminal on it (-X1:0 … -X1:n) in drawn order, so the engineer
@@ -1831,9 +2012,21 @@ def main(argv=None):
     # Simbología (symbol legend) — one row per used symbol type (glyph + name);
     # sorts right after the cover (section page 1).
     symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)
+    # Power+grounding block FLOATS just below the card drawings band (T3.4): one
+    # grounding folio per chassis (= distinct rack), so the supply order is
+    # COMPUTED as 100 - n_grounding. Alimentación sits first, then the grounding
+    # folios at supply_order+1 .. 100. Backward-compatible: n_grounding=0 ⇒
+    # supply_order = 100 (unchanged). The card drawings stay fixed at 101..110.
+    n_grounding = len(group_chassis(io_mods))
+    supply_order = SECTION_SUPPLY - n_grounding
     # supply-rail folio ('Alimentación') — draws the rails the cards' power
     # blocks reference; sits before the card drawings in the final order.
-    supply_folios = build_supply_folios(project, SECTION_SUPPLY, io_mods)
+    supply_folios = build_supply_folios(project, supply_order, io_mods)
+    # chassis grounding folios ('Puesta a tierra') — one per chassis, at
+    # supply_order+1 .. 100, just below the drawings band. Gauges come from the
+    # loaded project_template's grounding block (documented manual defaults).
+    grounding_folios = build_grounding_folios(
+        project, supply_order + 1, io_mods, tmpl.get("grounding"))
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -1905,8 +2098,10 @@ def main(argv=None):
           f"folio(s)", file=err)
     print(f"changelog  : {len(revisions)} revision(s) over "
           f"{changelog_folios} folio(s)", file=err)
-    print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s)",
-          file=err)
+    print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s) "
+          f"(order {supply_order})", file=err)
+    print(f"grounding  : {grounding_folios} '{GROUNDING_TITLE_PREFIX}' chassis "
+          f"folio(s) (orders {supply_order + 1}..{SECTION_SUPPLY})", file=err)
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
           f"folio(s), mapped + RESERVA in channel order", file=err)
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
