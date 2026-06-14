@@ -21,15 +21,30 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | # | Item | Status | Manual step removed |
 |---|------|--------|---------------------|
 | DA.1 | Title-block template sync (extract newest from saved `.qet` → `assets/exxerpro.titleblock`) | `done` `44b52e0` | Re-applying the current cajetín template by hand |
-| DA.2 | Reorder folios to natural drawing order | `todo` | Hand-resorting the set out of dev-order into drawing-order |
-| DA.3 | Portada (cover) folio with project data | `todo` | Hand-drawing the cover sheet |
-| DA.4 | Simbología (symbol legend) folio | `todo` | Hand-drawing the symbology legend |
-| DA.5 | Section page numbering with gaps + prev/next continuation refs | `todo` (scheme to gate) | Hand-numbering with section gaps + "viene de / sigue en" refs |
+| DA.2 | Reorder folios to natural drawing order | `done` `5fa2e4d` | Hand-resorting the set out of dev-order into drawing-order |
+| DA.3 | Portada (cover) folio with project data | `done` `2db8219` | Hand-drawing the cover sheet |
+| DA.4 | Simbología (symbol legend) folio | `done` `39cdd5c` | Hand-drawing the symbology legend |
+| DA.5a | Designations follow the printed section page (-K101.x … -K110.x) | `done` `5fa2e4d` | — |
+| DA.5b | DISPLAYED sectioned page number (000/001/100…) in the cajetín | `review` (needs QET eyeball) | Hand-numbering the cajetín with section gaps |
+| DA.5c | prev/next continuation refs ("viene de / sigue en") | `todo` | Hand-writing the continuation references |
 
 - **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
+  WADDING_1 now emits **27 folios** in the gated order: Portada → Simbología →
+  Alimentación → drawings (101–110) → borneros (200–209) → BOM (300–302) →
+  Historial (900). Full suite **164 tests** green.
 - **DA.1 decision:** extract Abel's newest embedded template (82KB) from
   `Fixtures/WADDING_1.qet` into the committed asset (76KB, stale, older logo SVG).
-- **DA.5 still needs gating:** gap size, section boundaries, prev/next ref format.
+- **Gated decisions (2026-06-14):** section page scheme = sectioned-with-gaps
+  (000/001/100/101–110/200+/300+/900); designations FOLLOW the printed page
+  (Abel's choice, overriding the handoff's NO recommendation) → schematic devices
+  are now -K101.x … -K110.x. Cover = full title-block metadata set; legend =
+  glyph + Spanish name. See memory `da-numbering-decisions`.
+- **DA.5b open:** the cajetín page cell uses QET's built-in `%{folio-id}`
+  (position 1..N). The diagram `order` attr is set to the section page, but
+  whether QET renders that as the displayed number is UNVERIFIED. If QET shows
+  1..27, the fallback is swapping `%{folio-id}` → a custom `%{page}` property
+  (touches `assets/exxerpro.titleblock`, which Abel re-syncs — gate first).
+- **DA.5c open:** continuation-ref wording was never gated; design + gate.
 
 ---
 
