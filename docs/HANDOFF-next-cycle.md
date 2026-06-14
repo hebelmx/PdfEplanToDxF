@@ -15,10 +15,9 @@
   folios** in natural order: **Portada → Simbología → Alimentación → card drawings
   (101–110) → borneros (200–209) → BOM (300–302) → Historial (900)**, with prev/next
   continuation refs on the three multi-sheet sections.
-- **T3.1 (NO/NC contact correctness) is DONE** (`9518e77`) and **T3.2 (spare-point
-  rendering) is DONE** (`3aa6187`) on branch **`feat/t3-no-nc`** (off `main`/`a59e39f`),
-  PUSHED to origin (T3.1). T3.1 = `_nc` variants for level/flow/pressure/foot/thermostat
-  + fixed the unreachable `limit_switch_nc`. T3.2 = 62 reserve terminals over 10 cards
+- **T3.1 + T3.2 are DONE and FF-MERGED into `main`** (@ `389071d`, pushed 2026-06-14).
+  T3.1 (`9518e77`) = `_nc` variants for level/flow/pressure/foot/thermostat + fixed the
+  unreachable `limit_switch_nc`. T3.2 (`3aa6187`) = 62 reserve terminals over 10 cards
   (RESERVA in strip lane + bornero + BOM `spare` category). **Floor held 10/106/75/0**;
   spares counted separately. WADDING_1 now emits **30 folios** (BOM 3→5, bornero 10→11).
 - **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1).
@@ -129,10 +128,13 @@ Full specs in `docs/TIER3-tracker.md`. Summary + the decisions to gate with Abel
 - **T3.3 Column pagination on card overflow** — ⏸ **DEFERRED** ([issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)):
   no card in the wild >32 ch; gated design (`(n/m)` continuation folio; one module BOM row,
   rows carry their folio; designations continue across sheets) recorded for when needed.
-- **T3.4 PE / ground potentials** *(recommended next)* — PE references on devices,
-  cross-referenced to the existing `Alimentación` PE rail; data-driven (module_db/symbol_db),
-  pins stay TBD if unknown. **Gate:** PE as a per-device terminal vs. a symbol; which devices
-  get one; label style (Spanish, consistent with the cajetín).
+- **T3.4 PE / ground — chassis grounding folio** *(NEXT, scoped 2026-06-14, memory
+  `t3-pe-grounding-decisions`)* — NOT per-I/O-point PE. A dedicated **grounding folio**
+  modeled on AB **1756-IN621 pp. 12–14** (`docs/1756-in621_-en-p.pdf`): each chassis draws
+  **FE (8 AWG) + PE (14 AWG, opt. 2nd PE)** → a **central Ground Bus** → the
+  **Grounding-electrode System** (min 8 AWG). Build like `build_supply_folios` (text+shapes
+  only). **Still to gate (visual):** Spanish labels; all-chassis vs per-chassis; boxes vs
+  nodes; section-page placement; gauges fixed vs config.
 - **T3.5 Additional languages (IT/DE/ZH)** — pure data, demand-driven only.
 
 ## Code map (current `src/logix_to_qet.py`)
@@ -179,34 +181,39 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 
 ## Git state / how to resume
 
-- **`main` @ `a59e39f`** — Document-assembly theme (DA.1–DA.8) ff-merged & pushed to origin.
-- **`feat/t3-no-nc`** — branched off `main`/`a59e39f`. T3.1 (`9518e77`) and T3.2 (`3aa6187`)
-  + their docs commits are all PUSHED to origin (T3.2 pushed 2026-06-14). Ask Abel before
-  any merge to `main`.
-- Continue T3.4 on `feat/t3-no-nc` (or a fresh branch off it). T3.3 is deferred (issue #1).
+- **`main` @ `389071d`** — T3.1 + T3.2 (+ DA theme) ff-merged into `main` and PUSHED to
+  origin (2026-06-14). `feat/t3-no-nc == main == origin/main == 389071d`.
+- **T3.3 deferred** (issue #1). **Start T3.4 from a FRESH branch off `main`** (e.g.
+  `feat/t3-grounding`).
 
 ## Kickoff prompt — paste into the new session
 
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py) on branch
-feat/t3-no-nc. T3.1 (NO/NC contact correctness, 9518e77) and T3.2 (spare-point
-rendering, 3aa6187) are DONE, verified & pushed. Floor held 10/106/75/0 FP;
-WADDING_1 emits 30 folios (62 RESERVA spares; BOM 5; bornero 11); 203 tests green.
-T3.3 (column pagination) is DEFERRED → issue #1. NEXT = T3.4 (PE / ground potentials).
+Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). T3.1 (NO/NC, 9518e77)
+and T3.2 (spare-point rendering, 3aa6187) are DONE, verified, and FF-MERGED to main
+(@ 389071d, pushed). Floor 10/106/75/0 FP; WADDING_1 emits 30 folios (62 RESERVA
+spares; BOM 5; bornero 11); 203 tests green. T3.3 (column pagination) DEFERRED →
+issue #1. NEXT = T3.4 (PE / ground). Start from a FRESH branch off main (feat/t3-grounding).
 
 READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES incl. #6 QET-numbers-by-
-position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.4/T3.5
-specs + Open-decisions to gate), ProductPlanEnhancement.md, and memory
-qet-generator-status + t3-spare-decisions.
+position and #7 tight bands, code map), docs/TIER3-tracker.md (T3.4 scope + still-to-gate),
+ProductPlanEnhancement.md, memory t3-pe-grounding-decisions + qet-generator-status, and
+docs/1756-in621_-en-p.pdf pages 12-14 (the grounding figure T3.4 is modeled on).
 
-For T3.4: gate the Open decisions with Abel (PE as a per-device terminal vs a symbol;
-which devices get a PE reference; label style — Spanish, consistent with the cajetín)
-BEFORE coding. Data-driven (module_db/symbol_db); never invent; pins stay TBD if
-unknown; cross-reference the existing Alimentación PE rail. Verify from ground truth
-(floor 10/106/75/0 from stderr), one focused commit, eyeball in QET.
+T3.4 = a dedicated GROUNDING FOLIO (NOT per-I/O-point PE), modeled on 1756-IN621
+pp.12-14: each chassis draws FE (8 AWG / 8.3 mm²) + PE (14 AWG / 2.1 mm², torque
+1.35 N·m, optional 2nd PE) → a central Ground Bus → the Grounding-electrode System
+(min 8 AWG). Build a new build_grounding_folio(...) like build_supply_folios
+(Alimentación): TEXT + SHAPE PRIMITIVES ONLY, empty <elements>/<conductors>, own
+SECTION page near Alimentación (100-series) — zero floor impact. It is a VISUAL folio,
+so GATE these with Abel before/with coding: Spanish labels (Puesta a tierra / Tierra de
+protección PE / Tierra funcional FE / Barra de tierra / Sistema de electrodos de tierra);
+one folio for all chassis vs per-chassis; chassis as boxes vs labelled nodes; exact
+section-page placement; gauges fixed defaults vs project_template config. Verify from
+ground truth (floor 10/106/75/0 from stderr; 203+ tests), one focused commit, eyeball in QET.
 
 STILL PENDING ABEL: (1) eyeball T3.2 in QET (RESERVA spares, grown bornero/BOM);
-(2) the periodic adversarial review is due (T3.1+T3.2, phase boundary) before/with T3.4.
+(2) periodic adversarial review on T3.1+T3.2 is due (phase boundary) before/with T3.4.
 
 HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
 (TBD→__, blank cells); stdlib only; never git add Fixtures/ or *.L5X/*.qet/*.pdf/*_bom.csv;

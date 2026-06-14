@@ -154,16 +154,24 @@ so it's tracked in **issue #1** and implemented when needed. **NEXT actionable =
 - **Touches:** `COL_X`/`POINTS_PER_COL`/`ROW_*` geometry + `build_folio`. The
   ~660-px folio height is already near-full at 16 rows — mind the box bounds.
 
-## T3.4 — PE / ground potentials
-- **Goal:** show protective-earth / ground references on devices that need them
-  (complements the PE rail already on the `Alimentación` folio from Tier 2 #5).
-- **Acceptance sketch:** devices/cards that declare an earth reference draw a PE
-  terminal/symbol cross-referenced to the PE rail; data-driven (module_db/symbol_db),
-  never invented; pins stay TBD if unknown.
-- **Open decisions (gate):** PE as a per-device terminal vs. a symbol; which
-  devices get one; label style (Spanish, consistent with the cajetín).
-- **Touches:** `module_db` power block (already has the structure) + `symbol_db`;
-  `add_power_terminals`/`build_folio`; the `Alimentación` rail set.
+## T3.4 — PE / ground (chassis grounding folio)  ← NEXT (scoped, handed off)
+- **Scope RESOLVED with Abel 2026-06-14** (memory `t3-pe-grounding-decisions`): NOT
+  per-I/O-point PE. Build a dedicated **grounding / "Puesta a tierra" folio** modeled on
+  AB **1756-IN621** pp. 12–14 (`docs/1756-in621_-en-p.pdf`, "Grounding Configuration
+  Example"): each chassis/rack draws a **Functional Earth (FE, 8 AWG / 8.3 mm²)** + a
+  **Protective Earth (PE, 14 AWG / 2.1 mm², torque 1.35 N·m; optional 2nd PE)**, all
+  running to a **central Ground Bus**, which connects to the **Grounding-electrode System**
+  (min 8 AWG). Gauges per the manual (standard defaults, ideally configurable; never
+  invent site data).
+- **Build like the other dedicated folios:** a new `build_grounding_folio(...)` like
+  `build_supply_folios`/`build_portada_folio` — **text + shape primitives only, empty
+  <elements>/<conductors>** (inherits the title block, zero floor impact). Own SECTION
+  page near Alimentación (100-series).
+- **Still to gate (VISUAL folio — Abel iterates):** Spanish labels; one folio for all
+  chassis vs per-chassis; chassis as boxes vs nodes; section-page placement; gauges fixed
+  vs project_template config. Offer a QET eyeball.
+- **Touches:** new `build_grounding_folio` + its SECTION constant in `main()`; rack data
+  from the parsed L5X. Floor 10/106/75/0 must hold (additive folio).
 
 ## T3.5 — Additional languages (IT / DE / ZH)
 - **Goal:** match tag/description text in Italian, German, Chinese the same way
