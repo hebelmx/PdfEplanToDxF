@@ -1253,6 +1253,64 @@ class SupplyFolioTest(unittest.TestCase):
         self.assertIsNotNone(d.find("properties"))
 
 
+class PortadaFolioTest(unittest.TestCase):
+    """DA.3: the cover (Portada) folio is one diagram of text + shapes only
+    (empty <elements>/<conductors>), rendering REAL title-block metadata + the
+    L5X controller name, with unset fields left blank (never invented)."""
+
+    @staticmethod
+    def _build(fields, controller="CTRL_1", order=0):
+        project = ET.Element("project")
+        n = q.build_portada_folio(project, order, fields, controller)
+        diags = project.findall("diagram")
+        return n, diags
+
+    def test_appends_one_folio_titled_portada(self):
+        n, diags = self._build({"project": "Línea 1", "company": "ACME"})
+        self.assertEqual(n, 1)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0].get("title"), "Portada")
+        self.assertEqual(diags[0].get("order"), "0")
+
+    def test_contains_only_text_and_shapes(self):
+        _, diags = self._build({"project": "P"})
+        d = diags[0]
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("inputs").findall("input")), 0)
+
+    def test_renders_real_values_and_controller(self):
+        fields = {"project": "Envasadora", "company": "ACME",
+                  "drawing_number": "PL-001", "revision": "B",
+                  "approved_by": "Abel"}
+        _, diags = self._build(fields, controller="WADDING_1")
+        texts = [i.get("text") for i in diags[0].find("inputs").findall("input")]
+        for expected in ("ACME", "PL-001", "B", "Abel", "WADDING_1"):
+            self.assertIn(expected, texts)
+        # the project name appears upper-cased as the heading
+        self.assertIn("ENVASADORA", texts)
+
+    def test_blank_fields_are_not_invented(self):
+        # only project given; drawing_number/revision/etc. unset → their VALUE
+        # cells are absent (labels still render, values blank — never fabricated)
+        _, diags = self._build({"project": "Linea"}, controller="C")
+        texts = [i.get("text") for i in diags[0].find("inputs").findall("input")]
+        self.assertNotIn("None", texts)            # no str(None) leak
+        self.assertFalse(any("%{" in (t or "") for t in texts))  # no raw token
+        self.assertIn("APROBÓ", texts)             # label renders even when blank
+        # the project value renders once (the PROYECTO row); the heading is the
+        # upper-cased form — distinct text — so no invented duplicate value.
+        self.assertEqual(sum(1 for t in texts if t == "Linea"), 1)
+        self.assertEqual(sum(1 for t in texts if t == "LINEA"), 1)
+
+    def test_no_titleblock_field_tokens_without_data_path(self):
+        # department/country/status/type/code have no project-template source;
+        # they are intentionally omitted from the cover rows.
+        labels = {lbl for lbl, _ in q.PORTADA_ROWS}
+        for absent in ("DEPARTAMENTO", "PAÍS", "ESTADO"):
+            self.assertNotIn(absent, labels)
+
+
 class ReorderDiagramsByPositionTest(unittest.TestCase):
     """DA.2: reorder_diagrams_by_position stably re-sorts <diagram> children by
     their integer 'order' attribute, decoupling folio position from build order
@@ -1386,11 +1444,14 @@ class WaddingRegressionTest(unittest.TestCase):
         self.assertEqual(orders, sorted(orders))   # serialized in section order
         titles = [d.get("title") or "" for d in diagrams]
         idx = lambda pred: next(i for i, t in enumerate(titles) if pred(t))
+        i_portada = idx(lambda t: t == "Portada")
         i_supply = idx(lambda t: t == "Alimentación")
         i_draw = idx(lambda t: t.startswith("R"))
         i_born = idx(lambda t: t.startswith("Bornero"))
         i_bom = idx(lambda t: "BOM" in t)
         i_chg = idx(lambda t: "revisiones" in t.lower())
+        self.assertEqual(i_portada, 0)             # Portada is FIRST
+        self.assertLess(i_portada, i_supply)
         self.assertLess(i_supply, i_draw)
         self.assertLess(i_draw, i_born)
         self.assertLess(i_born, i_bom)

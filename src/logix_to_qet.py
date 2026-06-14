@@ -1325,6 +1325,84 @@ def build_bornero_folios(project: ET.Element, start_order: int,
     return n
 
 
+# ── Portada (cover) folio (DA.3) ─────────────────────────────────────────────
+# A front cover carrying the project's title-block metadata as a legible
+# label/value table, drawn with text + shape primitives ONLY (empty
+# <elements>/<conductors>) like the supply/bornero folios, so it inherits the
+# ISO 7200 title block and adds zero element/conductor instances. EVERY value is
+# real data from the resolved title-block fields (or the L5X controller name); a
+# field with no value renders a blank cell, never invented. Title-block tokens
+# with no project-template data source (department/country/status/type/code) are
+# intentionally omitted — there is no data path to populate them (add them to
+# project_template.json to surface them on the cover).
+PORTADA_TITLE = "Portada"
+PORTADA_LABEL_X = 80
+PORTADA_VALUE_X = 360
+PORTADA_ROW_Y0 = 170
+PORTADA_ROW_DY = 40
+# (Spanish label, fields key), top→bottom. The controller name (real L5X data,
+# not a title-block field) is appended as a final row with key None.
+PORTADA_ROWS = (
+    ("EMPRESA", "company"),
+    ("CLIENTE", "client"),
+    ("PROYECTO", "project"),
+    ("MÁQUINA", "machine"),
+    ("N.º DE PLANO", "drawing_number"),
+    ("REVISIÓN", "revision"),
+    ("FECHA", "date"),
+    ("DIBUJÓ", "drawn_by"),
+    ("REVISÓ", "revised_by"),
+    ("APROBÓ", "approved_by"),
+)
+
+
+def build_portada_folio(project: ET.Element, order: int, fields: dict,
+                        controller: str) -> int:
+    """Append the cover (Portada) folio at the given section order, rendered with
+    text + shape primitives ONLY (empty <elements>/<conductors>) so it inherits
+    the ISO 7200 title block. The heading is the project/drawing name with the
+    company beneath it; a label/value table lists the title-block metadata plus
+    the L5X controller name. Values are real data; an unset field leaves its
+    value cell blank (never invented). Returns 1 (the cover is part of every
+    set)."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": PORTADA_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    # cover heading: the project/drawing name, company beneath, a rule under both
+    project_name = (fields.get("project") or "").strip()
+    add_text(inputs, PORTADA_LABEL_X, 60,
+             (project_name or PORTADA_TITLE).upper(), FONT_HEADER)
+    company = (fields.get("company") or "").strip()
+    if company:
+        add_text(inputs, PORTADA_LABEL_X, 92, company, FONT_TEXT)
+    add_rect(shapes, PORTADA_LABEL_X, 110, SUMMARY_PAGE_WIDTH, 112)
+
+    # metadata table: label / value, one row each; blanks stay blank
+    rows = list(PORTADA_ROWS) + [("CONTROLADOR (L5X)", None)]
+    for i, (label, key) in enumerate(rows):
+        y = PORTADA_ROW_Y0 + i * PORTADA_ROW_DY
+        add_text(inputs, PORTADA_LABEL_X, y, label, FONT_SMALL)
+        value = controller if key is None else (fields.get(key) or "")
+        value = (value or "").strip()
+        if value:
+            add_text(inputs, PORTADA_VALUE_X, y, value, FONT_TEXT)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -1454,6 +1532,10 @@ def main(argv=None):
     # base page; reorder_diagrams_by_position re-sorts the <diagram> children into
     # the natural drawing order below, just before serialization (DA.2). All are
     # built BEFORE attach_titleblocks so they inherit the ISO 7200 title block.
+    # Portada (cover) — the project's title-block metadata + controller name;
+    # sorts to the very front (section page 0).
+    portada_folios = build_portada_folio(project, SECTION_PORTADA, tb_fields,
+                                         controller)
     # supply-rail folio ('Alimentación') — draws the rails the cards' power
     # blocks reference; sits before the card drawings in the final order.
     supply_folios = build_supply_folios(project, SECTION_SUPPLY, io_mods)
@@ -1517,6 +1599,7 @@ def main(argv=None):
           file=err)
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
           f"folio(s), one per card", file=err)
+    print(f"portada    : {portada_folios} cover folio(s)", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",
