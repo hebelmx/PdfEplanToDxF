@@ -27,6 +27,7 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | DA.5a | Designations follow the printed section page (-K101.x … -K110.x) | `done` `5fa2e4d` | — |
 | DA.5b | DISPLAYED sectioned page number (000/001/100…) in the cajetín | `done` `7b2151b` | Hand-numbering the cajetín with section gaps |
 | DA.6 | Hide schematic grid rulers (0–16 / A–H) on the non-schematic list/front-matter folios — they drew tables "out of the box" over the rulers | `done` `7b2151b` | — (review fix) |
+| DA.7 | Lift the card header so the inline power band stops overprinting the sub-header on I/O drawings | `done` | — (review fix) |
 | DA.5c | prev/next continuation refs ("viene de / sigue en") | `todo` | Hand-writing the continuation references |
 
 - **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
