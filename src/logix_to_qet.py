@@ -901,7 +901,10 @@ def build_folio(project: ET.Element, order: int, mod, points,
         add_rect(shapes, x - BOX_LEFT, y1, x + BOX_RIGHT, y2)
         box_title = f"-{mod.name}" if n_cols == 1 else \
                     f"-{mod.name}  ({col * POINTS_PER_COL}…{col * POINTS_PER_COL + pts_in_col - 1})"
-        add_text(inputs, x - BOX_LEFT, y1 - 14, box_title, FONT_TEXT)
+        # lift the title clear of the box top edge — at y1-14 its text bottom sat
+        # on the box's top line; y1-24 leaves a clean gap (still clear of the
+        # sub-header at y≈32, which ends well above). (DA.8 follow-up)
+        add_text(inputs, x - BOX_LEFT, y1 - 24, box_title, FONT_TEXT)
 
     # per-card power table from the (optional) module_db power block: a boxed
     # list of the supply/common potentials in the clear top-right corner, above

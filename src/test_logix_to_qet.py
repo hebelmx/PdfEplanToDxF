@@ -1234,6 +1234,20 @@ class BuildFolioPowerRenderTest(unittest.TestCase):
         self.assertTrue(pot_xs)
         self.assertTrue(all(x >= q.POWER_TABLE_LEFT for x in pot_xs))
 
+    def test_card_box_title_clears_the_box_top(self):
+        # the box title sat on the box's top edge; it must now clear it with a
+        # real gap (DA.8 follow-up). Check the card box only (not the top-right
+        # power-table box, which is further left-excluded by x).
+        d = self._diagram("1756-IA16")
+        title = next(i for i in d.find("inputs").findall("input")
+                     if (i.get("text") or "").startswith("-CARD"))
+        title_y = float(title.get("y"))
+        card_boxes = [s for s in d.find("shapes").findall("shape")
+                      if float(s.get("x1")) < q.POWER_TABLE_LEFT]
+        self.assertTrue(card_boxes)
+        box_top = min(float(s.get("y1")) for s in card_boxes)
+        self.assertGreaterEqual(box_top - title_y, 18)   # clean gap above the box
+
     def test_power_table_places_no_element(self):
         # the power potentials are documentation references, not wired terminals:
         # add_power_terminals writes ONLY text (inputs) + the table box (shapes)
