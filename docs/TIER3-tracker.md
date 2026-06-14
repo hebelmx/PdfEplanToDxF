@@ -74,7 +74,7 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | # | Item | Status | Manual step removed |
 |---|------|--------|---------------------|
 | T3.1 | NO/NC correctness on symbols | `done` `9518e77` | Hand-flipping each contact to its real normally-open/closed state |
-| T3.2 | Spare-point rendering | `todo` | Hand-drawing unused/reserved card points so the strip is complete |
+| T3.2 | Spare-point rendering | `done` `3aa6187` | Hand-drawing unused/reserved card points so the strip is complete |
 | T3.3 | Column pagination on card overflow | `todo` | Manually splitting a high-point-count card across sheets/columns |
 | T3.4 | PE / ground potentials | `todo` | Hand-drawing the protective-earth / ground references on devices |
 | T3.5 | Additional languages (IT/DE/ZH) — pure data | `todo` (demand-driven) | Manual re-matching when a project ships in another language |
@@ -118,10 +118,22 @@ demands it** (the plan calls the extra languages drop-in pure data, not a must-d
 - **Acceptance sketch:** spare points render as plain terminals (no device, no
   invented tag); clearly marked as spare; counted honestly in the summary. Must
   not inflate the matched/false-positive counts or change the 75-match floor.
-- **Open decisions (gate):** which points count as "spare" (card capacity vs.
-  mapped); label/format; whether spares appear in the BOM.
-- **Touches:** `collect_points`/`per_module` assembly and `build_folio` in
-  `src/logix_to_qet.py`. **Floor risk** — verify 106/75/0 carefully.
+- **Open decisions — RESOLVED with Abel 2026-06-14** (memory `t3-spare-decisions`):
+  - **Spare = empty channel slots** (capacity − mapped); box is already sized to
+    `mod.points`. ~62 in WADDING_1. NOT the l2e "skipped" records.
+  - **Label = terminal + "RESERVA" + channel** (no device, no invented tag).
+  - **In the BOM (new `spare` category) AND on the bornero strip**, counted
+    SEPARATELY — matched stays 75, mapped "drawn" stays 106, 0 FP.
+- **Touches:** `build_folio` (spare-slot loop), `_add_bornero_diagram`, a new
+  `spare_bom_row`, the stderr summary. **Floor risk** — n_points/matched/FP must NOT
+  change; spares are a new separate count. BOM grows ~62 rows ⇒ summary folios gain
+  ~2 (total rises above 27, expected) — verify DA.5c continuation refs still attach.
+- **DONE `3aa6187`:** 62 reserve terminals over 10 cards (RESERVA in the strip lane +
+  bornero + BOM `spare` category, designation/type blank). Floor HELD 10/106/75/0;
+  spares counted separately. New totals: BOM 178 rows over 5 folios, bornero 11 folios
+  (REM_IN_1's 32 ch paginates 2 sheets), **30 folios total** (was 27). 203 tests green;
+  ids unique / conductors resolve / no token leak; continuation refs chain 300→304.
+  **Pending Abel: QET eyeball of the spare terminals + grown BOM/bornero.**
 
 ## T3.3 — Column pagination on card overflow
 - **Goal:** when a card has more points than one column/sheet holds, paginate
