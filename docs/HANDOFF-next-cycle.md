@@ -13,18 +13,20 @@
   strip / bornero** (commit `1f24259`, ff-merged to local `main`, **NOT pushed**).
 - **Current work = a NEW theme, "Document assembly / front matter" (DA.x),** that runs
   BEFORE Tier 3. Branch: **`feat/doc-assembly`** (off `main` @ `1f24259`).
-- **DA.1–DA.4 + DA.5a are DONE** on the branch: DA.1 template sync (`44b52e0`),
-  DA.2 reorder + DA.5a designation page prefix (`5fa2e4d`), DA.3 Portada (`2db8219`),
-  DA.4 Simbología (`39cdd5c`). **Not pushed.** WADDING_1 now emits **27 folios** in the
-  gated order (Portada → Simbología → Alimentación → drawings 101–110 → borneros
-  200–209 → BOM 300–302 → Historial 900); floor intact; **164 tests** green.
-- **REMAINING:** **DA.5b** — the cajetín page cell still shows QET's built-in
-  `%{folio-id}` (position 1..N); the sectioned 000/001/100… display is UNVERIFIED and
-  needs an in-QET eyeball (the `order` attr is set to the section page, but QET may
-  number by position). Fallback if it shows 1..27: swap `%{folio-id}` → a custom
-  `%{page}` property in `assets/exxerpro.titleblock` (Abel re-syncs that file, so gate
-  first). **DA.5c** — prev/next continuation refs ("viene de / sigue en"), never gated.
-  Gated decisions live in memory `da-numbering-decisions`.
+- **DA.1–DA.4, DA.5a, DA.5b, DA.6 are DONE** on the branch: DA.1 template sync
+  (`44b52e0`), DA.2 reorder + DA.5a designation page prefix (`5fa2e4d`), DA.3 Portada
+  (`2db8219`), DA.4 Simbología (`39cdd5c`), **DA.5b section page in the cajetín + DA.6
+  hide list-sheet grid rulers (`7b2151b`)**. **Not pushed.** WADDING_1 emits **27 folios**
+  in the gated order (Portada → Simbología → Alimentación → drawings 101–110 → borneros
+  200–209 → BOM 300–302 → Historial 900); floor intact; **172 tests** green.
+- **DA.5b lesson (resolved):** QET numbers folios by document POSITION (eyeball showed
+  24/27), so the `order` attr does NOT drive the displayed number. Fix was generator-side:
+  `sectionize_titleblock_page` rewrites `%{folio-id}/%{folio-total}` → custom `%{page}`
+  in the EMBEDDED copy only; `apply_titleblock` fills it per folio from the order,
+  zero-padded. The committed title-block asset is untouched (re-syncable).
+- **REMAINING: DA.5c** — prev/next continuation refs ("viene de pág. X / sigue en
+  pág. Y"); wording never gated → design + gate with Abel. Gated decisions + the DA.5b
+  lesson live in memory `da-numbering-decisions`.
 
 ## ⚠️ HARD RULES (these just bit us — do not repeat)
 
