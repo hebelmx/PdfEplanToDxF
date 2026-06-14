@@ -1,170 +1,159 @@
-# Handoff — next dev cycle (Tier 2 #4: Cajetín / title block)
+# Handoff — next dev cycle (Tier 2 #5: Power / supply)
 
 > Self-contained handoff so a **fresh agent in a new session** can run the next
-> backlog item with no prior context. Written 2026-06-13 after Tier 1 #3.
+> backlog item with no prior context. Written 2026-06-13 after Tier 2 #4.
 
 ## Where things stand
 
 - Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O
   drawing set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`.
-- **Tier 1 is now COMPLETE** (all three quick "pure data we already have" wins):
-  1. Device designations (`-S1`, `-B1`, `-K1`…) — `next_designation()`.
-  2. Wire numbers (EPLAN address verbatim / `W<page>.<n>`) — `wire_number()`.
-  3. **Just completed — Tier 1 #3 "Device-index / BOM".** A unified 10-column
-     BOM (`category, folio, designation, catalog_or_type, tag, address, vendor,
-     description, rack, slot`) collected **during** the existing `build_folio`
-     traversal (no second pass) and emitted **two ways**:
-     - **CSV sidecar** `<output>_bom.csv` — the complete record, all 10 columns.
-       Formula-injection guarded (`_csv_safe`: cells leading with `= + - @`,
-       e.g. every `-S1.1` designation, get an apostrophe so spreadsheets show
-       text not `#NAME?`).
-     - **Paginated QET summary folios** appended after the drawing folios,
-       rendering a **legible subset** (`folio / designation / type / tag /
-       address / description`) with per-column ellipsizing (`_ellipsize`),
-       text+shapes only — **no terminals/conductors**. `SUMMARY_FOLIO_COLUMNS`
-       defines the subset; `SUMMARY_ROWS_PER_PAGE` is **derived from geometry**.
-     - Three categories, nothing invented: `module` row per card; `device` row
-       per matched device (using the actually-emitted designation); `generic`
-       row per unmatched/analog point (designation+type blank).
-  - Helpers + tests follow the established pattern (see below). WADDING_1:
-    10 folios / 106 points / 75 matched / 0 FP; BOM = 116 rows over 3 summary
-    folios. **52 unittests pass.**
-- Branch **`feat/device-index`** (cut from `main`, HEAD was `33cb66c`) holds the
-  BOM commit **`12f2d13`**.
-- **`feat/device-index` is NOT merged to `main` yet** at time of writing (Abel
-  eyeballs the `.qet` in QElectroTech before merging). **First thing to check:**
-  what's merged into `main`?
-  - If the BOM work is **merged** → branch fresh from `main`.
-  - If **not** → branch from `feat/device-index` so you build on it.
-  - Either way: start from a **clean working tree** (`git status` clean).
+- **Tier 1 COMPLETE** (designations, wire numbers, device-index/BOM).
+- **Tier 2 #4 COMPLETE and MERGED to `main`** (commits `7c3ffb4` title block,
+  `a1bf412` changelog; fast-forwarded into `main`). What it added:
+  - **Native QElectroTech ISO 7200 title block** on every folio — *not* hand-drawn.
+    (Abel is ISO 9001 certified and chose pure ISO 7200.) `src/build_titleblock.py`
+    clones QET's bundled `ISO7200_A4_V1.titleblock` into `assets/exxerpro.titleblock`,
+    embedding the Exxerpro **SVG** logo in the big left cell (col0 rowspan4),
+    viewBox padded to the cell aspect so QET's stretch-to-fill can't distort it.
+  - The generator **embeds the template verbatim as TEXT** (ElementTree would
+    mangle the SVG's namespaces) and sets per-folio
+    `titleblocktemplate="exxerpro" titleblocktemplateCollection="embedded"
+    displayAt="bottom"` + a `<property name=token>` for **every** custom token
+    (blank when no data — else QET renders the raw `%{token}`). Built-ins
+    (`%{author}`/`%{title}`/`%{date}`/`%{filename}`, and the auto sheet number
+    `%{folio-id}/%{folio-total}`) come from diagram attributes / QET itself.
+  - Field values come from **`src/project_template.json`** (company→owner,
+    project→drawingname, drawing_number→ref, revision→rev, approved_by→approval;
+    **date is the STATIC release date, never `today()`**, for traceability).
+  - **Changelog / revision-history folio** (`Historial de revisiones`, last sheet):
+    REV/FECHA/DESCRIPCIÓN/DIBUJÓ/APROBÓ, driven by a `revisions` array in
+    project_template.json; no config → one synthesised "Primera emisión" row.
+  - WADDING_1 now = 10 drawing + 3 summary + 1 changelog = **14 folios**.
+    **88 unittests pass.**
+- **`main` is ahead of `origin/main`** (not pushed). Start the next cycle by
+  **branching fresh from `main`** with a clean tree (`git status` clean — note
+  `assets/*.png/*.bmp/*.ai` are intentionally untracked; only the SVG +
+  `.titleblock` are committed).
 
-## ⚠️ Lesson from the last cycle — don't trust the workflow's `shipReady`
+## ⚠️ Lessons (carry forward)
 
-The `adversarial-dev-cycle` workflow returned **`shipReady: true` with a log line
-"0 blocking/major findings" — but the review lenses actually contained FOUR major
-findings** (unreadable summary folio from overlapping columns; a zero-height
-"underline" rect that won't render + bled off-page; CSV formula injection; the
-byte-identical invariant untested). The verdict agent miscounted. **Always read
-the individual lens findings yourself**; treat the top-level `shipReady` as a
-claim to verify, not a gate. Rivet's principle holds: a clean/green verdict is a
-smell to investigate, not a victory. The four were fixed before commit.
+- **Don't trust the workflow's `shipReady`.** It once returned `shipReady:true`
+  with "0 blocking findings" while the lenses held FOUR majors. Always read the
+  individual review-lens findings yourself; a clean verdict is a smell to verify.
+- **QET caches title-block templates at startup.** After editing a `.titleblock`,
+  you must *fully restart* QElectroTech to see the change — reopening the file is
+  not enough. (This caused a long "it's not updating" detour.)
+- **The `.qet` integration is reverse-engineered from QET's own examples**
+  (`C:\Program Files\QElectroTech\examples\`). `iso_sfc_example.qet` uses
+  `ISO7200_A4_V1` and shows exactly how a diagram references a template and
+  stores custom field values (`<property name=...>`). When in doubt about QET
+  markup, read a shipped example, don't guess.
 
 ## Conventions established (reuse them)
 
 - **Confirm format with Abel in the Plan phase before implementing.** He has
-  strong, specific preferences (e.g. no page-prefix on globally-unique values;
-  CSV+folio both wanted; legible subset on the folio while the CSV stays the
-  complete record). Don't assume — ask via the Plan-phase confirmation.
+  strong, specific preferences and iterates visually (he exports a PDF / screen-
+  shots the folio). Ask before building; offer to launch QET on the output.
 - **Never force / never invent.** Unmatched → generic; missing data → graceful
-  fallback (`None` / `""`), never garbage. Physical pins stay `"TBD"` → `__`.
-- **Pure helper + integration test.** A pure, deterministic helper with stdlib
-  unittests AND a `build_folio`/`main`-level integration test so a broken call
-  site can't pass silently. Add a **regression test for any invariant you
-  claim** (the "drawing folios unchanged" test normalizes per-element uuids and
-  asserts XML equality — copy that pattern).
-- **Don't let presentation slide.** A feature whose value is legibility (a folio,
-  a title block) must actually render legibly — test x-bounds / page-frame, not
-  just that data exists.
+  fallback (`None`/`""`/empty `<property>`), never garbage. Physical pins stay
+  `"TBD"` → `__`.
+- **Pure helper + integration + regression test.** A deterministic helper with
+  stdlib unittests, a `build_folio`/`main`-level integration test, and a
+  regression test for any invariant you claim (e.g. "title block doesn't touch
+  `<elements>`/`<conductors>`").
+- **Presentation must actually render.** A feature whose value is legibility must
+  be tested for page-frame / cell bounds, and **eyeballed in QET** — structure
+  passing tests is necessary but not sufficient.
 - One focused commit per backlog item; message names the manual step removed.
-  Infrastructure/doc changes (like this handoff) go in their **own** commit.
+  Doc/handoff changes go in their **own** commit.
 
-## The next item — Tier 2 #4: Cajetín (title block)
+## The next item — Tier 2 #5: Power / supply
 
-From `ProductPlanEnhancement.md`: *"Replace hardcoded header with a JSON-config-
-driven template (`src/project_template.json`): company, logo path, author,
-project title, date, folio `x/total`. Sensible defaults if absent."*
-Removes the manual step of filling in every sheet's title block by hand.
+From `ProductPlanEnhancement.md`:
+> **(a)** Draw each card's own **power/common terminals** — extend `module_db`
+> with the group-common structure (e.g. `1756-OA16` = 2 groups of 8, separate L1
+> commons; DC input cards share a common); pins stay `"TBD"` if unfilled.
+> **(b)** A **supply-rail folio** (L+/L‑/24 V/PE) that the cards reference.
 
-Code pointers (all in `src/logix_to_qet.py`):
-- **Today there is no real title block** — just a header text line per folio:
-  `add_text(inputs, 40, 30, header, FONT_HEADER)` (~line 489) and a sub-line at
-  ~line 493. The diagram carries `author="logix_to_qet"`, `folio="%id/%total"`
-  (~line 471 for drawing folios, ~line 634 for summary folios).
-- Project title is set once in `main()`: `ET.Element("project", {"title":
-  f"{controller} I/O", ...})` (~line 729).
-- A cajetín is normally a **framed box in a page corner** with labelled fields.
-  You'd add a `load_project_template()` (mirror `load_module_db`/`load_symbol_db`:
-  stdlib `json`, `utf-8-sig`, graceful defaults if the file is absent) and a
-  `draw_title_block(inputs, shapes, ...)` reused by **both** `build_folio` and
-  `_add_summary_diagram`.
+Removes the manual step of drawing power/common wiring and the supply distribution.
+
+Code pointers (all in `src/logix_to_qet.py` unless noted):
+- `load_module_db(catalog)` (~line 156) loads `src/module_db/<base>.json`; today it
+  exposes `_wiring_by_point` (per-point `pin`/`name`). **(a) extends this schema**
+  with a group/common structure — keep the same load + graceful-default pattern,
+  and keep `"TBD"` pins as `__` (never guess RTB pins from manuals — Abel fills).
+- `build_folio()` (~line 520) draws the card box + terminals per point. Power/
+  common terminals would be drawn here (or in a sibling helper) from the new
+  module_db structure.
+- For **(b)** the supply-rail folio, mirror the **summary/changelog folio**
+  pattern: a dedicated `build_*_folios(project, start_order, ...)` appended after
+  the drawing folios, then it gets the title block automatically (the title block
+  is attached to *every* diagram in `attach_titleblocks`).
+- `main()` (~line 879) is the assembly order: drawing folios → summary →
+  changelog → `attach_titleblocks` → collection → CSV → pretty-print → inject
+  template text. Insert the supply folio in that order (before the title-block
+  attach so it inherits the cajetín).
 
 **Open decisions for the Plan phase to confirm with Abel:**
-- Exact field set + labels and the **default values** when `project_template.json`
-  is absent (don't block on the file existing).
-- **Logo:** QET has no trivial "embed a PNG" path — confirm whether to attempt an
-  image element, just reserve a labelled box, or defer the logo to a later cycle.
-  (A wrong/broken image is worse than a clean reserved space — same guardrail
-  spirit as pins.)
-- Title-block **geometry/placement** (bottom-right corner is conventional) and
-  whether it appears on summary folios too (it should, for consistency).
-- Whether `folio x/total` uses QET's `%id/%total` tokens (already in use) or a
-  computed string.
+- Exact `module_db` group-common schema (how to express "2 groups of 8 with
+  separate L1 commons", shared DC commons) — and which sample cards to model
+  first (the WADDING_1 cards: `1756-IA16`, `1756-OA16`, …).
+- Whether power/commons render **inline on each card folio**, on a **dedicated
+  supply-rail folio**, or both; and how cards "reference" the rail (cross-ref
+  text vs. drawn conductor).
+- Potentials to show (L1/N for AC cards, L+/24 V/0 V/PE for DC) and labels
+  (Spanish, consistent with the title block).
 
 ## Kickoff prompt — paste this into the new session
 
 ```
-Run the next dev cycle for the PLC → mini-EPLAN product using the
-adversarial-dev-cycle workflow. This is an explicit opt-in to multi-agent
-orchestration — run the workflow. NOTE: the workflow's top-level shipReady has
-been wrong before — read the individual review-lens findings yourself and verify.
+Run the next dev cycle for the PLC → mini-EPLAN product. Backlog item: Tier 2 #5,
+"Power / supply" from ProductPlanEnhancement.md — (a) draw each card's power/
+common terminals from an extended module_db group-common schema (pins stay "TBD"
+-> __ if unfilled, never guessed), and (b) a supply-rail folio (L+/L-/24V/PE) the
+cards reference. Reuse the established patterns; never invent data.
 
-Backlog item: Tier 2 #4, "Cajetín (title block)" from ProductPlanEnhancement.md.
-Replace the hardcoded folio header with a JSON-config-driven title block
-(src/project_template.json: company, logo path, author, project title, date,
-folio x/total) with sensible defaults when the file is absent. Reuse one
-draw_title_block helper across both the drawing folios (build_folio) and the
-summary folios (_add_summary_diagram). Never invent data; a missing logo/field
-degrades to a clean reserved box, never garbage.
-
-Before running, read these so you have full context:
+Before implementing, read for full context:
 - ProductPlanEnhancement.md (vision, backlog, guardrails, validation)
-- docs/BMAD-Orchestration.md (how Rivet + the workflow work)
-- docs/HANDOFF-next-cycle.md (current state, conventions, the shipReady lesson)
-- src/logix_to_qet.py — esp. build_folio() (~line 489 header), _add_summary_diagram(),
-  load_module_db()/load_symbol_db() (the JSON-load + graceful-default pattern), main()
-- src/test_logix_to_qet.py — pure-helper + integration + regression test patterns
+- docs/HANDOFF-next-cycle.md (this file — current state, lessons, conventions)
+- docs/BMAD-Orchestration.md (how Rivet + the dev cycle work)
+- src/logix_to_qet.py — load_module_db(), build_folio(), the summary/changelog
+  folio builders (the "append a folio + it gets the title block" pattern), main()
+- src/module_db/*.json (current per-point wiring schema to extend)
+- src/test_logix_to_qet.py (pure-helper + integration + regression test patterns)
 
-In the workflow's Plan phase, CONFIRM with Abel: exact field set + default values;
-how to handle the logo (image vs reserved box vs defer); title-block geometry and
-whether it appears on summary folios — before implementing.
-
-Then invoke:
-  Workflow({ name: "adversarial-dev-cycle",
-             args: { item: "Cajetín (title block)",
-                     acceptance: "JSON-config-driven title block (src/project_template.json: company/logo/author/project title/date/folio x/total) drawn via one reusable helper on every folio incl. summary folios; sensible defaults when the file is absent or a field is missing; no invented/garbage values (missing logo -> clean reserved box); WADDING_1 still 10 folios / 106 points / 75 matches / 0 false positives with the drawing content unchanged apart from the added title block" } })
+CONFIRM with Abel in the Plan phase: the module_db group-common schema; inline
+vs dedicated supply folio (or both); which cards to model first; potentials/labels.
 
 Hard gate before any commit:
   python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/WADDING_1.qet
-must still report ≥75 symbols matched and 0 false positives, with
-terminal-id/conductor/definition assertions passing AND the title block present
-and correct (legible, inside the page frame) on every folio. Add/extend stdlib
-unittests for the new helper, plus a regression test for any invariant you claim.
-The workflow does NOT commit — review the findings (not just shipReady), then
-commit yourself with one focused message naming the manual step removed (filling
-in each sheet's title block by hand). NEVER git add Fixtures/ or any
+must still report 10 drawing folios / 106 points / 75 matched / 0 false positives,
+with terminal-id/conductor/definition assertions passing AND the ISO 7200 title
+block present on every folio AND the changelog folio intact. Run the full unittest
+suite from src/ (python -m unittest test_logix_to_qet). Eyeball the .qet in QET
+(remember: fully restart QET to reload title-block templates). One focused commit
+naming the manual step removed. NEVER git add Fixtures/ or any
 *.L5X / *.qet / *_eplan.csv / *_bom.csv.
 
-Start state: branch feat/device-index holds Tier 1 #1+#2+#3. First confirm
-whether it's merged to main; if yes branch fresh from main, if not branch from
-feat/device-index so you build on it. Verify a clean tree before starting.
+Start state: branch fresh from main (Tier 2 #4 is merged). Verify a clean tree.
 ```
 
 ## Hard gate & guardrails (always)
 
 - Validation command:
   `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/WADDING_1.qet`
-- Floor that must NOT regress: **10 folios / 106 points / 75 matched / 0 false
-  positives.** Plus: terminal ids unique per diagram; every conductor
+- Floor that must NOT regress: **10 drawing folios / 106 points / 75 matched / 0
+  false positives.** Plus: terminal ids unique per diagram; every conductor
   `terminal1`/`terminal2` resolves to an existing id; every element `type` has an
-  embedded `<definition>`. Run the full unittest suite (`python -m unittest
-  test_logix_to_qet` from `src/`).
-- Python 3.10+, **standard library only.** Multilingual DBs stay
-  language-agnostic.
+  embedded `<definition>`; the **ISO 7200 title block on every folio** (no raw
+  `%{tokens}`); the **changelog folio** present. Run the full unittest suite
+  (`python -m unittest test_logix_to_qet` from `src/`).
+- Python 3.10+, **standard library only.** Multilingual DBs stay language-agnostic.
 - Never guess physical pin numbers (`module_db` pins stay `"TBD"` → `__`).
 - **Public repo:** never `git add` anything under `Fixtures/` or any
-  `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / personal file. (This handoff
-  doc itself is fine to commit; the generated artifacts never are.)
+  `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / personal file. Company assets
+  (`assets/exxerpro.titleblock`, the logo **SVG**) are committed; the `.png/.bmp/.ai`
+  logo exports are intentionally untracked.
 
 ---
-*This file is a convenience handoff; delete it once the next cycle is underway,
-or keep it and overwrite for the cycle after.*
+*This file is a convenience handoff; overwrite it for the cycle after Tier 2 #5.*
