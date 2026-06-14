@@ -3,12 +3,35 @@
 > Durable task list for the **autonomous** `bmad-orchestrator` skill. One source
 > of truth: this file + the TaskCreate/TaskUpdate tools. Update an item's status
 > the moment it changes state. Items are from `ProductPlanEnhancement.md` Tier 3.
-> Tier 1, Tier 2 #4 (cajetín) and #5 (power/supply) are DONE and merged to `main`;
-> **Tier 2 #6 (terminal strip / bornero) is the last Tier 2 item and should land
-> before Tier 3** (see `docs/HANDOFF-next-cycle.md`). The orchestrator may be
-> pointed at #6 first, then this tier.
+> **All of Tier 2 is DONE and merged to `main`** — #4 (cajetín), #5 (power/supply),
+> and **#6 (terminal strip / bornero), commit `1f24259`**.
+>
+> **NEW theme inserted before Tier 3 — "Document assembly / front matter"** (from
+> Abel's 2026-06-14 review of the exported PDF). The generated set was in dev-order,
+> not natural drawing order, and lacked front matter. See the section below and
+> `docs/HANDOFF-next-cycle.md`. This theme runs **before** T3.x.
 
 Status legend: `todo` · `in-progress` · `review` · `done` · `blocked`
+
+## Document assembly / front matter (DA.x) — runs BEFORE Tier 3
+
+Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped**):
+`Portada → Simbología → Alimentación → card drawings → borneros (grouped) → BOM/índice → Historial de revisiones (LAST)`.
+
+| # | Item | Status | Manual step removed |
+|---|------|--------|---------------------|
+| DA.1 | Title-block template sync (extract newest from saved `.qet` → `assets/exxerpro.titleblock`) | `done` `44b52e0` | Re-applying the current cajetín template by hand |
+| DA.2 | Reorder folios to natural drawing order | `todo` | Hand-resorting the set out of dev-order into drawing-order |
+| DA.3 | Portada (cover) folio with project data | `todo` | Hand-drawing the cover sheet |
+| DA.4 | Simbología (symbol legend) folio | `todo` | Hand-drawing the symbology legend |
+| DA.5 | Section page numbering with gaps + prev/next continuation refs | `todo` (scheme to gate) | Hand-numbering with section gaps + "viene de / sigue en" refs |
+
+- **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
+- **DA.1 decision:** extract Abel's newest embedded template (82KB) from
+  `Fixtures/WADDING_1.qet` into the committed asset (76KB, stale, older logo SVG).
+- **DA.5 still needs gating:** gap size, section boundaries, prev/next ref format.
+
+---
 
 | # | Item | Status | Manual step removed |
 |---|------|--------|---------------------|

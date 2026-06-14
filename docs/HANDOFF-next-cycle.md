@@ -1,168 +1,208 @@
-# Handoff — next dev cycle (Tier 2 #6: Terminal strip / bornero)
+# Handoff — next dev cycle (Document assembly / front matter, "DA.x")
 
-> Self-contained handoff so a **fresh agent in a new session** can run the next
-> backlog item with no prior context. Written 2026-06-13 after Tier 2 #5.
+> Self-contained handoff so a **fresh agent in a new session** can continue with
+> no prior context. Written 2026-06-14 mid-cycle (Abel had to reboot for an
+> unrelated Docker issue). Supersedes the previous Tier 2 #6 handoff.
 
-## Where things stand
+## TL;DR — read this first
 
 - Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O
   drawing set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`.
-- **Tier 1 COMPLETE** (designations, wire numbers, device-index/BOM).
-- **Tier 2 #4 COMPLETE & MERGED to `main`** (ISO 7200 cajetín + changelog folio).
-- **Tier 2 #5 COMPLETE on branch `feat/power-supply`** (commit `6b9894d`, **not yet
-  merged to `main`, not pushed**). What it added:
-  - **Optional `power` block** in `module_db` (`src/module_db/<catalog>.json`):
-    `{ "type": "AC"|"DC", "groups": [ { "points":[…], "supply":"L1",
-    "common":"N", "supply_pin":"TBD", "common_pin":"TBD" } ] }`. `supply`/`common`
-    are **potential names** (L1/N for AC, L+/0V for DC); pins stay `"TBD"` → `__`
-    (never guessed, same rule as `wiring[].pin`). Parsed by the pure
-    `parse_power_block()` helper; `load_module_db()` exposes `db["power_groups"]`.
-  - Five shipped cards modelled per real type: **IA16** one L1/N group; **OA16**
-    two isolated groups of 8 (0–7 / 8–15) on L1/N; **IB32** L+/0V. **IF16 / OX8I
-    omit the block** (no single supply pair → draw nothing; *never invent*).
-  - **Inline** in `build_folio()`: each group's supply + common terminal drawn on a
-    **single horizontal lane above the card box** (`POWER_BAND_Y=60`, `POWER_X0=150`,
-    `POWER_PAIR_DX=80`, `POWER_GROUP_DX=180`), reusing the embedded `borne_2`
-    (no new element type). Each carries a compact `→ /Alim <potential>` **text
-    annotation** (a label, *not* a navigable QET cross-ref); multi-group cards get a
-    `(G1)`/`(G2)` suffix so isolated groups sharing a potential name stay distinct.
-  - **Dedicated `Alimentación` rail folio** appended after the changelog via
-    `build_supply_folios()` (mirrors summary/changelog: text + shapes only, empty
-    `<elements>`/`<conductors>`) so it inherits the title block. Rails default to the
-    standard set `SUPPLY_DEFAULT_RAILS = (L1, N, L+, 24V, 0V, PE)` plus any extra
-    potential a card declares.
-  - WADDING_1 now = 10 drawing + 3 summary + 1 changelog + **1 supply** = **15 folios**.
-    **125 unittests pass.**
+  Durable task list = `docs/TIER3-tracker.md` **+** the TaskCreate/TaskUpdate tools.
+- **ALL of Tier 2 is DONE and on `main`:** #4 cajetín, #5 power/supply, **#6 terminal
+  strip / bornero** (commit `1f24259`, ff-merged to local `main`, **NOT pushed**).
+- **Current work = a NEW theme, "Document assembly / front matter" (DA.x),** that runs
+  BEFORE Tier 3. Branch: **`feat/doc-assembly`** (off `main` @ `1f24259`).
+- **DA.1 (title-block template sync) is DONE** on the branch (commit `44b52e0`).
+  DA.2–DA.5 remain. See the tracker table.
 
-## ⚠️ Lessons (carry forward — these keep biting)
+## ⚠️ HARD RULES (these just bit us — do not repeat)
 
-- **Don't trust the workflow's `shipReady`.** Tier 2 #5's run *correctly* returned
-  `shipReady:false` — but its IMPLEMENT pass shipped a real geometry bug (a power
-  terminal's pin extent crossing the card-box border, and the first group drawn at
-  **negative x / off-sheet**) that **passed the implementer's own test** because the
-  test short-circuited (`y < box_top OR x < box_left` is always true when every
-  `y` is small). Always read each review lens yourself and re-derive the numbers.
-- **Positional/visual tests must assert the FULL symbol extent against the REAL
-  frame, not the center point.** `borne_2` pins reach `y ± 10` and `x … x+10`; assert
-  `y+10 ≤ box_top` and `x ≥ 0`, not just the hotspot. A "floor" regression test must
-  assert the actual numbers (parse `main()`'s stderr summary for `106 points` /
-  `75 matched`), never a proxy like "folio count grew".
-- **The band above the card box is tiny (~36 px: sub-header y≈44 → box top
-  ROW_Y0−20 = 80).** You can't stack two terminals there; use a single horizontal
-  lane. Long Spanish words (`Alimentación`) don't fit as per-terminal labels — use a
-  compact tag inline (`→ /Alim`) and put the full word on the dedicated folio.
-- **QET caches title-block templates at startup** — fully *restart* QET (not just
-  reopen) to see `.titleblock` edits.
-- **Reverse-engineer QET markup from shipped examples**
-  (`C:\Program Files\QElectroTech\examples\`, e.g. `iso_sfc_example.qet`), don't guess.
+1. **NEVER run the generator with `-o Fixtures/WADDING_1.qet`.** That file is **Abel's
+   working artifact** — he opens it in QElectroTech and hand-edits the title block /
+   layout, then saves. On 2026-06-14 a post-crash gate re-run with `-o
+   Fixtures/WADDING_1.qet` **overwrote his hand-edited ~82 KB template** (saved ~Jun 13
+   23:30). It was unrecoverable from disk (no `.qet~`/autosave; his QET personal
+   collection at `%APPDATA%/QElectroTech/QElectroTech/titleblocks/exxerpro.titleblock`
+   still held an OLDER 19:18 copy). Recovery only worked because Abel re-did the edit in
+   QET and re-saved the project, after which it was extracted from his fresh `.qet`.
+   **For the hard gate / any verification run, output to a SCRATCH path** (e.g.
+   `-o Fixtures/_gen_check.qet`) and parse THAT. Back up `Fixtures/WADDING_1.qet` before
+   any operation that could touch it. (Memory: `never-overwrite-working-qet`.)
+2. **Don't trust a subagent's `shipReady`/summary.** Re-derive every number from ground
+   truth (run the generator → read stderr; run the tests). Prior cycles shipped real
+   geometry bugs that passed the implementer's own short-circuiting test.
+3. **Never force / never invent.** Unmatched → generic; missing/ambiguous data →
+   graceful fallback. Physical pins stay `"TBD"` → `__`. Multilingual DBs stay
+   language-agnostic. Python 3.10+, **standard library only.**
+4. **Public repo hygiene:** NEVER `git add` anything under `Fixtures/` or any
+   `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / personal file. Company assets
+   (`assets/exxerpro.titleblock`, the logo **`.svg`**) ARE committed; the
+   `.png/.bmp/.ai` logo exports are intentionally untracked.
+5. **QET caches title-block templates at startup** — fully RESTART QET to see edits.
+6. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+   One focused commit per item; doc/handoff changes in their OWN commit.
 
-## Conventions established (reuse them)
+## The theme — Document assembly / front matter (from Abel's PDF review 2026-06-14)
 
-- **Confirm format with Abel in the Plan phase before implementing.** He has strong,
-  specific preferences and iterates visually (exports a PDF / screenshots the folio).
-  Use `AskUserQuestion` with concrete option previews; offer to launch QET on output.
-- **Never force / never invent.** Unmatched → generic; missing/ambiguous data →
-  graceful fallback (`None`/`""`/drop the group), never garbage. Pins stay `"TBD"` → `__`.
-- **Pure helper + integration + regression test.** A deterministic stdlib helper,
-  a `build_*`/`main`-level integration test, and a regression test for any invariant
-  you claim — and make the assertion exercise the real invariant (see Lessons).
-- **Presentation must actually render.** A legibility feature must be tested for
-  frame/box/sheet bounds AND eyeballed in QET. Structure passing tests is necessary
-  but not sufficient.
-- One focused commit per backlog item; message names the manual step removed.
-  Doc/handoff changes go in their **own** commit. Footer:
-  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+Abel exported the full project to PDF (`Fixtures/WADDING_1.pdf`, 25 pp.) and found the
+set was in **dev-order, not natural drawing order**, and lacked front matter.
 
-## The next item — Tier 2 #6: Terminal strip (bornero)
-
-From `ProductPlanEnhancement.md`:
-> Insert a **numbered terminal block** inline on each field conductor between the
-> card terminal and the field device, **or** a dedicated strip folio per card.
-> Classic EPLAN output, big manual task.
-
-Removes the manual step of drawing the terminal strip (regletero/bornero) and
-numbering its terminals.
-
-Code pointers (all in `src/logix_to_qet.py` unless noted):
-- `build_folio()` (~line 760) draws each point's I/O terminal and, for matched
-  points, the field-device symbol wired by a conductor
-  (`add_conductor(conductors, term_ids[2], pin_ids[west], num)` ~line 862). A bornero
-  terminal would be **inserted on that conductor**: split it into card-terminal →
-  **strip terminal** → device, or collect strip terminals for a per-card strip folio.
-- `add_terminal_element()` / `_add_element()` (~lines 629 / 537) place a `borne_2`
-  instance and allocate diagram-unique pin ids — reuse for the strip terminals.
-- For a **dedicated strip folio**, mirror `build_supply_folios()` /
-  `build_summary_folios()` / `build_changelog_folios()` (the "append a folio after the
-  drawing folios → it inherits the title block in `attach_titleblocks`" pattern) and
-  insert it in `main()` (~line 1180) **before** `attach_titleblocks`.
-- Terminal numbering: reuse the deterministic per-folio counter idea from
-  `next_designation()` / `wire_number()` (pure, repeatable). A strip terminal number
-  is typically `-X<n>:<term>` (EPLAN style) — keep it data-driven, language-agnostic.
-
-**Open decisions for the Plan phase to confirm with Abel:**
-- **Inline on each conductor** (a numbered terminal between card and device, per
-  point), a **dedicated strip folio per card**, or **both** (matches how he did #5)?
-- Terminal **numbering scheme** (sequential per card? per project? `-X1:1`, `-X1:2…`?)
-  and the strip **designation** (`-X1` per card? one project strip?).
-- Which conductors get a strip terminal — every field device, or also the
-  generic/unmatched points? (Spare-point handling is Tier 3, so likely matched only.)
-- Geometry: where the strip terminal sits on the row without colliding with the
-  existing terminal / symbol / wire-number text (the row is already busy — see the
-  tight-canvas lessons above).
-
-## Kickoff prompt — paste this into the new session
+**Target folio order — CONFIRMED with Abel (decision: "borneros grouped"):**
 
 ```
-Run the next dev cycle for the PLC → mini-EPLAN product. Backlog item: Tier 2 #6,
-"Terminal strip (bornero)" from ProductPlanEnhancement.md — insert a numbered
-terminal block on each field conductor (card terminal → strip terminal → device)
-and/or a dedicated strip folio per card. Reuse the established patterns; never
-invent data; terminal numbers are deterministic and language-agnostic.
-
-Before implementing, read for full context:
-- ProductPlanEnhancement.md (vision, backlog, guardrails, validation)
-- docs/HANDOFF-next-cycle.md (this file — current state, lessons, conventions)
-- docs/BMAD-Orchestration.md (how Rivet + the dev cycle work)
-- src/logix_to_qet.py — build_folio() and its add_conductor call, add_terminal_element,
-  the build_*_folios "append a folio + it gets the title block" pattern, main()
-- src/test_logix_to_qet.py (pure-helper + integration + regression test patterns)
-
-CONFIRM with Abel in the Plan phase (AskUserQuestion, with previews): inline vs
-dedicated strip folio (or both); the terminal numbering scheme + strip designation;
-which conductors get a strip terminal; row geometry to avoid collisions.
-
-Hard gate before any commit:
-  python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/WADDING_1.qet
-must still report 10 drawing folios / 106 points / 75 matched / 0 false positives,
-with terminal-id/conductor/definition assertions passing AND the ISO 7200 title
-block on every folio AND the changelog + Alimentación folios intact. Run the full
-unittest suite from src/ (python -m unittest test_logix_to_qet). Eyeball the .qet in
-QET (fully restart QET to reload title-block templates). One focused commit naming
-the manual step removed. NEVER git add Fixtures/ or any *.L5X / *.qet / *_eplan.csv
-/ *_bom.csv.
-
-Start state: Tier 2 #5 is on branch feat/power-supply (commit 6b9894d), NOT yet
-merged to main. Decide with Abel whether to merge feat/power-supply into main first
-(prior cycles fast-forwarded feature branches into main), then branch fresh from the
-integration point with a clean tree.
+Portada (cover + project data)        <- NEW (DA.3)
+Simbología (symbol legend)            <- NEW (DA.4)
+Alimentación (power rails)            <- move EARLY (currently near the end)
+card drawings (one per I/O card)      <- the 10 drawing folios
+borneros -X1 (one per card, GROUPED)  <- currently last; keep grouped, move before BOM
+BOM / índice de dispositivos          <- the summary folios
+Historial de revisiones               <- LAST (changelog)
 ```
 
-## Hard gate & guardrails (always)
+### Task table (also in `docs/TIER3-tracker.md`, and TaskList #2–#6)
 
-- Validation command:
-  `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/WADDING_1.qet`
-- Floor that must NOT regress: **10 drawing folios / 106 points / 75 matched / 0
-  false positives.** Plus: terminal ids unique per diagram; every conductor
-  `terminal1`/`terminal2` resolves to an existing id; every element `type` has an
-  embedded `<definition>`; the **ISO 7200 title block on every folio** (no raw
-  `%{tokens}`); the **changelog** and **Alimentación** folios present. Run the full
-  unittest suite (`python -m unittest test_logix_to_qet` from `src/`).
-- Python 3.10+, **standard library only.** Multilingual DBs stay language-agnostic.
-- Never guess physical pin numbers (`module_db` pins stay `"TBD"` → `__`).
-- **Public repo:** never `git add` anything under `Fixtures/` or any
-  `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / personal file. Company assets
-  (`assets/exxerpro.titleblock`, the logo **SVG**) are committed; the `.png/.bmp/.ai`
-  logo exports are intentionally untracked.
+| # | Item | Status |
+|---|------|--------|
+| DA.1 | Title-block template sync → `assets/exxerpro.titleblock` | **DONE `44b52e0`** |
+| DA.2 | Reorder folios to natural drawing order | todo |
+| DA.3 | Portada (cover) folio w/ project data | todo |
+| DA.4 | Simbología (symbol legend) folio | todo |
+| DA.5 | Section page numbering w/ gaps + prev/next continuation refs | todo (**scheme must be gated with Abel**) |
+
+Floor unchanged for all of them: **10 drawing folios / 106 points / 75 matched / 0 FP.**
+
+## Code map (all `src/logix_to_qet.py` unless noted)
+
+`main()` builds folios in this CREATION sequence (each `ET.SubElement(project,
+"diagram", {"order": str(order), …})`, so XML position == creation order today):
+
+- `~1390` drawing-folio loop → `build_folio(project, order, mod, pts, …)`, `order += 1`
+  per card. Accumulates `bom_rows` AND `drawn_cards` (used later). `sym_counts` (the
+  matched-symbol histogram) is also populated here.
+- `~1401` `build_summary_folios(project, order, bom_rows)` — the BOM folios.
+- `~1406` `build_changelog_folios(project, order, revisions)` — Historial.
+- `~1411` `build_supply_folios(project, order, io_mods)` — Alimentación.
+- `~1417` `build_bornero_folios(project, order, drawn_cards)` — borneros.
+- `~1424` `load_titleblock_template()` + `attach_titleblocks(...)` then
+  `embed_titleblock_templates()` injects the template verbatim (preserves the SVG).
+
+The "append a folio → it inherits the title block" pattern (text + shapes only, empty
+`<elements>`/`<conductors>`) is shared by `build_summary_folios` /
+`build_changelog_folios` / `build_supply_folios` / `build_bornero_folios` (+ their
+`_add_*_diagram` helpers). **DA.3/DA.4 should mirror this exact pattern.**
+
+## ⚠️ DA.2 / DA.5 ENTANGLEMENT — design before coding, gate with Abel
+
+The `order` int passed to `build_folio` is **also the page-number prefix** in:
+- device designations: `next_designation(sym, designations, order)` → `-K<order>.<n>`
+- wire numbers (default scheme): `wire_number(address, order, …)`
+
+So you **cannot** just renumber/reorder drawing folios without shifting every
+designation and wire number (e.g. drawing pages 1–10 → 4–13 would make `-K1.1`
+become `-K4.1`). Two consequences:
+
+1. **Decide the folio-position mechanism.** Two clean options:
+   - **(A) Sort at the end by an explicit position attribute.** Give each diagram a
+     separate *position* value (target sequence) and add a
+     `reorder_diagrams_by_position(project)` helper that stably re-appends the
+     `<diagram>` children in that order right before serialization — decoupling
+     build-order (driven by data deps: bom_rows/drawn_cards/sym_counts come from the
+     drawing loop) from folio position. **Keep the drawing folios' `order`/page value
+     stable (1..10)** so designations/wire numbers DON'T move.
+   - **(B) Verify whether QET honors the `order` attribute** independent of XML element
+     position. If it does, you may only need to set `order` correctly + still emit
+     elements in dependency order. **Test this in QET before relying on it.**
+2. **Page numbering (DA.5) must be gated with Abel** — gap size, section boundaries,
+   and whether section gaps change the page number used in designations/wire numbers
+   (likely NO — keep designation page = drawing-sheet ordinal). Also the prev/next
+   continuation refs ("viene de pág X / sigue en pág Y") format.
+
+**Recommendation:** design DA.2 + DA.5 together; gate the numbering scheme with Abel
+(AskUserQuestion + previews) BEFORE implementing, because it dictates whether
+designations move. Cover/symbology/supply/bom/changelog folios carry no designations,
+so their page numbers are free to use the gap scheme.
+
+## DA.3 Portada (cover) — pointers
+
+Mirror `_add_supply_diagram`/`build_supply_folios`. Data-driven from project metadata
+already loaded into `tb_fields` (company/owner, project/drawing name, drawing number,
+revision, static release date, approver) + the L5X controller name. Never invent
+fields not present (blank cell instead). It inherits the ISO 7200 title block via
+`attach_titleblocks` (so build it BEFORE that call, like the others).
+
+## DA.4 Simbología (symbol legend) — pointers
+
+List ONLY the symbols actually placed: `used = [e for e in symbols if e["id"] in
+sym_counts]` is already computed at `~1427` for `build_collection`. For each used
+symbol type show its glyph + Spanish name (the name/label lives in the `symbol_db`
+entry; keep language-agnostic — pull the display name from the DB, don't hardcode).
+Do NOT list unused symbols. Text + shapes pattern; inherits the title block.
+
+## Hard gate & guardrails (ALWAYS)
+
+- **Validation command (note the SCRATCH output — NOT WADDING_1.qet):**
+  `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/_gen_check.qet`
+- Floor that must NOT regress: **10 drawing folios / 106 points / 75 matched / 0 FP.**
+  Plus: terminal ids unique per diagram; every conductor `terminal1`/`terminal2`
+  resolves; no zero-length conductors; every element `type` has an embedded
+  `<definition>`; **ISO 7200 title block on every folio** with a `<property>` for every
+  custom token (the current template's tokens: owner, department, ref, approval, type,
+  status, code, name, rev, country) so QET leaks no raw `%{token}`; the changelog,
+  Alimentación and bornero folios all present.
+- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**145 tests**).
+- Pure helper + integration + regression test for every invariant you claim; assert the
+  REAL invariant (full symbol extent vs the real frame; floor numbers parsed from
+  `main()`'s stderr summary — not a proxy like "folio count grew").
+- **Eyeball in QET** (fully restart it) — structure passing tests is necessary, not
+  sufficient. Offer to launch QET on the scratch output.
+
+## Open decisions to gate with Abel (before coding DA.2/DA.5)
+
+- DA.5 numbering scheme: gap size per section; do section gaps affect the drawing-sheet
+  page number used in designations/wire numbers (recommend NO)? prev/next ref wording.
+- DA.2 mechanism: confirm whether QET orders by `order` attr or XML position (test it),
+  which picks option A vs B above.
+- Cover (DA.3) content: exactly which project-data fields Abel wants on the portada.
+- Symbología (DA.4): glyph + name only, or also a short description column?
+
+## Git state / how to resume
+
+- `main` @ `1f24259` (bornero #6; **not pushed** — ask Abel before pushing).
+- Branch `feat/doc-assembly` @ `44b52e0` (DA.1 template sync committed).
+- Uncommitted on the branch when this was written: `docs/TIER3-tracker.md` (DA section +
+  DA.1 done) and this handoff — to be committed together as the doc commit.
+- Backup of Abel's recovered `.qet`: `Fixtures/WADDING_1.qet.abel-backup-20260614`
+  (gitignored — do NOT commit; keep as safety).
+- Prior-cycle convention: ff-merge the feature branch into `main` per item, then
+  Abel pushes. Don't push without asking.
+
+## Kickoff prompt — paste into the new session
+
+```
+Continue the PLC → mini-EPLAN product. Current theme: "Document assembly / front
+matter" (DA.x) on branch feat/doc-assembly (off main @ 1f24259). DA.1 (title-block
+template sync, commit 44b52e0) is DONE. Do DA.2–DA.5 per docs/HANDOFF-next-cycle.md.
+
+READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES, code map, the DA.2/DA.5
+designation entanglement), docs/TIER3-tracker.md (task table), ProductPlanEnhancement.md
+(vision/guardrails), and in src/logix_to_qet.py the main() build sequence + the
+build_*_folios "append a folio → inherits the title block" pattern.
+
+Target folio order (confirmed): Portada → Simbología → Alimentación → card drawings →
+borneros (grouped) → BOM → Historial de revisiones (LAST).
+
+HARD RULES: never run the generator with -o Fixtures/WADDING_1.qet (it's Abel's working
+file — use -o Fixtures/_gen_check.qet). Never invent data; pins stay TBD→__; stdlib
+only; never git add Fixtures/ or *.L5X/*.qet/*_eplan.csv/*_bom.csv. Floor: 10 drawing
+folios / 106 points / 75 matched / 0 FP; 145 unittests pass; ISO 7200 title block on
+every folio with a property for every custom token.
+
+GATE WITH ABEL before coding DA.2/DA.5 (AskUserQuestion + previews): the page-numbering
+scheme (gaps/sections; do they shift designation/wire page numbers — recommend NO) and
+the folio-position mechanism (sort-by-position attr vs QET order attr — test in QET).
+Then implement, verify from ground truth, one focused commit per item, eyeball in QET.
+```
 
 ---
-*This file is a convenience handoff; overwrite it for the cycle after Tier 2 #6.*
+*Overwrite this file for the cycle after DA.x.*
