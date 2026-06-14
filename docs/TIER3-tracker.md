@@ -75,12 +75,15 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 |---|------|--------|---------------------|
 | T3.1 | NO/NC correctness on symbols | `done` `9518e77` | Hand-flipping each contact to its real normally-open/closed state |
 | T3.2 | Spare-point rendering | `done` `3aa6187` | Hand-drawing unused/reserved card points so the strip is complete |
-| T3.3 | Column pagination on card overflow | `todo` | Manually splitting a high-point-count card across sheets/columns |
+| T3.3 | Column pagination on card overflow | `deferred` [#1](https://github.com/hebelmx/PdfEplanToDxF/issues/1) | Manually splitting a high-point-count card across sheets/columns |
 | T3.4 | PE / ground potentials | `todo` | Hand-drawing the protective-earth / ground references on devices |
 | T3.5 | Additional languages (IT/DE/ZH) — pure data | `todo` (demand-driven) | Manual re-matching when a project ships in another language |
 
-Recommended order: **T3.1 → T3.2 → T3.3 → T3.4**, then **T3.5 only when a project
-demands it** (the plan calls the extra languages drop-in pure data, not a must-do).
+Recommended order: **T3.1 ✅ → T3.2 ✅ → ~~T3.3~~ (deferred, issue #1) → T3.4**, then
+**T3.5 only when a project demands it** (the plan calls the extra languages drop-in
+pure data, not a must-do). **T3.3 deferred 2026-06-14** — no card in the wild yet
+exceeds 32 channels (the 2×16 one-folio limit); 64-ch cards exist but are rarely seen,
+so it's tracked in **issue #1** and implemented when needed. **NEXT actionable = T3.4.**
 
 ---
 
@@ -135,7 +138,12 @@ demands it** (the plan calls the extra languages drop-in pure data, not a must-d
   ids unique / conductors resolve / no token leak; continuation refs chain 300→304.
   **Pending Abel: QET eyeball of the spare terminals + grown BOM/bornero.**
 
-## T3.3 — Column pagination on card overflow
+## T3.3 — Column pagination on card overflow  ⏸ DEFERRED (issue #1)
+- **Deferred 2026-06-14 (Abel):** no card seen in the wild exceeds the 2×16=32 one-folio
+  limit (64-ch cards exist but are rare); a >32 card currently overprints column 2.
+  Tracked in [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1) with the gated
+  design (≥32 ⇒ `(n/m)` continuation folio; one module BOM row, rows carry their folio;
+  designations/wire numbers continue across sheets). Implement when a real >32 card appears.
 - **Goal:** when a card has more points than one column/sheet holds, paginate
   across columns/sheets instead of overflowing the page frame.
 - **Acceptance sketch:** a card exceeding the per-column capacity flows to the next

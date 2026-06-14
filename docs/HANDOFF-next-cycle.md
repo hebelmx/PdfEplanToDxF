@@ -21,10 +21,11 @@
   + fixed the unreachable `limit_switch_nc`. T3.2 = 62 reserve terminals over 10 cards
   (RESERVA in strip lane + bornero + BOM `spare` category). **Floor held 10/106/75/0**;
   spares counted separately. WADDING_1 now emits **30 folios** (BOM 3→5, bornero 10→11).
-- **THE NEXT TASK = `T3.3` (Column pagination on card overflow).** See
-  `docs/TIER3-tracker.md` for the full T3.3–T3.5 specs and order (T3.3 → T3.4, then T3.5
-  on demand). **Each item has "Open decisions (gate)" — surface those to Abel
-  before/with implementing.** T3.3 touches the tight ~660-px folio geometry.
+- **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1).
+  No card in the wild exceeds the 2×16=32 one-folio limit (64-ch cards exist but rare);
+  gated design recorded in the issue. **THE NEXT TASK = `T3.4` (PE / ground potentials).**
+  See `docs/TIER3-tracker.md` for the T3.4/T3.5 specs. **Each item has "Open decisions
+  (gate)" — surface those to Abel before/with implementing.**
 - **Things still needing Abel's word (don't act without asking):**
   1. **Push the T3.2 commits** on `feat/t3-no-nc` (T3.1 is pushed; T3.2 `3aa6187` +
      the docs commit are local) — ask before pushing and before any merge to `main`.
@@ -114,7 +115,7 @@ Gated decisions live in memory **`da-numbering-decisions`** and **`qet-generator
 8. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
    One focused commit per item; doc/handoff changes in their OWN commit.
 
-## THE NEXT TASK — Tier 3 (start T3.3)
+## THE NEXT TASK — Tier 3 (start T3.4; T3.3 deferred → issue #1)
 
 Full specs in `docs/TIER3-tracker.md`. Summary + the decisions to gate with Abel:
 
@@ -125,12 +126,13 @@ Full specs in `docs/TIER3-tracker.md`. Summary + the decisions to gate with Abel
   spare = empty channel slot (capacity − mapped); RESERVA terminal in the strip lane + on
   the bornero + a BOM `spare` category (designation/type blank). Floor held 10/106/75/0;
   62 spares; 30 folios total. **Pending Abel's QET eyeball.**
-- **T3.3 Column pagination on card overflow** *(recommended next)* — paginate a card with
-  more points than one column/sheet holds; mind the ~660-px height already near-full at 16
-  rows. **Gate:** the overflow threshold; continue-on-same-folio vs. a `(2/2)` continuation
-  folio; how the BOM/summary reference a paginated card.
-- **T3.4 PE / ground potentials** — PE references on devices, cross-referenced to the
-  Alimentación rail; data-driven, pins stay TBD if unknown.
+- **T3.3 Column pagination on card overflow** — ⏸ **DEFERRED** ([issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)):
+  no card in the wild >32 ch; gated design (`(n/m)` continuation folio; one module BOM row,
+  rows carry their folio; designations continue across sheets) recorded for when needed.
+- **T3.4 PE / ground potentials** *(recommended next)* — PE references on devices,
+  cross-referenced to the existing `Alimentación` PE rail; data-driven (module_db/symbol_db),
+  pins stay TBD if unknown. **Gate:** PE as a per-device terminal vs. a symbol; which devices
+  get one; label style (Spanish, consistent with the cajetín).
 - **T3.5 Additional languages (IT/DE/ZH)** — pure data, demand-driven only.
 
 ## Code map (current `src/logix_to_qet.py`)
@@ -146,7 +148,7 @@ continuation refs, then re-sorts into document order before serialization:
 - `build_symbology_folio(project, SECTION_SIMBOLOGIA=1, used)` (DA.4) — real glyphs.
 - `build_supply_folios(project, SECTION_SUPPLY=100, io_mods)` — Alimentación.
 - `build_bornero_folios(project, SECTION_BORNERO=200, drawn_cards)` — 200..209.
-- `build_summary_folios(project, SECTION_BOM=300, bom_rows)` — 300..302.
+- `build_summary_folios(project, SECTION_BOM=300, bom_rows)` — 300..304 (5 folios since T3.2 spares; +`spare_bom_row`).
 - `build_changelog_folios(project, SECTION_CHANGELOG=900, revisions)` — Historial.
 - `add_continuation_refs(project)` (DA.5c) — stamps prev/next refs on `CONTINUATION_RANGES`
   page bands (drawings/borneros/BOM); pure `<input>` text, run before the reorder.
@@ -163,12 +165,13 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 - **Validation command (SCRATCH output — NOT WADDING_1.qet):**
   `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/_gen_check.qet`
 - **Floor that must NOT regress:** **10 drawing folios / 106 points / 75 matched / 0 FP**,
-  parsed from `main()`'s stderr summary (not a proxy). Plus: **27 total folios** in the
+  parsed from `main()`'s stderr summary (not a proxy). Since T3.2 also: **62 spare
+  reserve terminals** (separate count) and **30 total folios** (BOM 5, bornero 11) in the
   section order; terminal ids unique per diagram; every conductor `terminal1/2` resolves;
   no zero-length conductors; every element `type` has an embedded `<definition>`; ISO 7200
   title block on every folio with a `<property>` for every custom token (incl. `page`) so
   QET leaks no raw `%{token}`.
-- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**186 tests**).
+- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**203 tests**).
 - Pure helper + integration + regression test for every invariant you claim; assert the
   REAL invariant (full symbol extent vs the real frame; floor numbers from stderr).
 - **Eyeball in QET** (fully restart it) — offer to launch QET on the scratch output.
@@ -177,35 +180,33 @@ The "append a folio → inherits the title block" pattern (text + shapes only) i
 ## Git state / how to resume
 
 - **`main` @ `a59e39f`** — Document-assembly theme (DA.1–DA.8) ff-merged & pushed to origin.
-- **`feat/t3-no-nc`** — branched off `main`/`a59e39f`. T3.1 (`9518e77` + docs) is PUSHED to
-  origin. **T3.2 (`3aa6187` + docs commit) is committed but NOT pushed** — ask Abel before
-  pushing and before any merge to `main`.
-- Continue T3.3 on `feat/t3-no-nc` (or a fresh branch off it).
+- **`feat/t3-no-nc`** — branched off `main`/`a59e39f`. T3.1 (`9518e77`) and T3.2 (`3aa6187`)
+  + their docs commits are all PUSHED to origin (T3.2 pushed 2026-06-14). Ask Abel before
+  any merge to `main`.
+- Continue T3.4 on `feat/t3-no-nc` (or a fresh branch off it). T3.3 is deferred (issue #1).
 
 ## Kickoff prompt — paste into the new session
 
 ```
 Continue the PLC → mini-EPLAN product (src/logix_to_qet.py) on branch
 feat/t3-no-nc. T3.1 (NO/NC contact correctness, 9518e77) and T3.2 (spare-point
-rendering, 3aa6187) are DONE & verified. Floor held 10/106/75/0 FP; WADDING_1 now
-emits 30 folios (62 RESERVA spares; BOM 5 folios; bornero 11); 203 tests green.
-NEXT = T3.3 (Column pagination on card overflow) — touches the tight ~660-px folio
-geometry (a 16-row card box already nearly fills the height).
+rendering, 3aa6187) are DONE, verified & pushed. Floor held 10/106/75/0 FP;
+WADDING_1 emits 30 folios (62 RESERVA spares; BOM 5; bornero 11); 203 tests green.
+T3.3 (column pagination) is DEFERRED → issue #1. NEXT = T3.4 (PE / ground potentials).
 
 READ FIRST: docs/HANDOFF-next-cycle.md (state, HARD RULES incl. #6 QET-numbers-by-
-position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.3–T3.5
+position and #7 tight top+bottom bands, code map), docs/TIER3-tracker.md (T3.4/T3.5
 specs + Open-decisions to gate), ProductPlanEnhancement.md, and memory
 qet-generator-status + t3-spare-decisions.
 
-For T3.3: gate the Open decisions with Abel (the overflow threshold; continue-on-
-same-folio vs a (2/2) continuation folio; how the BOM/summary reference a paginated
-card) BEFORE coding. Keep geometry inside the page frame; title block + folio
-numbering stay correct. Verify from ground truth (floor 10/106/75/0 from stderr),
-one focused commit, eyeball in QET.
+For T3.4: gate the Open decisions with Abel (PE as a per-device terminal vs a symbol;
+which devices get a PE reference; label style — Spanish, consistent with the cajetín)
+BEFORE coding. Data-driven (module_db/symbol_db); never invent; pins stay TBD if
+unknown; cross-reference the existing Alimentación PE rail. Verify from ground truth
+(floor 10/106/75/0 from stderr), one focused commit, eyeball in QET.
 
-STILL PENDING ABEL: (1) push the T3.2 commits on feat/t3-no-nc (T3.1 pushed; T3.2
-3aa6187 + docs NOT pushed — ask first); (2) eyeball T3.2 in QET (RESERVA spares,
-grown bornero/BOM).
+STILL PENDING ABEL: (1) eyeball T3.2 in QET (RESERVA spares, grown bornero/BOM);
+(2) the periodic adversarial review is due (T3.1+T3.2, phase boundary) before/with T3.4.
 
 HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
 (TBD→__, blank cells); stdlib only; never git add Fixtures/ or *.L5X/*.qet/*.pdf/*_bom.csv;
@@ -213,4 +214,4 @@ restart QET to see template edits; don't push without Abel's OK.
 ```
 
 ---
-*Overwrite this file for the cycle after T3.3.*
+*Overwrite this file for the cycle after T3.4.*
