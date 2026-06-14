@@ -28,12 +28,12 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | DA.5b | DISPLAYED sectioned page number (000/001/100…) in the cajetín | `done` `7b2151b` | Hand-numbering the cajetín with section gaps |
 | DA.6 | Hide schematic grid rulers (0–16 / A–H) on the non-schematic list/front-matter folios — they drew tables "out of the box" over the rulers | `done` `7b2151b` | — (review fix) |
 | DA.7 | Lift the card header so the inline power band stops overprinting the sub-header on I/O drawings | `done` | — (review fix) |
-| DA.5c | prev/next continuation refs ("viene de / sigue en") | `todo` | Hand-writing the continuation references |
+| DA.5c | prev/next continuation refs ("viene de / sigue en") | `done` `c2ba9b7` | Hand-writing the continuation references |
 
 - **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
   WADDING_1 now emits **27 folios** in the gated order: Portada → Simbología →
   Alimentación → drawings (101–110) → borneros (200–209) → BOM (300–302) →
-  Historial (900). Full suite **164 tests** green.
+  Historial (900). Full suite **180 tests** green (DA.5c continuation refs added).
 - **DA.1 decision:** extract Abel's newest embedded template (82KB) from
   `Fixtures/WADDING_1.qet` into the committed asset (76KB, stale, older logo SVG).
 - **Gated decisions (2026-06-14):** section page scheme = sectioned-with-gaps
@@ -49,7 +49,13 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 - **DA.6 done `7b2151b`:** Abel's "BOM out of the box" — list/front-matter folios
   drew tables over QET's schematic grid rulers; hid the rulers
   (displaycols/displayrows=false) on the non-schematic folios; drawings keep them.
-- **DA.5c open:** continuation-ref wording was never gated; design + gate.
+- **DA.5c done `c2ba9b7`:** gated with Abel 2026-06-14 — arrow+page format
+  (`◄ pág. X` back / `pág. Y ►` forward), both on the bottom lane near the
+  cajetín, page = SECTION page (DA.5b's `order`), on drawings (101–110) +
+  borneros (200–209) + BOM (300–302); single-folio sections excluded.
+  `add_continuation_refs()` groups by section page range and stamps neighbours'
+  pages as `<input>` text only (pure annotation; floor/folio counts untouched).
+  Full suite **180 tests**. **DA theme COMPLETE → next = Tier 3 (T3.1).**
 
 ---
 
