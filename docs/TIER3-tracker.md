@@ -25,7 +25,8 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | DA.3 | Portada (cover) folio with project data | `done` `2db8219` | Hand-drawing the cover sheet |
 | DA.4 | Simbología (symbol legend) folio | `done` `39cdd5c` | Hand-drawing the symbology legend |
 | DA.5a | Designations follow the printed section page (-K101.x … -K110.x) | `done` `5fa2e4d` | — |
-| DA.5b | DISPLAYED sectioned page number (000/001/100…) in the cajetín | `review` (needs QET eyeball) | Hand-numbering the cajetín with section gaps |
+| DA.5b | DISPLAYED sectioned page number (000/001/100…) in the cajetín | `done` `7b2151b` | Hand-numbering the cajetín with section gaps |
+| DA.6 | Hide schematic grid rulers (0–16 / A–H) on the non-schematic list/front-matter folios — they drew tables "out of the box" over the rulers | `done` `7b2151b` | — (review fix) |
 | DA.5c | prev/next continuation refs ("viene de / sigue en") | `todo` | Hand-writing the continuation references |
 
 - **Coverage / floor unchanged:** 10 drawing folios / 106 points / 75 matched / 0 FP.
@@ -39,11 +40,14 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
   (Abel's choice, overriding the handoff's NO recommendation) → schematic devices
   are now -K101.x … -K110.x. Cover = full title-block metadata set; legend =
   glyph + Spanish name. See memory `da-numbering-decisions`.
-- **DA.5b open:** the cajetín page cell uses QET's built-in `%{folio-id}`
-  (position 1..N). The diagram `order` attr is set to the section page, but
-  whether QET renders that as the displayed number is UNVERIFIED. If QET shows
-  1..27, the fallback is swapping `%{folio-id}` → a custom `%{page}` property
-  (touches `assets/exxerpro.titleblock`, which Abel re-syncs — gate first).
+- **DA.5b done `7b2151b`:** QET eyeball confirmed it numbers by POSITION (the
+  export showed 24/27 on the BOM). Fixed generator-side: `sectionize_titleblock_page`
+  rewrites `%{folio-id}/%{folio-total}` → custom `%{page}` in the EMBEDDED copy
+  only; `apply_titleblock` fills it per folio from the diagram order, zero-padded
+  (000/001/100/101…/900). `assets/exxerpro.titleblock` untouched (re-syncable).
+- **DA.6 done `7b2151b`:** Abel's "BOM out of the box" — list/front-matter folios
+  drew tables over QET's schematic grid rulers; hid the rulers
+  (displaycols/displayrows=false) on the non-schematic folios; drawings keep them.
 - **DA.5c open:** continuation-ref wording was never gated; design + gate.
 
 ---
