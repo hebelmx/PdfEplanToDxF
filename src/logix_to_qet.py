@@ -303,6 +303,22 @@ POINTS_PER_COL = 16
 BOX_LEFT, BOX_RIGHT = 60, 10   # card box extents relative to terminal x
 PIN_PLACEHOLDER = "__"
 
+# Inline terminal-strip (bornero) geometry. Each field conductor is broken by a
+# numbered strip terminal that sits in the clean slot BETWEEN the row text band
+# (which runs ~x+20…x+200) and the device symbol (x+SYM_X_OFF = x+290). The
+# device's WEST pin is NOT a fixed x+280: it varies per symbol — the closest one
+# in the symbol DB is the photocell at x+260, the rest sit at ≥ x+269. The strip
+# terminal centre is at x+STRIP_X_OFF; its borne_2 pin extent spans
+# x+STRIP_X_OFF … x+STRIP_X_OFF+10 (east pin) and y ± 10. STRIP_X_OFF=235 keeps
+# that full extent (…+245) clear of the row text (<x+200, margin 35), clear of
+# the CLOSEST device west pin (x+260, margin 15 — not the optimistic x+280),
+# well clear of the card box (right edge x+10), and on-sheet (smallest column
+# x=110 -> 345 ≥ 0). Every card's strip designation is "-X1" (resets per card);
+# the terminal number is the I/O channel = pt.index (0-based), so the strip reads
+# 1:1 against the drawn points (-X1:0 … -X1:15 on a single-column card).
+STRIP_X_OFF = 235
+STRIP_DESIGNATION = "-X1"
+
 # Inline power/common terminals: a horizontal strip ABOVE the card box, in the
 # free band between the sub-header (y≈44) and the box top edge (ROW_Y0-20 = 80).
 # A group's supply and common terminals sit side by side on ONE lane, so the
@@ -715,6 +731,17 @@ def wire_number(address: str | None, page: int, scheme: str,
     return address.strip()
 
 
+def strip_terminal_label(channel: int, designation: str = STRIP_DESIGNATION) -> str:
+    """The numbered terminal label for the inline strip / bornero folio.
+
+    Pure and deterministic: the per-card strip designation (always '-X1', reset
+    per card) joined by ':' to the I/O channel number, which IS the point index
+    (0-based) — so the strip reads 1:1 against the card's drawn points
+    (-X1:0 … -X1:15). The channel is point-mirrored, never a fabricated sequence,
+    and the designation resets per card so every card's strip is '-X1'."""
+    return f"{designation}:{channel}"
+
+
 def add_conductor(conductors: ET.Element, terminal1: int, terminal2: int,
                   num: str = ""):
     ET.SubElement(conductors, "conductor", {
@@ -874,6 +901,17 @@ def build_folio(project: ET.Element, order: int, mod, points,
         add_text(inputs, x + 20, y - 8,
                  f"{cp:>2}  {address:<7} {pt.tag}")
         add_text(inputs, x + 20, y + 4, function)
+        # inline strip / bornero terminal on the field conductor: ONE numbered
+        # strip terminal per drawn point (matched AND generic), in the clean slot
+        # between the row text and the device symbol. Its label is the per-card
+        # strip designation joined to the I/O channel (-X1:<pt.index>), so the
+        # strip reads 1:1 against the points. Reuses the borne_2 definition via
+        # add_terminal_element (no new element type); ids stay diagram-unique.
+        # north pin (index 0) = card side, east pin (index 2) = device side.
+        strip_label = strip_terminal_label(pt.index)
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, function, ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
         # field-device symbol from the semantic match, wired to the terminal
         sym = None if pt.analog else match_symbol(symbols, pt.tag,
                                                   pt.description, pt.direction)
@@ -886,11 +924,15 @@ def build_folio(project: ET.Element, order: int, mod, points,
             designation = next_designation(sym, designations, order) or pt.tag
             pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
                                                designation, ids)
-            # the field conductor wires the I/O terminal pin to its matched
-            # field-device symbol pin; the address is a defined source point, so
-            # it carries a visible wire number (None only if address is empty)
+            # the field conductor is now BROKEN by the inline strip terminal:
+            # card terminal east pin -> strip north pin, then strip east pin ->
+            # field-device west pin. The wire number rides the card->strip segment
+            # ONLY (it appears exactly once — not lost, not duplicated); the
+            # strip->device segment carries no num (same physical wire continues
+            # through the terminal, so a second number would be a false duplicate).
             num = wire_number(address, order, wire_scheme, wire_counters) or ""
-            add_conductor(conductors, term_ids[2], pin_ids[west], num)
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
+            add_conductor(conductors, strip_ids[2], pin_ids[west], "")
             sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
             # (device) BOM row — designation is exactly what we labelled the
             # placed symbol with (next_designation result or PLC-tag fallback),
@@ -901,11 +943,19 @@ def build_folio(project: ET.Element, order: int, mod, points,
                     order, designation=designation, type_id=sym["id"],
                     description=sym.get("description") or "",
                     tag=pt.tag, address=address))
-        elif bom_rows is not None:
+        else:
+            # GENERIC / unmatched point (or any analog point): there is no device
+            # beyond, so the field conductor runs only from the card terminal east
+            # pin to the strip terminal north pin — the strip is where field wiring
+            # leaves the card. No invented device. The address (if any) still
+            # carries the wire number on this single segment.
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
             # (generic) BOM row — unmatched point (or any analog point): only
             # tag/address; designation and catalog_or_type stay blank so we
             # never invent a device for a point that matched no symbol.
-            bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
+            if bom_rows is not None:
+                bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
 
     return diagram
 
@@ -1202,6 +1252,79 @@ def build_supply_folios(project: ET.Element, start_order: int,
     return 1
 
 
+# ── Dedicated terminal-strip (bornero) folio, one per card ───────────────────
+# A classic EPLAN strip sheet: one folio per I/O card listing that card's strip
+# '-X1' and every terminal on it (-X1:0 … -X1:n) in drawn order, so the engineer
+# no longer numbers/draws the regletero by hand. Rendered like the summary /
+# changelog / supply folios — text + shape primitives ONLY, empty
+# <elements>/<conductors> — so it inherits the ISO 7200 title block and adds zero
+# element/conductor instances (the strip terminals themselves are the inline ones
+# already drawn on the card folio; this sheet is the listing/overview).
+BORNERO_TITLE_PREFIX = "Bornero"
+BORNERO_ROW_Y0 = 90          # y of the first terminal row
+BORNERO_ROW_DY = 24          # pitch between terminal rows
+BORNERO_TERM_X = 90          # terminal-designation column x
+BORNERO_FUNC_X = 220         # function/tag column x
+
+
+def _add_bornero_diagram(project: ET.Element, order: int, mod, points) -> ET.Element:
+    """Render one bornero folio for a card: a legible list of the card's strip
+    '-X1' terminals (-X1:<channel> + the point's tag/function) drawn with ONLY
+    text + shape primitives (empty <elements>/<conductors>), so it carries the
+    title block and touches no element/conductor instance. Terminal order is the
+    card's drawn-point order; channel is the point index (point-mirrored)."""
+    title = f"{BORNERO_TITLE_PREFIX} -{mod.name} ({STRIP_DESIGNATION})"
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": title,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "true",
+        "displayrows": "true", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, BORNERO_TERM_X, 30,
+             f"{BORNERO_TITLE_PREFIX.upper()} -{mod.name}   {STRIP_DESIGNATION}",
+             FONT_HEADER)
+    add_text(inputs, BORNERO_TERM_X, BORNERO_ROW_Y0 - 18, "BORNE", FONT_SMALL)
+    add_text(inputs, BORNERO_FUNC_X, BORNERO_ROW_Y0 - 18, "FUNCIÓN / TAG",
+             FONT_SMALL)
+    y_rule = BORNERO_ROW_Y0 - 12
+    add_rect(shapes, BORNERO_TERM_X, y_rule, BORNERO_FUNC_X + 300, y_rule + 2)
+    for i, pt in enumerate(points):
+        y = BORNERO_ROW_Y0 + i * BORNERO_ROW_DY
+        add_text(inputs, BORNERO_TERM_X, y, strip_terminal_label(pt.index),
+                 FONT_TEXT)
+        function = pt.description or l2e.humanize(pt.tag)
+        add_text(inputs, BORNERO_FUNC_X, y, f"{function}   ({pt.tag})", FONT_SMALL)
+    return diagram
+
+
+def build_bornero_folios(project: ET.Element, start_order: int,
+                         cards) -> int:
+    """Append one dedicated terminal-strip (bornero) folio per card AFTER the
+    supply folio (order numbers continue past it). `cards` is an ordered list of
+    (mod, points) pairs in the same deterministic order as the drawing folios, so
+    the bornero folios mirror the drawing order. Mirrors build_supply_folios:
+    text + shape primitives only (empty <elements>/<conductors>). Returns the
+    count appended (one per non-empty card)."""
+    n = 0
+    for mod, pts in cards or []:
+        if not pts:
+            continue
+        _add_bornero_diagram(project, start_order + n, mod, pts)
+        n += 1
+    return n
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a ControlLogix L5X export to a QElectroTech project.")
@@ -1261,12 +1384,16 @@ def main(argv=None):
     # points (one row per module + per drawn point); the points l2e skipped as
     # unmapped get no row, so the BOM mirrors the drawing, not the raw I/O map.
     bom_rows: list[dict] = []
+    # ordered (mod, points) pairs for the drawing folios — reused verbatim to
+    # build one dedicated bornero folio per card in the same deterministic order.
+    drawn_cards: list = []
     for mod in io_mods:
         pts = per_module.get(mod.name)
         if not pts:
             continue
         build_folio(project, order, mod, pts, symbols, sym_counts, designations,
                     args.wire_scheme, wire_counters, bom_rows=bom_rows)
+        drawn_cards.append((mod, pts))
         order += 1
         folios += 1
     # summary folio(s) come AFTER the drawing folios (order continues past
@@ -1283,6 +1410,12 @@ def main(argv=None):
     # title block too. Draws the rails the cards' power blocks reference.
     supply_folios = build_supply_folios(project, order, io_mods)
     order += supply_folios
+    # dedicated terminal-strip (bornero) folios — one per drawing card, listing
+    # that card's strip '-X1' and its terminals — appended AFTER the supply folio
+    # (order continues) and BEFORE attach_titleblocks so they inherit the ISO 7200
+    # title block too. Deterministic: same order as the drawing folios.
+    bornero_folios = build_bornero_folios(project, order, drawn_cards)
+    order += bornero_folios
     # cajetín: reference the ISO 7200 template from EVERY folio (drawing +
     # summary). QET renders the framed block + SVG logo + auto sheet number
     # itself; values (company, drawing no., rev, static date…) ride along as
@@ -1328,6 +1461,8 @@ def main(argv=None):
           f"{changelog_folios} folio(s)", file=err)
     print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s)",
           file=err)
+    print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
+          f"folio(s), one per card", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

@@ -168,17 +168,24 @@ class BuildFolioWireNumberTest(unittest.TestCase):
     def test_address_scheme_emits_eplan_address_verbatim(self):
         diagram = self._folio("address")
         nums = [c.get("num") for c in diagram.find("conductors").findall("conductor")]
-        self.assertEqual(nums, ["I0.0", "I0.1"])
-        # every field conductor carries a non-empty num...
-        self.assertTrue(all(nums))
-        # ...while the defaultconductor template stays empty (sourceless).
+        # the inline strip terminal breaks each matched field conductor into TWO
+        # segments (card->strip, strip->device); the wire number rides the
+        # card->strip segment ONLY, so it appears EXACTLY ONCE per matched point
+        # (not lost, not duplicated). The strip->device segment carries "".
+        self.assertEqual([n for n in nums if n], ["I0.0", "I0.1"])
+        self.assertEqual(nums.count("I0.0"), 1)
+        self.assertEqual(nums.count("I0.1"), 1)
+        # the defaultconductor template stays empty (sourceless).
         self.assertEqual(diagram.find("defaultconductor").get("num"), "")
 
     def test_sequential_scheme_emits_per_folio_wire_numbers(self):
         diagram = self._folio("sequential")
         nums = [c.get("num") for c in diagram.find("conductors").findall("conductor")]
-        self.assertEqual(nums, ["W3.1", "W3.2"])
-        self.assertTrue(all(nums))
+        # each wire number appears exactly once (on the card->strip segment); the
+        # per-folio counter still advances once per matched point, not per segment.
+        self.assertEqual([n for n in nums if n], ["W3.1", "W3.2"])
+        self.assertEqual(nums.count("W3.1"), 1)
+        self.assertEqual(nums.count("W3.2"), 1)
         self.assertEqual(diagram.find("defaultconductor").get("num"), "")
 
 
@@ -1127,9 +1134,10 @@ class BuildFolioPowerRenderTest(unittest.TestCase):
         self.assertIn("→ /Alim N (G2)", xrefs)
         # the two groups' references are distinct (isolation survives)
         self.assertEqual(len(set(xrefs)), len(xrefs))
-        # no drawn conductor spanning folios was added for the annotation
-        # (only the field-device conductors, here zero for a no-match point)
-        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        # the power-rail annotation itself draws NO conductor; the only conductor
+        # on this single-generic-point card is the inline strip segment (card
+        # terminal east pin -> strip terminal), which is the new bornero feature.
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 1)
 
     def test_single_group_card_has_no_group_suffix(self):
         # IA16 is a single L1/N group -> no (G1) suffix (suffix only when >1)
@@ -1331,6 +1339,306 @@ class WaddingRegressionTest(unittest.TestCase):
                 self.assertIn(c.get("terminal2"), idset)
             for el in d.find("elements").findall("element"):
                 self.assertIn(el.get("type").split("/")[-1], def_names)
+
+
+class StripTerminalLabelTest(unittest.TestCase):
+    """Pure helper: the inline-strip / bornero terminal designation. -X1 resets
+    per card; the terminal number IS the I/O channel (point index, 0-based)."""
+
+    def test_label_is_designation_colon_channel(self):
+        self.assertEqual(q.strip_terminal_label(0), "-X1:0")
+        self.assertEqual(q.strip_terminal_label(15), "-X1:15")
+
+    def test_channel_is_point_index_zero_based(self):
+        # channel reads 1:1 against the drawn points (point-mirrored), so the
+        # label for channel N is exactly N — never N+1, never a re-sequence.
+        for ch in range(16):
+            self.assertEqual(q.strip_terminal_label(ch), f"-X1:{ch}")
+
+    def test_designation_is_x1_and_resets_per_card(self):
+        # every card's strip is '-X1' — the helper hard-codes that designation,
+        # so two different cards' channel-0 terminals carry the identical '-X1:0'.
+        self.assertTrue(q.strip_terminal_label(0).startswith("-X1:"))
+        self.assertEqual(q.STRIP_DESIGNATION, "-X1")
+
+    def test_designation_override_is_honoured(self):
+        self.assertEqual(q.strip_terminal_label(3, "-X9"), "-X9:3")
+
+
+class BuildFolioStripInlineTest(unittest.TestCase):
+    """Integration: build_folio places ONE inline strip terminal per drawn point
+    (matched AND generic), labelled -X1:<channel>, and rewires the field
+    conductor through it so every conductor terminal id resolves to a real
+    terminal on the diagram."""
+
+    @staticmethod
+    def _diagram(pts, catalog="FAKE-NODB"):
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog=catalog,
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        for pt in pts:
+            pt.module = mod
+        project = ET.Element("project")
+        q.build_folio(project, 3, mod, pts, q.load_symbol_db(), {}, {},
+                      wire_scheme="address", wire_counters={})
+        return project.find("diagram")
+
+    def _texts(self, d):
+        return [i.get("text") for i in d.find("inputs").findall("input")]
+
+    def test_matched_point_gets_strip_label_and_split_conductor(self):
+        # LS1 matches limit_switch -> a device symbol is placed; the strip
+        # terminal -X1:0 sits between the I/O terminal and the device.
+        mod_pt = SimpleNamespace(module=None, index=0, tag="LS1", direction="I",
+                                 description="", analog=False)
+        d = self._diagram([mod_pt])
+        self.assertIn("-X1:0", self._texts(d))
+        # matched point -> field conductor BROKEN into two segments
+        conds = d.find("conductors").findall("conductor")
+        self.assertEqual(len(conds), 2)
+
+    def test_generic_point_gets_strip_label_and_single_conductor(self):
+        # an unmatched tag stays generic: strip terminal -X1:0 + ONE conductor
+        # (card terminal -> strip terminal); no device beyond.
+        pt = SimpleNamespace(module=None, index=0, tag="ZZZ_NOMATCH",
+                             direction="I", description="", analog=False)
+        d = self._diagram([pt])
+        self.assertIn("-X1:0", self._texts(d))
+        conds = d.find("conductors").findall("conductor")
+        self.assertEqual(len(conds), 1)
+
+    def test_channel_label_tracks_point_index_for_both_kinds(self):
+        pts = [
+            SimpleNamespace(module=None, index=0, tag="LS1", direction="I",
+                            description="", analog=False),      # matched
+            SimpleNamespace(module=None, index=5, tag="ZZZ_NOMATCH",
+                            direction="I", description="", analog=False),  # gen.
+        ]
+        d = self._diagram(pts)
+        texts = self._texts(d)
+        self.assertIn("-X1:0", texts)
+        self.assertIn("-X1:5", texts)
+
+    def test_every_conductor_endpoint_resolves_to_a_terminal(self):
+        pts = [
+            SimpleNamespace(module=None, index=0, tag="LS1", direction="I",
+                            description="", analog=False),
+            SimpleNamespace(module=None, index=1, tag="ZZZ_NOMATCH",
+                            direction="I", description="", analog=False),
+        ]
+        d = self._diagram(pts)
+        ids = {t.get("id") for t in d.find("elements").iter("terminal")}
+        for c in d.find("conductors").findall("conductor"):
+            self.assertIn(c.get("terminal1"), ids)
+            self.assertIn(c.get("terminal2"), ids)
+
+    def test_strip_terminal_reuses_borne_2_definition(self):
+        pt = SimpleNamespace(module=None, index=0, tag="ZZZ_NOMATCH",
+                             direction="I", description="", analog=False)
+        d = self._diagram([pt])
+        types = [el.get("type")
+                 for el in d.find("elements").findall("element")]
+        # the I/O terminal + the strip terminal are BOTH borne_2 (no new type)
+        self.assertEqual(types.count(q.TERMINAL_TYPE), 2)
+
+    def test_sequential_scheme_numbers_generic_points_too(self):
+        """Documented behaviour: under --wire-scheme sequential EVERY drawn
+        point's card->strip segment consumes one W<page>.<n> slot, generic and
+        matched alike (each generic point now carries a field conductor). Pin this
+        so the per-page counter advance is intentional, not an accident."""
+        mod = SimpleNamespace(rack=1, slot=2, name="CARD", catalog="FAKE-NODB",
+                              kind="DI", points=16, in_byte_base=0,
+                              out_byte_base=0, an_in_word_base=0,
+                              an_out_word_base=0)
+        pts = [
+            SimpleNamespace(module=mod, index=0, tag="LS1", direction="I",
+                            description="", analog=False),         # matched
+            SimpleNamespace(module=mod, index=1, tag="ZZZ_NOMATCH",
+                            direction="I", description="", analog=False),  # gen.
+            SimpleNamespace(module=mod, index=2, tag="LS2", direction="I",
+                            description="", analog=False),         # matched
+        ]
+        project = ET.Element("project")
+        q.build_folio(project, 3, mod, pts, q.load_symbol_db(), {}, {},
+                      wire_scheme="sequential", wire_counters={})
+        d = project.find("diagram")
+        nums = [c.get("num") for c in d.find("conductors").findall("conductor")
+                if c.get("num")]
+        # one number per drawn point, in drawn order; generic point gets W3.2
+        self.assertEqual(nums, ["W3.1", "W3.2", "W3.3"])
+
+
+class StripTerminalGeometryTest(unittest.TestCase):
+    """Positional/visual: the FULL strip-terminal pin extent must stay clear of
+    the card box, the row text, the device symbol, and on-sheet — asserted on the
+    real extent (x..x+10, y±10), not the centre point, for every column."""
+
+    @staticmethod
+    def _min_device_west_offset():
+        """The smallest device WEST-pin x-offset across the WHOLE symbol DB,
+        computed exactly as add_symbol_element transforms pins (rotate 90° CW:
+        (tx,ty)->(-ty,tx), orient +1). This is the REAL left edge a placed device
+        can occupy (the photocell is the tightest); the strip terminal must clear
+        THIS, not the optimistic x+SYM_X_OFF-10 constant."""
+        offs = []
+        for e in q.load_symbol_db():
+            pins = [(-ty, tx, (to + 1) % 4) for tx, ty, to in e["_terminals"]]
+            west = min(range(len(pins)),
+                       key=lambda i: (pins[i][2] != 3, pins[i][0]))
+            offs.append(q.SYM_X_OFF + pins[west][0])
+        return min(offs)
+
+    def test_full_extent_clears_box_text_device_and_sheet(self):
+        device_west_off = self._min_device_west_offset()
+        # guard the guard: this must be the photocell-tight value, not a fiction
+        self.assertEqual(device_west_off, 260)
+        for x in q.COL_X:
+            cx = x + q.STRIP_X_OFF        # strip terminal centre x
+            # borne_2 east pin reaches cx+10; N/S pins at cx; pins span y±10
+            left, right = cx, cx + 10
+            box_right = x + q.BOX_RIGHT           # card box right edge
+            row_text_right = x + 20 + 180         # generous row-text band end
+            # the REAL closest device west pin (computed from the symbol DB), not
+            # an assumed x+SYM_X_OFF-10 — so a regression that slides the strip
+            # into the photocell pin turns this red.
+            device_west = x + device_west_off
+            # clears the card box entirely (to the right of it)
+            self.assertGreater(left, box_right,
+                               f"strip @x={x} overlaps card box")
+            # clears the busy row-text band
+            self.assertGreaterEqual(left, row_text_right,
+                                    f"strip @x={x} collides with row text")
+            # the whole terminal sits strictly LEFT of the closest device west pin
+            self.assertLess(right, device_west,
+                            f"strip @x={x} (right={right}) collides with the "
+                            f"closest device west pin ({device_west})")
+            # on-sheet: left edge non-negative
+            self.assertGreaterEqual(left, 0, f"strip @x={x} is off-sheet")
+
+    def test_pin_extent_y_band_is_full_row_height(self):
+        # the strip terminal centre sits ON the I/O row y; its pins span y±10,
+        # which is comfortably inside the ROW_DY (=35) pitch, so adjacent strip
+        # terminals never overlap vertically.
+        self.assertLess(2 * 10, q.ROW_DY)
+
+
+class BorneroFolioTest(unittest.TestCase):
+    """The dedicated terminal-strip (bornero) folio, one per card: text+shape
+    primitives only, empty <elements>/<conductors>, title block on every one."""
+
+    @staticmethod
+    def _card(name, indices, catalog="FAKE-NODB"):
+        mod = SimpleNamespace(rack=1, slot=2, name=name, catalog=catalog,
+                              kind="DI", points=16)
+        pts = [SimpleNamespace(module=mod, index=i, tag=f"T{i}", direction="I",
+                               description="", analog=False) for i in indices]
+        return (mod, pts)
+
+    def test_one_folio_per_card_in_order(self):
+        project = ET.Element("project")
+        cards = [self._card("A", [0, 1]), self._card("B", [0])]
+        n = q.build_bornero_folios(project, 7, cards)
+        self.assertEqual(n, 2)
+        ds = project.findall("diagram")
+        self.assertEqual([d.get("order") for d in ds], ["7", "8"])
+        self.assertIn("-A", ds[0].get("title"))
+        self.assertIn("-B", ds[1].get("title"))
+        self.assertIn("-X1", ds[0].get("title"))
+
+    def test_lists_each_strip_terminal_in_drawn_order(self):
+        project = ET.Element("project")
+        q.build_bornero_folios(project, 1, [self._card("A", [0, 3, 7])])
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        for ch in (0, 3, 7):
+            self.assertIn(f"-X1:{ch}", texts)
+
+    def test_text_and_shapes_only_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_bornero_folios(project, 1, [self._card("A", [0, 1])])
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+
+    def test_empty_card_list_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_bornero_folios(project, 1, []), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_card_with_no_points_is_skipped(self):
+        project = ET.Element("project")
+        n = q.build_bornero_folios(project, 1, [self._card("A", [])])
+        self.assertEqual(n, 0)
+
+    def test_bornero_folio_gets_titleblock_no_raw_tokens(self):
+        project = ET.Element("project")
+        q.build_bornero_folios(project, 1,
+                               [self._card("A", [0]), self._card("B", [0])])
+        fields = q.resolve_title_block_fields(
+            {**q.PROJECT_TEMPLATE_DEFAULTS, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        for d in project.findall("diagram"):
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+            self.assertIsNotNone(d.find("properties"))
+            for prop in d.find("properties").findall("property"):
+                self.assertNotIn("%{", prop.text or "")
+
+
+class WaddingBorneroFloorTest(unittest.TestCase):
+    """Floor: the bornero feature must NOT regress the WADDING_1 numbers. Parses
+    main()'s own stderr summary and asserts the literal floor (106 points / 75
+    matched) plus the new bornero folio line and 10 untouched drawing folios."""
+
+    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "w.qet"
+            with redirect_stderr(buf):
+                rc = q.main([str(self.FIXTURE), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def test_floor_unchanged_and_bornero_reported(self):
+        root, err = self._run()
+        # literal floor from the summary
+        self.assertRegex(err, r"points\s*:\s*106\s+drawn")
+        self.assertRegex(err, r"symbols\s*:\s*75\s+matched")
+        # exactly 10 drawing folios (one per I/O card with mapped tags)
+        drawing = [d for d in root.findall("diagram")
+                   if d.get("title", "").startswith("R")]
+        self.assertEqual(len(drawing), 10)
+        # the bornero summary line is honest about what it drew: 10 cards drawn
+        # -> 10 bornero folios
+        m = re.search(r"bornero\s*:\s*(\d+)\s+terminal-strip", err)
+        self.assertIsNotNone(m, f"no bornero line in summary:\n{err}")
+        self.assertEqual(int(m.group(1)), 10)
+        # one bornero diagram per card, each titled 'Bornero -<name> (-X1)'
+        borneros = [d for d in root.findall("diagram")
+                    if (d.get("title") or "").startswith("Bornero")]
+        self.assertEqual(len(borneros), 10)
+
+    def test_bornero_folios_carry_titleblock_no_raw_tokens(self):
+        root, _ = self._run()
+        borneros = [d for d in root.findall("diagram")
+                    if (d.get("title") or "").startswith("Bornero")]
+        self.assertTrue(borneros)
+        for d in borneros:
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+            self.assertIsNotNone(d.find("properties"))
+            for prop in d.find("properties").findall("property"):
+                self.assertNotIn("%{", prop.text or "")
+            # bornero folios touch no element/conductor instance
+            self.assertEqual(len(d.find("elements").findall("element")), 0)
+            self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
 
 
 if __name__ == "__main__":
