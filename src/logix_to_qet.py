@@ -1917,21 +1917,30 @@ def build_topology_tree(modules: dict) -> dict:
     return {"root": root_name, "nodes": nodes, "children": children}
 
 
-# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). A hierarchical
-# layout: the controller box near the top centre; its direct children laid out
-# below in BANDS by depth, each band's boxes spread across the page width and
-# connected to their parent by a thin vertical-then-horizontal lead pair. I/O
-# drops are compact stacked boxes under their parent chassis. Every label is
-# lifted clear of its leads (DA.8 repo lesson). First cut — Abel will eyeball.
-TOPO_NODE_W = 150           # node box width
-TOPO_NODE_H = 46            # node box height
-TOPO_TOP_Y = 64             # controller box top y (below the header)
-TOPO_BAND_DY = 110          # vertical pitch between depth bands
-TOPO_X_MARGIN = 20          # left/right page margin for spreading nodes
+# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). CHASSIS-GROUPED
+# layout (Abel's sketch): draw ONE enclosing box PER PHYSICAL CHASSIS (a rack),
+# never a box per module — that per-module boxing was the root cause of the
+# overprint + strike-through defects. Inside a chassis box the modules are PLAIN
+# TEXT rows with generous pitch (no per-row border/lead crosses a label). Leads
+# attach only at chassis-box edges and the network bus. Arrangement: Chasis
+# Local near the top; the ControlNet bus below it; Chasis Remoto + the HMI node
+# below the bus, side by side. Spread to fill the full page.
+TOPO_X_MARGIN = 20          # left/right page margin
 TOPO_PAGE_W = 1010          # page frame width (matches POWER_TABLE_RIGHT)
-TOPO_IO_BOX_H = 18          # compact I/O-drop sub-box height
-TOPO_IO_BOX_DY = 22         # I/O-drop sub-box vertical pitch
-TOPO_IO_TOP_DY = 26         # gap below a chassis box before its I/O drop stack
+TOPO_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+TOPO_ROW_PITCH = 24         # vertical pitch between module-row baselines (≥ font+6)
+TOPO_HEADER_DY = 26         # gap from chassis box top to its first module row
+TOPO_ROW_X = 12             # module-row text inset from the chassis box left edge
+TOPO_BOX_PAD_BOTTOM = 12    # gap below the last row to the chassis box bottom edge
+TOPO_LOCAL_Y1 = 60          # Chasis Local box top y (clear below the header)
+TOPO_BUS_GAP = 70           # gap below Chasis Local box before the network bus
+TOPO_BUS_H = 3              # network-bus bar thickness (a thin rect)
+TOPO_LOWER_GAP = 70         # gap below the bus before the lower chassis row
+TOPO_LEAD_W = 2             # lead/drop thickness (thin rects, no line primitive)
+TOPO_LOCAL_W = 470          # Chasis Local box width (upper, left-leaning)
+TOPO_REMOTE_W = 560         # Chasis Remoto box width (lower-left)
+TOPO_HMI_W = 300            # HMI / standalone node box width (lower-right)
+TOPO_GAP_X = 40             # horizontal gap between the two lower boxes
 
 
 def _topo_node_label(node: dict) -> tuple[str, str, str]:
@@ -1945,63 +1954,138 @@ def _topo_node_label(node: dict) -> tuple[str, str, str]:
     return name, catalog, tag
 
 
-def _add_topology_node(shapes, inputs, node: dict, x: int, y: int):
-    """Draw ONE node box at top-left (x, y) with its name/catalog/role labels
-    INSIDE the box (lifted off every edge). Returns (cx, bottom_y) — the box's
-    horizontal centre and bottom edge — for lead routing."""
-    x2, y2 = x + TOPO_NODE_W, y + TOPO_NODE_H
+def _topo_module_row_text(node: dict) -> str:
+    """One PLAIN-TEXT module row inside a chassis box: 'NAME  catalog  [KIND]'
+    with the localized role tag in parentheses. All data-driven; an unknown
+    module still renders its name+catalog (graceful, never invented)."""
+    name, catalog, tag = _topo_node_label(node)
+    parts = [name]
+    if catalog:
+        parts.append(catalog)
+    kind = getattr(node["module"], "kind", None)
+    if kind in ("DI", "DO", "AI", "AO"):
+        parts.append(f"[{kind}]")
+    parts.append(f"({tag})")
+    return "  ".join(parts)
+
+
+def build_topology_chassis(tree: dict):
+    """Group the classified tree into PHYSICAL CHASSIS (racks) for rendering.
+    Returns (chassis_list, hmi_names) where:
+      - chassis_list is a list of {'head', 'label', 'rows'} dicts; 'rows' is the
+        ordered list of node names INSIDE the rack (head first), drawn as plain
+        text rows inside one enclosing box.
+      - hmi_names is the ordered list of standalone network nodes (HMI or any
+        leaf with no I/O children) drawn as their own small box on the bus.
+    Grouping rule (data-driven):
+      - Chasis Local = the controller's own rack: the controller + every module
+        whose parent IS the controller (its local network bridge + local I/O).
+      - Chasis Remoto = each bridge that HAS I/O-module children: that adapter +
+        its I/O-module children.
+      - a node with no I/O-module children that is neither the controller nor a
+        local-rack member is a standalone bus node (HMI / generic leaf).
+    Pure & deterministic (preserves insertion order)."""
+    nodes, children, root = tree["nodes"], tree["children"], tree["root"]
+    if root is None:
+        return [], []
+
+    def io_kids(name):
+        return [c for c in children.get(name, []) if nodes[c]["role"] == "io"]
+
+    chassis = []
+    claimed = set()           # node names already placed in a chassis
+
+    # Chasis Local — controller's rack: controller + all direct children of it.
+    local_rows = [root]
+    claimed.add(root)
+    for c in children.get(root, []):
+        local_rows.append(c)
+        claimed.add(c)
+    chassis.append({"head": root, "label": "Chasis Local", "rows": local_rows})
+
+    # Chasis Remoto — every bridge/adapter with I/O-module children that is not
+    # already inside the local rack, headed by that adapter.
+    for name in nodes:
+        if name in claimed or name == root:
+            continue
+        if nodes[name]["role"] == "io":
+            continue
+        kids = io_kids(name)
+        if not kids:
+            continue
+        rows = [name] + kids
+        for r in rows:
+            claimed.add(r)
+        chassis.append({
+            "head": name,
+            "label": f"Chasis Remoto ({name})",
+            "rows": rows,
+        })
+
+    # Standalone bus nodes — anything not yet claimed and not an I/O card (an I/O
+    # card with no rack would be an orphan; skip — it has no chassis to sit in).
+    hmi = [n for n in nodes
+           if n not in claimed and nodes[n]["role"] != "io"]
+    return chassis, hmi
+
+
+def _chassis_box_height(rows: int) -> int:
+    """Total height of a chassis box carrying `rows` plain-text module rows: a
+    header gap, one pitch per row, plus bottom padding. Generous row pitch keeps
+    every row's border-free baseline clear (fixes the strike-through defect)."""
+    return TOPO_HEADER_DY + rows * TOPO_ROW_PITCH + TOPO_BOX_PAD_BOTTOM
+
+
+def _add_chassis_box(shapes, inputs, nodes, chassis, x, y, w):
+    """Draw ONE enclosing chassis box at (x, y) of width w with a bold header row
+    (the chassis label) and one PLAIN-TEXT row per module (NO per-row border or
+    lead — that is the whole point). Returns (x, y, x2, y2) the box rectangle."""
+    rows = chassis["rows"]
+    h = _chassis_box_height(len(rows))
+    x2, y2 = x + w, y + h
+    add_rect(shapes, x, y, x2, y2)
+    # bold header label, lifted clear above the first module row
+    add_text(inputs, x + TOPO_ROW_X, y + 16, chassis["label"], FONT_HEADER)
+    ry = y + TOPO_HEADER_DY + 14
+    for name in rows:
+        add_text(inputs, x + TOPO_ROW_X, ry, _topo_module_row_text(nodes[name]),
+                 FONT_SMALL)
+        ry += TOPO_ROW_PITCH
+    return x, y, x2, y2
+
+
+def _add_hmi_box(shapes, inputs, node, x, y, w):
+    """Draw a standalone bus node (HMI / leaf) as its own small box: a header
+    naming it + a single plain-text detail row. Returns (x, y, x2, y2)."""
+    h = _chassis_box_height(1)
+    x2, y2 = x + w, y + h
     add_rect(shapes, x, y, x2, y2)
     name, catalog, tag = _topo_node_label(node)
-    add_text(inputs, x + 6, y + 13, name, FONT_TEXT)
+    add_text(inputs, x + TOPO_ROW_X, y + 16, f"{name} ({tag})", FONT_HEADER)
     if catalog:
-        add_text(inputs, x + 6, y + 26, catalog, FONT_SMALL)
-    add_text(inputs, x + 6, y + 39, tag, FONT_SMALL)
-    return (x + TOPO_NODE_W) - TOPO_NODE_W // 2, y2
+        add_text(inputs, x + TOPO_ROW_X, y + TOPO_HEADER_DY + 14, catalog,
+                 FONT_SMALL)
+    return x, y, x2, y2
 
 
-def _add_topology_lead(shapes, parent_cx, parent_bottom, child_cx, child_top):
-    """Connect a parent box bottom to a child box top with thin (2-px) rect leads
-    — a vertical drop from the parent, a horizontal run across, and a vertical
-    drop into the child (an orthogonal elbow). No line/circle helper exists, so
-    leads are thin rects, like the grounding/supply leads."""
-    mid_y = (parent_bottom + child_top) // 2
-    # vertical drop from parent down to the mid rail
-    y_a, y_b = sorted((parent_bottom, mid_y))
-    add_rect(shapes, parent_cx, y_a, parent_cx + 2, y_b)
-    # horizontal run along the mid rail to the child's x
-    x_a, x_b = sorted((parent_cx, child_cx))
-    add_rect(shapes, x_a, mid_y, x_b + 2, mid_y + 2)
-    # vertical drop from the mid rail into the child top
-    y_a, y_b = sorted((mid_y, child_top))
-    add_rect(shapes, child_cx, y_a, child_cx + 2, y_b)
-
-
-def _topo_depths(tree: dict) -> dict:
-    """Return {name: depth} by walking the parent chain from the root (root
-    depth 0). Nodes unreachable from the root (orphans) get depth 1 so they
-    still render in a band rather than vanishing."""
-    nodes, children, root = tree["nodes"], tree["children"], tree["root"]
-    depth: dict = {}
-    if root is not None:
-        stack = [(root, 0)]
-        while stack:
-            name, d = stack.pop()
-            if name in depth:
-                continue
-            depth[name] = d
-            for ch in children.get(name, []):
-                stack.append((ch, d + 1))
-    for name in nodes:
-        depth.setdefault(name, 1)
-    return depth
+def _add_topology_drop(shapes, x_from, y_from, x_to, y_to):
+    """A thin orthogonal lead (vertical drop + horizontal run) between two
+    points, drawn as thin rects (no line primitive exists). Used only to attach
+    chassis-box edges to the network bus — never inside a box."""
+    # vertical segment
+    ya, yb = sorted((y_from, y_to))
+    add_rect(shapes, x_from, ya, x_from + TOPO_LEAD_W, yb)
+    # horizontal segment along the destination y
+    xa, xb = sorted((x_from, x_to))
+    add_rect(shapes, xa, y_to, xb + TOPO_LEAD_W, y_to + TOPO_LEAD_W)
 
 
 def _add_topology_diagram(project: ET.Element, order: int, tree: dict) -> ET.Element:
-    """Render the single topology folio: text + shape primitives only, EMPTY
-    <elements>/<conductors>. Non-I/O nodes (controller, bridges, HMI, generic)
-    are laid out in depth BANDS and connected by leads; the I/O modules under a
-    chassis are drawn as a compact stacked list under that chassis box, with the
-    bridging network protocol labelled on the lead when confidently inferable."""
+    """Render the single topology folio CHASSIS-GROUPED: text + shape primitives
+    only, EMPTY <elements>/<conductors>. ONE enclosing box per physical chassis
+    (Chasis Local up top, Chasis Remoto + HMI below the network bus), modules as
+    plain-text rows inside their box. Leads attach only at box edges and the bus;
+    the bridging protocol is labelled on the bus when confidently inferable."""
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": TOPOLOGY_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -2021,70 +2105,55 @@ def _add_topology_diagram(project: ET.Element, order: int, tree: dict) -> ET.Ele
 
     add_text(inputs, TOPO_X_MARGIN, 30, TOPOLOGY_TITLE.upper(), FONT_HEADER)
 
-    nodes, children = tree["nodes"], tree["children"]
+    nodes = tree["nodes"]
     if not nodes:
         return diagram
 
-    # Non-I/O nodes form the hierarchical backbone; I/O modules hang off their
-    # parent as compact stacked sub-boxes (a chassis may carry ~5+ drops).
-    backbone = [n for n in nodes if nodes[n]["role"] != "io"]
-    depth = _topo_depths(tree)
-    # group backbone nodes into bands by depth (preserve insertion order within)
-    by_band: dict = {}
-    for name in backbone:
-        by_band.setdefault(depth.get(name, 1), []).append(name)
+    chassis_list, hmi_names = build_topology_chassis(tree)
+    if not chassis_list:
+        return diagram
 
-    # place each band's boxes spread evenly across the usable page width
-    placed: dict = {}     # name -> (x, y, cx, bottom)
-    usable = TOPO_PAGE_W - 2 * TOPO_X_MARGIN
-    for band in sorted(by_band):
-        names = by_band[band]
-        y = TOPO_TOP_Y + band * TOPO_BAND_DY
-        n = len(names)
-        # centre the boxes: slot width = usable / n, box centred in its slot
-        slot = usable / n if n else usable
-        for i, name in enumerate(names):
-            cx_slot = TOPO_X_MARGIN + slot * (i + 0.5)
-            x = int(round(cx_slot - TOPO_NODE_W / 2))
-            # clamp inside the frame
-            x = max(TOPO_X_MARGIN, min(x, TOPO_PAGE_W - TOPO_X_MARGIN - TOPO_NODE_W))
-            cx, bottom = _add_topology_node(shapes, inputs, nodes[name], x, y)
-            placed[name] = (x, y, cx, bottom)
+    local = chassis_list[0]                       # Chasis Local (controller rack)
+    remotes = chassis_list[1:]                    # Chasis Remoto rack(s)
 
-    # leads from each backbone node to its backbone children, protocol-labelled
-    # when the PARENT is a comms node whose protocol is confidently inferable.
-    for name, (x, y, cx, bottom) in placed.items():
-        proto = nodes[name]["protocol"]
-        for ch in children.get(name, []):
-            if ch not in placed:
-                continue
-            cxp = placed[ch]
-            _add_topology_lead(shapes, cx, bottom, cxp[2], cxp[1])
-            if proto:
-                # label lifted onto the mid rail, clear to the right of the drop
-                mid_y = (bottom + cxp[1]) // 2
-                add_text(inputs, min(cx, cxp[2]) + 8, mid_y - 6, proto, FONT_SMALL)
+    # ── Chasis Local box: near the top, left-leaning ─────────────────────────
+    lx, ly, lx2, ly2 = _add_chassis_box(
+        shapes, inputs, nodes, local, TOPO_X_MARGIN, TOPO_LOCAL_Y1, TOPO_LOCAL_W)
 
-    # I/O drops: a compact stacked list of sub-boxes under each parent chassis.
-    for parent_name, (x, y, cx, bottom) in list(placed.items()):
-        io_children = [c for c in children.get(parent_name, [])
-                       if nodes[c]["role"] == "io"]
-        if not io_children:
-            continue
-        sx = x
-        sy = bottom + TOPO_IO_TOP_DY
-        # a short lead from the chassis box down to the drop stack
-        add_rect(shapes, cx, bottom, cx + 2, sy)
-        for c in io_children:
-            m = nodes[c]["module"]
-            cat = getattr(m, "catalog", "") or ""
-            kind = getattr(m, "kind", "") or ""
-            add_rect(shapes, sx, sy, sx + TOPO_NODE_W, sy + TOPO_IO_BOX_H)
-            label = f"{getattr(m, 'name', '')}  {cat}".strip()
-            if kind:
-                label = f"{label}  [{kind}]"
-            add_text(inputs, sx + 6, sy + 13, label, FONT_SMALL)
-            sy += TOPO_IO_BOX_DY
+    # ── Network bus: a horizontal bar spanning the page below Chasis Local ────
+    bus_y = ly2 + TOPO_BUS_GAP
+    bus_x1, bus_x2 = TOPO_X_MARGIN, TOPO_PAGE_W - TOPO_X_MARGIN
+    add_rect(shapes, bus_x1, bus_y, bus_x2, bus_y + TOPO_BUS_H)
+    # drop from the Chasis Local box (its local bridge) down to the bus
+    local_drop_x = lx + TOPO_LOCAL_W // 2
+    add_rect(shapes, local_drop_x, ly2, local_drop_x + TOPO_LEAD_W, bus_y)
+    # protocol label on the bus, data-driven from the local bridge's catalog
+    proto = None
+    for name in local["rows"]:
+        if nodes[name]["role"] == "bridge" and nodes[name]["protocol"]:
+            proto = nodes[name]["protocol"]
+            break
+    if proto:
+        add_text(inputs, bus_x1 + 8, bus_y - 6, proto, FONT_SMALL)
+
+    # ── Lower row: Chasis Remoto box(es) then the HMI node, side by side ──────
+    lower_y = bus_y + TOPO_BUS_H + TOPO_LOWER_GAP
+    cursor_x = TOPO_X_MARGIN
+    for rc in remotes:
+        rx, ry, rx2, ry2 = _add_chassis_box(
+            shapes, inputs, nodes, rc, cursor_x, lower_y, TOPO_REMOTE_W)
+        # drop from the bus down into the remote chassis (at the adapter)
+        drop_x = rx + TOPO_REMOTE_W // 2
+        add_rect(shapes, drop_x, bus_y + TOPO_BUS_H, drop_x + TOPO_LEAD_W, ry)
+        cursor_x = rx2 + TOPO_GAP_X
+
+    for name in hmi_names:
+        hx, hy, hx2, hy2 = _add_hmi_box(
+            shapes, inputs, nodes[name], cursor_x, lower_y, TOPO_HMI_W)
+        drop_x = hx + TOPO_HMI_W // 2
+        add_rect(shapes, drop_x, bus_y + TOPO_BUS_H, drop_x + TOPO_LEAD_W, hy)
+        cursor_x = hx2 + TOPO_GAP_X
+
     return diagram
 
 

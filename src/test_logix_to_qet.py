@@ -1678,22 +1678,47 @@ class TopologyFolioTest(unittest.TestCase):
         self.assertGreaterEqual(min(ys), 0)
         self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)   # 660
 
-    def test_node_labels_lifted_clear_of_box_edges(self):
-        # Every node text input sits INSIDE its box, off the top edge: the label
-        # y is strictly below the box top (so the line never strikes the text).
+    def test_chassis_boxes_one_per_chassis_not_per_module(self):
+        # Fixes defect 1&2: there is exactly ONE enclosing box per chassis (plus
+        # one per standalone HMI node), NOT one box per module. The tiny tree has
+        # 2 chassis (Local + Remoto) + 1 HMI node => 3 enclosing boxes.
         project = ET.Element("project")
         q.build_topology_folio(project, 2, "Local", _tiny_tree())
         d = project.find("diagram")
-        # the node boxes are the TOPO_NODE_H-tall rects; gather their top edges
-        tops = [float(s.get("y1")) for s in d.find("shapes").findall("shape")
-                if abs(float(s.get("y2")) - float(s.get("y1")) - q.TOPO_NODE_H) < 1]
-        self.assertTrue(tops, "no node boxes drawn")
-        ys = [float(i.get("y")) for i in d.find("inputs").findall("input")]
-        # every label baseline is strictly below the topmost box top edge minus
-        # the header — i.e. no label sits exactly on a box's top edge
-        for t in tops:
-            self.assertFalse(any(abs(y - t) < 1 for y in ys),
-                             "a label sits exactly on a box top edge")
+        tree = q.build_topology_tree(_tiny_tree())
+        chassis, hmi = q.build_topology_chassis(tree)
+        self.assertEqual(len(chassis), 2)            # Chasis Local + Chasis Remoto
+        self.assertEqual(len(hmi), 1)                # PV_PUPITRE
+        # enclosing boxes = rects whose height matches a chassis/hmi box height.
+        heights = {q._chassis_box_height(len(c["rows"])) for c in chassis}
+        heights.add(q._chassis_box_height(1))        # the HMI box
+        boxes = [s for s in d.find("shapes").findall("shape")
+                 if (float(s.get("y2")) - float(s.get("y1"))) in heights
+                 and (float(s.get("x2")) - float(s.get("x1"))) > 50]
+        # exactly 3 enclosing boxes — never one per module
+        self.assertEqual(len(boxes), 3)
+
+    def test_module_rows_are_plain_text_not_struck_through(self):
+        # Fixes defect 2: inside each chassis box the module rows are plain text
+        # with >= TOPO_ROW_PITCH between consecutive baselines, and NO shape edge
+        # shares a y with a row baseline (no per-row border/lead crosses a label).
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        ys = sorted(float(i.get("y")) for i in d.find("inputs").findall("input"))
+        # consecutive row baselines inside a box are separated by >= the pitch
+        # (the header sits closer; check the dominant gap is the row pitch).
+        pitch_gaps = [b - a for a, b in zip(ys, ys[1:])
+                      if abs((b - a) - q.TOPO_ROW_PITCH) < 1]
+        self.assertTrue(pitch_gaps, "no rows at the expected pitch")
+        # no shape edge y coincides with a row-label baseline inside a box
+        edge_ys = set()
+        for s in d.find("shapes").findall("shape"):
+            edge_ys.add(float(s.get("y1")))
+            edge_ys.add(float(s.get("y2")))
+        for y in ys:
+            self.assertFalse(any(abs(y - e) < 1 for e in edge_ys),
+                             "a row baseline coincides with a shape edge")
 
     def test_protocol_label_present_for_controlnet_bridge(self):
         project = ET.Element("project")
@@ -1722,13 +1747,16 @@ class TopologyFolioTest(unittest.TestCase):
         project = ET.Element("project")
         q.build_topology_folio(project, 2, "Local", mods)
         d = project.find("diagram")
-        texts = [i.get("text") for i in d.find("inputs").findall("input")]
-        self.assertIn("WIDGET", texts)
-        self.assertIn("ACME-XYZ-9000", texts)
-        self.assertIn(q.TOPOLOGY_ROLE_TAGS["generic"], texts)
+        # module rows are now plain TEXT inside a chassis box (name+catalog+tag
+        # combined into one row string) — assert each token is present.
+        joined = " | ".join(i.get("text")
+                            for i in d.find("inputs").findall("input"))
+        self.assertIn("WIDGET", joined)
+        self.assertIn("ACME-XYZ-9000", joined)
+        self.assertIn(q.TOPOLOGY_ROLE_TAGS["generic"], joined)
         # no protocol guessed for the unknown node
-        self.assertNotIn("ControlNet", texts)
-        self.assertNotIn("EtherNet/IP", texts)
+        self.assertNotIn("ControlNet", joined)
+        self.assertNotIn("EtherNet/IP", joined)
 
     def test_inherits_titleblock_and_no_token_leak(self):
         project = ET.Element("project")
@@ -1811,6 +1839,75 @@ class TopologyWaddingRegressionTest(unittest.TestCase):
         self.assertLessEqual(max(xs), 1010)
         self.assertGreaterEqual(min(ys), 0)
         self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)
+
+    def _chassis(self):
+        """Recompute the chassis grouping from the real fixture tree."""
+        import logix_to_eplan_csv as l2e
+        _, modules, _, _ = l2e.load_l5x(str(self.FIXTURE))
+        tree = q.build_topology_tree(modules)
+        return q.build_topology_chassis(tree)
+
+    def _enclosing_boxes(self, t):
+        """Return the chassis/HMI enclosing-box rects of the rendered folio, by
+        matching each shape's height to a known chassis/HMI box height. Returns a
+        list of (x1, y1, x2, y2)."""
+        chassis, hmi = self._chassis()
+        heights = {q._chassis_box_height(len(c["rows"])) for c in chassis}
+        heights.add(q._chassis_box_height(1))
+        boxes = []
+        for s in t.find("shapes").findall("shape"):
+            x1, y1 = float(s.get("x1")), float(s.get("y1"))
+            x2, y2 = float(s.get("x2")), float(s.get("y2"))
+            if (y2 - y1) in heights and (x2 - x1) > 50:
+                boxes.append((x1, y1, x2, y2))
+        return boxes
+
+    def test_chassis_grouping_matches_ground_truth(self):
+        # exactly 2 chassis: Chasis Local (8 rows) + Chasis Remoto (6 rows),
+        # plus the PV_PUPITRE HMI node — grouped by physical rack.
+        chassis, hmi = self._chassis()
+        self.assertEqual(len(chassis), 2)
+        local, remote = chassis[0], chassis[1]
+        self.assertEqual(local["label"], "Chasis Local")
+        self.assertEqual(set(local["rows"]),
+                         {"Local", "RIO_LOCAL", "MOD_ENT_1", "MOD_ENT_2",
+                          "MOD_ENT_3", "MOD_SAL_1", "MOD_SAL_2", "MOD_SAL_3"})
+        self.assertEqual(len(local["rows"]), 8)
+        self.assertEqual(remote["label"], "Chasis Remoto (RIO_RCP)")
+        self.assertEqual(set(remote["rows"]),
+                         {"RIO_RCP", "REM_IN_1", "REM_IN_2", "REM_OUT_RLY_1",
+                          "REM_OUT_2", "REM_AN_IN_1"})
+        self.assertEqual(len(remote["rows"]), 6)
+        self.assertEqual(hmi, ["PV_PUPITRE"])
+
+    def test_chassis_boxes_disjoint_no_overlap(self):
+        # Fixes defect 1: the two chassis boxes + the HMI box are mutually
+        # DISJOINT (no inter-group overlap) on the real fixture.
+        root, _, _ = self._run()
+        t = [d for d in root.findall("diagram")
+             if d.get("title") == "Red de comunicaciones"][0]
+        boxes = self._enclosing_boxes(t)
+        # 2 chassis + 1 HMI = 3 enclosing boxes
+        self.assertEqual(len(boxes), 3)
+
+        def overlap(a, b):
+            ax1, ay1, ax2, ay2 = a
+            bx1, by1, bx2, by2 = b
+            return ax1 < bx2 and bx1 < ax2 and ay1 < by2 and by1 < ay2
+
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                self.assertFalse(overlap(boxes[i], boxes[j]),
+                                 f"chassis boxes {i} and {j} overlap")
+
+    def test_one_box_per_chassis_not_per_module_on_fixture(self):
+        # Fixes defect 2 at the structural level: exactly ONE enclosing box per
+        # chassis (+1 HMI), never one box per module (there are 14 modules but
+        # only 3 enclosing boxes).
+        root, _, _ = self._run()
+        t = [d for d in root.findall("diagram")
+             if d.get("title") == "Red de comunicaciones"][0]
+        self.assertEqual(len(self._enclosing_boxes(t)), 3)
 
 
 class LoadProjectTemplateGroundingTest(unittest.TestCase):
