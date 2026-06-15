@@ -76,7 +76,7 @@ Confirmed with Abel 2026-06-14. Target folio order (decision: **borneros grouped
 | T3.1 | NO/NC correctness on symbols | `done` `9518e77` | Hand-flipping each contact to its real normally-open/closed state |
 | T3.2 | Spare-point rendering | `done` `3aa6187` | Hand-drawing unused/reserved card points so the strip is complete |
 | T3.3 | Column pagination on card overflow | `deferred` [#1](https://github.com/hebelmx/PdfEplanToDxF/issues/1) | Manually splitting a high-point-count card across sheets/columns |
-| T3.4 | PE / ground potentials (chassis grounding folio) | `review` `778ad2b` (pending Abel QET eyeball) | Hand-drawing the protective-earth / ground references on devices |
+| T3.4 | PE / ground potentials (chassis grounding folio) | `done` `778ad2b` (ff-merged to `main` `b0e3689`, pushed) | Hand-drawing the protective-earth / ground references on devices |
 | T3.5 | Additional languages (IT/DE/ZH) — pure data | `todo` (demand-driven) | Manual re-matching when a project ships in another language |
 
 Recommended order: **T3.1 ✅ → T3.2 ✅ → ~~T3.3~~ (deferred, issue #1) → T3.4 ✅**, then
@@ -174,7 +174,8 @@ Tier-3 must-do work is COMPLETE pending the eyeball + the human merge gate.**
   - **Verified from ground truth:** floor HELD 10/106/75/0 FP; 62 spares; **32 folios**
     (was 30); grounding folios empty elements/conductors, carry the title block, no
     `%{token}` leak, ids unique, conductors resolve, geometry inside the frame.
-    **226 tests** green (was 203). **Pending Abel: QET eyeball of the 2 grounding folios.**
+    **226 tests** green (was 203). **FF-MERGED to `main` (`b0e3689`) and PUSHED 2026-06-14**
+    on Abel's explicit go. (QET eyeball not blocking — Abel chose to merge; eyeball at leisure.)
 - **Triaged from the T3.1/T3.2 adversarial review (minor follow-up):** the right-column
   spare horizontal extent on a 2-column card (e.g. a >16-ch card) is not asserted vs
   `POWER_TABLE_LEFT`/frame — a positional test was added but **SKIPS** on WADDING_1 (no

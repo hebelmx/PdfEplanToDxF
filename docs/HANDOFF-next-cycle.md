@@ -14,25 +14,27 @@
   `main`** (`main @ 89b9208`, pushed to origin 2026-06-14).
 - **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)
   (no card in the wild >32 ch).
-- **T3.4 (chassis grounding folio) is DONE `778ad2b` on `feat/t3-grounding`** (branched off
-  `main @ 89b9208`). Floor HELD **10/106/75/0 FP**; **226 tests** green; WADDING_1 now emits
-  **32 folios** (was 30) — two new **"Puesta a tierra"** folios, one per chassis. **NOT yet
-  pushed or merged. Status = `review` pending Abel's QET eyeball + the human merge gate.**
+- **T3.4 (chassis grounding folio) is DONE `778ad2b`, FF-MERGED to `main` (`b0e3689`) and
+  PUSHED to origin 2026-06-14** (on Abel's explicit go). Floor HELD **10/106/75/0 FP**;
+  **226 tests** green; WADDING_1 now emits **32 folios** (was 30) — two new **"Puesta a
+  tierra"** folios, one per chassis. `main == origin/main == b0e3689`. (QET eyeball of the
+  grounding folios is optional/at leisure — Abel chose to merge first.)
 - **With T3.4 the Tier-3 MUST-DO work is complete.** Only **T3.5 (extra languages IT/DE/ZH)**
   remains and it is **demand-driven** (pure data, pull in only when a real project needs it).
 
-## ⚠️ Things still needing Abel's word (don't act without asking)
+## ⚠️ Things still optionally pending Abel (not blocking — already merged)
 
-1. **Eyeball T3.4 in QET** — the two grounding folios (`Puesta a tierra — Chasis R1 (Local)`
-   at section page 099 and `Chasis R2 (RIO_RCP)` at 100), plus confirm Alimentación reads
-   098 and the cards still read 101+. This is a VISUAL folio and Abel iterates visually.
-   Offer to launch QET on a SCRATCH render. The layout (chassis box → FE/PE leads → Barra de
-   tierra → electrode glyph) is geometry-verified inside the frame but only a render confirms
-   it reads cleanly and the Spanish labels/glyph look right.
-2. **Push + merge `feat/t3-grounding` → `main`** — `778ad2b` (feature) + the docs commit are
-   LOCAL only. Ask before pushing and before any merge to `main`.
-3. **(Earlier, still open) Eyeball T3.2 in QET** — the RESERVA spares, the grown bornero
+1. **(Optional) Eyeball T3.4 in QET** — the two grounding folios (`Puesta a tierra — Chasis
+   R1 (Local)` at section page 099 and `Chasis R2 (RIO_RCP)` at 100), plus confirm
+   Alimentación reads 098 and the cards still read 101+. Already merged to `main` on Abel's
+   go; the layout (chassis box → FE/PE leads → Barra de tierra → electrode glyph) is
+   geometry-verified inside the frame, but a render confirms the Spanish labels/glyph read
+   cleanly. Render to a SCRATCH path (`-o Fixtures/_gen_check.qet`), never over WADDING_1.qet.
+2. **(Earlier, optional) Eyeball T3.2 in QET** — the RESERVA spares, the grown bornero
    (incl. REM_IN_1's 2-sheet strip) and the 5-folio BOM, if not already done.
+
+If a grounding-folio tweak is wanted after the eyeball, branch off `main` again
+(`feat/t3-grounding-fix`) and run another cycle.
 
 ## What T3.4 did (branch `feat/t3-grounding`, floor intact)
 
@@ -161,28 +163,30 @@ set `displaycols/displayrows="false"` (DA.6); drawing folios keep them `"true"`.
 
 ## Git state / how to resume
 
-- **`main` @ `89b9208`** — Tier 2 + DA + T3.1 + T3.2, pushed to origin.
-- **`feat/t3-grounding`** (off `main`): `778ad2b` (T3.4 feature) + the docs commit. **NOT
-  pushed, NOT merged** — awaiting Abel's QET eyeball + the human merge gate.
-- **T3.3 deferred** (issue #1). **T3.4 done.** Next actionable backlog = **T3.5 (demand-driven)**.
+- **`main` @ `b0e3689` == `origin/main`** — Tier 2 + DA + T3.1 + T3.2 + **T3.4**, pushed to
+  origin 2026-06-14. `feat/t3-grounding` is FF-merged (can be deleted; harmless to keep).
+- **T3.3 deferred** (issue #1). **T3.4 done & merged.** The Tier-3 must-do work is COMPLETE.
+  Next actionable backlog = **T3.5 (extra languages, demand-driven only)** — start from a
+  fresh branch off `main` when a real multilingual project needs it.
 
 ## Kickoff prompt — paste into the new session
 
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). Tier 2 + DA + T3.1 + T3.2 are
-merged to main (89b9208, pushed). T3.3 DEFERRED (issue #1). T3.4 (chassis grounding folio,
-778ad2b on feat/t3-grounding) is DONE & verified — floor 10/106/75/0 FP; 226 tests green;
-WADDING_1 emits 32 folios (2 new "Puesta a tierra" per-chassis folios; Alimentación 098,
-grounding 099/100, cards 101-110 unchanged). NOT pushed/merged — status review pending
-Abel's QET eyeball + the human merge gate. Tier-3 must-do work is COMPLETE; only T3.5
-(extra languages, demand-driven) remains.
+Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). Tier 2 + DA + T3.1 + T3.2 +
+T3.4 are ALL merged to main and pushed (main @ b0e3689 == origin/main). T3.3 DEFERRED
+(issue #1). T3.4 (chassis grounding folio, 778ad2b) DONE & verified — floor 10/106/75/0 FP;
+226 tests green; WADDING_1 emits 32 folios (2 "Puesta a tierra" per-chassis folios;
+Alimentación 098, grounding 099/100, cards 101-110 unchanged). The Tier-3 must-do work is
+COMPLETE; only T3.5 (extra languages, demand-driven) remains — pull in only when a real
+multilingual project needs it.
 
 READ FIRST: docs/HANDOFF-next-cycle.md (this file — state, HARD RULES, code map),
 docs/TIER3-tracker.md, ProductPlanEnhancement.md, memory t3-pe-grounding-decisions +
 qet-generator-status.
 
-PENDING ABEL: (1) eyeball T3.4 in QET (the 2 grounding folios at 099/100, Alimentación 098,
-cards 101+); (2) push + merge feat/t3-grounding → main; (3) if not done, eyeball T3.2.
+OPTIONAL (not blocking, already merged): eyeball T3.4 in QET (2 grounding folios 099/100,
+Alimentación 098, cards 101+) and/or T3.2 (RESERVA spares, grown bornero/BOM). Tweaks →
+fresh branch off main.
 
 HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
 (TBD→__, derived labels, configurable gauge defaults); stdlib only; never git add Fixtures/
