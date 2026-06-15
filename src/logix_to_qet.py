@@ -1802,6 +1802,308 @@ def build_symbology_folio(project: ET.Element, start_order: int,
     return len(pages)
 
 
+# ── Network / communications topology folio (E2.1 / FR-4) ───────────────────
+# A front-matter overview ("page 1 of any real set"): the controller, the
+# comms/bridge modules, remote adapters, the HMI and the I/O drops, drawn from
+# the FULL module tree (the `parent` chain), grouped by chassis. VISUAL-only —
+# text + shape primitives, EMPTY <elements>/<conductors> — exactly like the
+# grounding / supply folios. Zero impact on the I/O floor.
+#
+# Node classification is DATA-DRIVEN and graceful: an unknown catalog/role
+# falls back to a generic node labelled name + catalog — never an invented role
+# or protocol. Pattern matching is over the catalog string and the parsed
+# `kind` (DI/DO/AI/AO), kept language-agnostic (the displayed role TAG is the
+# only localized text, and it is a description, not the classifier key).
+TOPOLOGY_TITLE = "Red de comunicaciones"
+
+# Comms-bridge catalog patterns -> the network protocol they bridge onto. Only a
+# CONFIDENT inference labels the edge; an unmatched comms-looking module still
+# classifies as a bridge but draws its edge WITHOUT a protocol label (never
+# guess). Patterns are catalog substrings, matched case-insensitively.
+TOPOLOGY_NET_PATTERNS = (
+    ("CNB", "ControlNet"),
+    ("CN2", "ControlNet"),
+    ("EN2T", "EtherNet/IP"),
+    ("EN3T", "EtherNet/IP"),
+    ("ENBT", "EtherNet/IP"),
+    ("EN2TR", "EtherNet/IP"),
+    ("EWEB", "EtherNet/IP"),
+    ("ENET", "EtherNet/IP"),
+)
+
+# Role tags shown on each node box (localized description text, NOT classifier
+# keys). The node 'role' value returned by classify_node is one of these stable
+# language-agnostic keys: controller / bridge / hmi / io / generic.
+TOPOLOGY_ROLE_TAGS = {
+    "controller": "Controlador",
+    "bridge": "Módulo de red",
+    "hmi": "HMI",
+    "io": "E/S",
+    "generic": "Módulo",
+}
+
+
+def topology_protocol(catalog: str) -> str | None:
+    """Return the network protocol a comms-bridge catalog bridges onto, or None
+    when it is not confidently inferable (then the edge is drawn unlabelled —
+    never guessed). Pure, case-insensitive substring match over the catalog."""
+    cat = (catalog or "").upper()
+    for pat, proto in TOPOLOGY_NET_PATTERNS:
+        if pat in cat:
+            return proto
+    return None
+
+
+def classify_node(module, *, is_root: bool) -> str:
+    """Classify a Module into a stable, language-agnostic role key by DATA only
+    (the root flag, the parsed `kind`, the catalog string) — never invent a role.
+    Returns one of: 'controller', 'bridge', 'hmi', 'io', 'generic'.
+
+    - controller: the tree root (parent == own name).
+    - io: kind in {DI, DO, AI, AO}.
+    - hmi: catalog contains PanelView / PV.
+    - bridge: a non-root, non-I/O module whose catalog matches a comms pattern.
+    - generic: anything else (rendered as name + catalog, no invented role)."""
+    if is_root:
+        return "controller"
+    kind = getattr(module, "kind", None)
+    if kind in ("DI", "DO", "AI", "AO"):
+        return "io"
+    cat = (getattr(module, "catalog", "") or "")
+    up = cat.upper()
+    if "PANELVIEW" in up or "PV" in up:
+        return "hmi"
+    if topology_protocol(cat) is not None:
+        return "bridge"
+    return "generic"
+
+
+def topology_root(modules: dict):
+    """Return the root Module (parent == own name) of the full module tree, or
+    None when no such self-parented module exists (graceful: no controller, no
+    folio). Deterministic: first such module in insertion order."""
+    for name, m in (modules or {}).items():
+        if getattr(m, "parent", None) == name:
+            return m
+    return None
+
+
+def build_topology_tree(modules: dict) -> dict:
+    """Build the classified topology graph from the FULL module dict. Returns
+    {'root': name|None, 'nodes': {name: {'module', 'role', 'protocol',
+    'parent'}}, 'children': {name: [child names]}}. Pure & deterministic
+    (children preserve module insertion order). The protocol is the network a
+    BRIDGE/controller offers DOWN to its children (inferred from the node's own
+    comms catalog), or None when not confidently inferable."""
+    modules = modules or {}
+    root = topology_root(modules)
+    root_name = root.name if root is not None else None
+    nodes: dict = {}
+    children: dict = {}
+    for name, m in modules.items():
+        is_root = (name == root_name)
+        role = classify_node(m, is_root=is_root)
+        nodes[name] = {
+            "module": m,
+            "role": role,
+            "protocol": topology_protocol(getattr(m, "catalog", "") or ""),
+            "parent": getattr(m, "parent", None),
+        }
+        children.setdefault(name, [])
+    for name, m in modules.items():
+        parent = getattr(m, "parent", None)
+        if parent is not None and parent != name and parent in nodes:
+            children.setdefault(parent, []).append(name)
+    return {"root": root_name, "nodes": nodes, "children": children}
+
+
+# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). A hierarchical
+# layout: the controller box near the top centre; its direct children laid out
+# below in BANDS by depth, each band's boxes spread across the page width and
+# connected to their parent by a thin vertical-then-horizontal lead pair. I/O
+# drops are compact stacked boxes under their parent chassis. Every label is
+# lifted clear of its leads (DA.8 repo lesson). First cut — Abel will eyeball.
+TOPO_NODE_W = 150           # node box width
+TOPO_NODE_H = 46            # node box height
+TOPO_TOP_Y = 64             # controller box top y (below the header)
+TOPO_BAND_DY = 110          # vertical pitch between depth bands
+TOPO_X_MARGIN = 20          # left/right page margin for spreading nodes
+TOPO_PAGE_W = 1010          # page frame width (matches POWER_TABLE_RIGHT)
+TOPO_IO_BOX_H = 18          # compact I/O-drop sub-box height
+TOPO_IO_BOX_DY = 22         # I/O-drop sub-box vertical pitch
+TOPO_IO_TOP_DY = 26         # gap below a chassis box before its I/O drop stack
+
+
+def _topo_node_label(node: dict) -> tuple[str, str, str]:
+    """Return the (name, catalog, role-tag) label triplet for a node box, all
+    derived from data. The role tag is a localized DESCRIPTION; an unknown role
+    still yields a name+catalog box (graceful)."""
+    m = node["module"]
+    name = getattr(m, "name", "") or ""
+    catalog = getattr(m, "catalog", "") or ""
+    tag = TOPOLOGY_ROLE_TAGS.get(node["role"], TOPOLOGY_ROLE_TAGS["generic"])
+    return name, catalog, tag
+
+
+def _add_topology_node(shapes, inputs, node: dict, x: int, y: int):
+    """Draw ONE node box at top-left (x, y) with its name/catalog/role labels
+    INSIDE the box (lifted off every edge). Returns (cx, bottom_y) — the box's
+    horizontal centre and bottom edge — for lead routing."""
+    x2, y2 = x + TOPO_NODE_W, y + TOPO_NODE_H
+    add_rect(shapes, x, y, x2, y2)
+    name, catalog, tag = _topo_node_label(node)
+    add_text(inputs, x + 6, y + 13, name, FONT_TEXT)
+    if catalog:
+        add_text(inputs, x + 6, y + 26, catalog, FONT_SMALL)
+    add_text(inputs, x + 6, y + 39, tag, FONT_SMALL)
+    return (x + TOPO_NODE_W) - TOPO_NODE_W // 2, y2
+
+
+def _add_topology_lead(shapes, parent_cx, parent_bottom, child_cx, child_top):
+    """Connect a parent box bottom to a child box top with thin (2-px) rect leads
+    — a vertical drop from the parent, a horizontal run across, and a vertical
+    drop into the child (an orthogonal elbow). No line/circle helper exists, so
+    leads are thin rects, like the grounding/supply leads."""
+    mid_y = (parent_bottom + child_top) // 2
+    # vertical drop from parent down to the mid rail
+    y_a, y_b = sorted((parent_bottom, mid_y))
+    add_rect(shapes, parent_cx, y_a, parent_cx + 2, y_b)
+    # horizontal run along the mid rail to the child's x
+    x_a, x_b = sorted((parent_cx, child_cx))
+    add_rect(shapes, x_a, mid_y, x_b + 2, mid_y + 2)
+    # vertical drop from the mid rail into the child top
+    y_a, y_b = sorted((mid_y, child_top))
+    add_rect(shapes, child_cx, y_a, child_cx + 2, y_b)
+
+
+def _topo_depths(tree: dict) -> dict:
+    """Return {name: depth} by walking the parent chain from the root (root
+    depth 0). Nodes unreachable from the root (orphans) get depth 1 so they
+    still render in a band rather than vanishing."""
+    nodes, children, root = tree["nodes"], tree["children"], tree["root"]
+    depth: dict = {}
+    if root is not None:
+        stack = [(root, 0)]
+        while stack:
+            name, d = stack.pop()
+            if name in depth:
+                continue
+            depth[name] = d
+            for ch in children.get(name, []):
+                stack.append((ch, d + 1))
+    for name in nodes:
+        depth.setdefault(name, 1)
+    return depth
+
+
+def _add_topology_diagram(project: ET.Element, order: int, tree: dict) -> ET.Element:
+    """Render the single topology folio: text + shape primitives only, EMPTY
+    <elements>/<conductors>. Non-I/O nodes (controller, bridges, HMI, generic)
+    are laid out in depth BANDS and connected by leads; the I/O modules under a
+    chassis are drawn as a compact stacked list under that chassis box, with the
+    bridging network protocol labelled on the lead when confidently inferable."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": TOPOLOGY_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, TOPO_X_MARGIN, 30, TOPOLOGY_TITLE.upper(), FONT_HEADER)
+
+    nodes, children = tree["nodes"], tree["children"]
+    if not nodes:
+        return diagram
+
+    # Non-I/O nodes form the hierarchical backbone; I/O modules hang off their
+    # parent as compact stacked sub-boxes (a chassis may carry ~5+ drops).
+    backbone = [n for n in nodes if nodes[n]["role"] != "io"]
+    depth = _topo_depths(tree)
+    # group backbone nodes into bands by depth (preserve insertion order within)
+    by_band: dict = {}
+    for name in backbone:
+        by_band.setdefault(depth.get(name, 1), []).append(name)
+
+    # place each band's boxes spread evenly across the usable page width
+    placed: dict = {}     # name -> (x, y, cx, bottom)
+    usable = TOPO_PAGE_W - 2 * TOPO_X_MARGIN
+    for band in sorted(by_band):
+        names = by_band[band]
+        y = TOPO_TOP_Y + band * TOPO_BAND_DY
+        n = len(names)
+        # centre the boxes: slot width = usable / n, box centred in its slot
+        slot = usable / n if n else usable
+        for i, name in enumerate(names):
+            cx_slot = TOPO_X_MARGIN + slot * (i + 0.5)
+            x = int(round(cx_slot - TOPO_NODE_W / 2))
+            # clamp inside the frame
+            x = max(TOPO_X_MARGIN, min(x, TOPO_PAGE_W - TOPO_X_MARGIN - TOPO_NODE_W))
+            cx, bottom = _add_topology_node(shapes, inputs, nodes[name], x, y)
+            placed[name] = (x, y, cx, bottom)
+
+    # leads from each backbone node to its backbone children, protocol-labelled
+    # when the PARENT is a comms node whose protocol is confidently inferable.
+    for name, (x, y, cx, bottom) in placed.items():
+        proto = nodes[name]["protocol"]
+        for ch in children.get(name, []):
+            if ch not in placed:
+                continue
+            cxp = placed[ch]
+            _add_topology_lead(shapes, cx, bottom, cxp[2], cxp[1])
+            if proto:
+                # label lifted onto the mid rail, clear to the right of the drop
+                mid_y = (bottom + cxp[1]) // 2
+                add_text(inputs, min(cx, cxp[2]) + 8, mid_y - 6, proto, FONT_SMALL)
+
+    # I/O drops: a compact stacked list of sub-boxes under each parent chassis.
+    for parent_name, (x, y, cx, bottom) in list(placed.items()):
+        io_children = [c for c in children.get(parent_name, [])
+                       if nodes[c]["role"] == "io"]
+        if not io_children:
+            continue
+        sx = x
+        sy = bottom + TOPO_IO_TOP_DY
+        # a short lead from the chassis box down to the drop stack
+        add_rect(shapes, cx, bottom, cx + 2, sy)
+        for c in io_children:
+            m = nodes[c]["module"]
+            cat = getattr(m, "catalog", "") or ""
+            kind = getattr(m, "kind", "") or ""
+            add_rect(shapes, sx, sy, sx + TOPO_NODE_W, sy + TOPO_IO_BOX_H)
+            label = f"{getattr(m, 'name', '')}  {cat}".strip()
+            if kind:
+                label = f"{label}  [{kind}]"
+            add_text(inputs, sx + 6, sy + 13, label, FONT_SMALL)
+            sy += TOPO_IO_BOX_DY
+    return diagram
+
+
+def build_topology_folio(project: ET.Element, start_order: int,
+                         controller, modules: dict) -> int:
+    """Append the single network/communications topology folio at `start_order`
+    (front matter, section page 2). VISUAL-only: text + shape primitives, empty
+    <elements>/<conductors>, zero floor impact. Built from the FULL module dict
+    (controller + comms bridges + HMI + I/O), classified data-driven. Returns the
+    count appended: 1 when a controller (tree root) exists, else 0 (graceful — no
+    root, no folio). `controller` is accepted for signature symmetry but the root
+    is rederived from `modules` so the two can never disagree."""
+    tree = build_topology_tree(modules)
+    if tree["root"] is None or not tree["nodes"]:
+        return 0
+    _add_topology_diagram(project, start_order, tree)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -1814,6 +2116,7 @@ def build_symbology_folio(project: ET.Element, start_order: int,
 # children into this section order just before serialization.
 SECTION_PORTADA = 0        # cover sheet (DA.3)
 SECTION_SIMBOLOGIA = 1     # symbol legend (DA.4)
+SECTION_TOPOLOGY = 2       # network/communications topology overview (E2.1)
 SECTION_SUPPLY = 100       # 'Alimentación' rail folio
 SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
 SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
@@ -2012,6 +2315,12 @@ def main(argv=None):
     # Simbología (symbol legend) — one row per used symbol type (glyph + name);
     # sorts right after the cover (section page 1).
     symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)
+    # Network / communications topology overview (E2.1) — the "page 1 of any real
+    # set": controller → comms bridges → remote adapters / HMI → I/O drops, drawn
+    # from the FULL module tree. Front matter, section page 2 (the 2..99 band is
+    # free, so this does NOT disturb Alimentación/grounding/drawings). Visual-only.
+    topology_folios = build_topology_folio(project, SECTION_TOPOLOGY,
+                                           controller, modules)
     # Power+grounding block FLOATS just below the card drawings band (T3.4): one
     # grounding folio per chassis (= distinct rack), so the supply order is
     # COMPUTED as 100 - n_grounding. Alimentación sits first, then the grounding
@@ -2107,6 +2416,8 @@ def main(argv=None):
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
     print(f"simbología : {symbology_folios} legend folio(s), "
           f"{len(used)} symbol type(s)", file=err)
+    print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
+          f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

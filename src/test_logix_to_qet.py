@@ -1538,6 +1538,281 @@ class GroundingFolioTest(unittest.TestCase):
             self.assertNotIn("%{", prop.text or "")
 
 
+def _tmod(name, parent, catalog, kind=None):
+    """A minimal full-tree Module stand-in for the topology tests (carries the
+    fields classify_node / build_topology_tree read: name, parent, catalog,
+    kind)."""
+    return SimpleNamespace(name=name, parent=parent, catalog=catalog, kind=kind,
+                           slot=0, points=0)
+
+
+def _tiny_tree():
+    """A small but representative module dict mirroring the WADDING_1 shape:
+    self-parented controller -> ControlNet bridge -> remote adapter + HMI + an
+    I/O drop, plus a local I/O card. Insertion order is the dict order."""
+    return {
+        "Local": _tmod("Local", "Local", "1756-L81E"),                 # root
+        "MOD_ENT_1": _tmod("MOD_ENT_1", "Local", "1756-IA16", "DI"),
+        "RIO_LOCAL": _tmod("RIO_LOCAL", "Local", "1756-CNB/D"),        # bridge
+        "RIO_RCP": _tmod("RIO_RCP", "RIO_LOCAL", "1756-CNB/D"),        # adapter
+        "REM_IN_1": _tmod("REM_IN_1", "RIO_RCP", "1756-IB32/B", "DI"),
+        "PV_PUPITRE": _tmod("PV_PUPITRE", "RIO_LOCAL", "PanelView"),   # HMI
+    }
+
+
+class TopologyClassificationTest(unittest.TestCase):
+    """E2.1: node classification + tree-building are DATA-DRIVEN and graceful —
+    the root is the self-parented controller, comms catalogs classify as bridges
+    (with an inferable protocol), PanelView as HMI, DI/DO/AI/AO as I/O, and an
+    unknown catalog falls back to a generic node (never an invented role)."""
+
+    def test_protocol_inference_and_unknown_is_none(self):
+        self.assertEqual(q.topology_protocol("1756-CNB/D"), "ControlNet")
+        self.assertEqual(q.topology_protocol("1756-CN2/B"), "ControlNet")
+        self.assertEqual(q.topology_protocol("1756-EN2T"), "EtherNet/IP")
+        self.assertIsNone(q.topology_protocol("1756-MYSTERY"))
+        self.assertIsNone(q.topology_protocol(""))
+
+    def test_classify_node_roles(self):
+        root = _tmod("Local", "Local", "1756-L81E")
+        bridge = _tmod("RIO_LOCAL", "Local", "1756-CNB/D")
+        hmi = _tmod("PV", "RIO_LOCAL", "PanelView Plus 7")
+        io = _tmod("MOD", "Local", "1756-IA16", "DI")
+        generic = _tmod("X", "Local", "1756-WEIRD")
+        self.assertEqual(q.classify_node(root, is_root=True), "controller")
+        self.assertEqual(q.classify_node(bridge, is_root=False), "bridge")
+        self.assertEqual(q.classify_node(hmi, is_root=False), "hmi")
+        self.assertEqual(q.classify_node(io, is_root=False), "io")
+        self.assertEqual(q.classify_node(generic, is_root=False), "generic")
+
+    def test_real_fixture_tree_matches_ground_truth(self):
+        fixture = _wadding_fixture()
+        if not fixture.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+        import logix_to_eplan_csv as l2e
+        controller, modules, _, _ = l2e.load_l5x(str(fixture))
+        tree = q.build_topology_tree(modules)
+        nodes = tree["nodes"]
+        # the controller MODULE is the self-parented tree root ("Local"); note
+        # load_l5x's `controller` is the project/controller NAME ("WADDING_1"),
+        # a different thing — the root is rederived from the module tree.
+        self.assertEqual(tree["root"], "Local")
+        self.assertEqual(controller, "WADDING_1")
+        self.assertEqual(nodes["Local"]["role"], "controller")
+        # the two ControlNet bridges classify as network/bridge nodes
+        self.assertEqual(nodes["RIO_LOCAL"]["role"], "bridge")
+        self.assertEqual(nodes["RIO_RCP"]["role"], "bridge")
+        self.assertEqual(nodes["RIO_LOCAL"]["protocol"], "ControlNet")
+        # the PanelView is the HMI
+        self.assertEqual(nodes["PV_PUPITRE"]["role"], "hmi")
+        # every REM_*/MOD_* card classifies as I/O
+        for n in ("MOD_ENT_1", "MOD_SAL_1", "REM_IN_1", "REM_IN_2",
+                  "REM_OUT_RLY_1", "REM_OUT_2", "REM_AN_IN_1"):
+            self.assertEqual(nodes[n]["role"], "io", n)
+        # the parent EDGES reproduce the ground-truth tree
+        self.assertEqual(nodes["RIO_LOCAL"]["parent"], "Local")
+        self.assertEqual(nodes["RIO_RCP"]["parent"], "RIO_LOCAL")
+        self.assertEqual(nodes["PV_PUPITRE"]["parent"], "RIO_LOCAL")
+        self.assertIn("RIO_RCP", tree["children"]["RIO_LOCAL"])
+        self.assertIn("PV_PUPITRE", tree["children"]["RIO_LOCAL"])
+        self.assertIn("RIO_LOCAL", tree["children"]["Local"])
+        for io in ("REM_IN_1", "REM_AN_IN_1"):
+            self.assertIn(io, tree["children"]["RIO_RCP"])
+
+    def test_no_root_yields_empty_tree_marker(self):
+        # a module dict with no self-parented module has no controller (graceful)
+        mods = {"A": _tmod("A", "B", "1756-IA16", "DI")}
+        tree = q.build_topology_tree(mods)
+        self.assertIsNone(tree["root"])
+
+
+class TopologyFolioTest(unittest.TestCase):
+    """E2.1: the topology folio is VISUAL-only (text + shape primitives, empty
+    <elements>/<conductors>), sits at order 2, draws every node inside the page
+    frame with labels lifted clear, infers protocol labels only when confident,
+    and renders an unknown module as a generic name+catalog node."""
+
+    def test_builds_one_folio_at_given_order(self):
+        project = ET.Element("project")
+        n = q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(d.get("order"), "2")
+        self.assertEqual(d.get("title"), "Red de comunicaciones")
+
+    def test_no_controller_appends_nothing(self):
+        project = ET.Element("project")
+        mods = {"A": _tmod("A", "B", "1756-IA16", "DI")}     # no self-parent root
+        self.assertEqual(q.build_topology_folio(project, 2, None, mods), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_empty_modules_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_topology_folio(project, 2, None, {}), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+        self.assertGreater(len(d.find("inputs").findall("input")), 0)
+
+    def test_full_extent_inside_page_frame(self):
+        # Assert the FULL drawn extent (every node box + every lead + every
+        # label) lies inside the real page frame — not one hotspot.
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        xs, ys = [], []
+        for s in d.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in d.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), 1010)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)   # 660
+
+    def test_node_labels_lifted_clear_of_box_edges(self):
+        # Every node text input sits INSIDE its box, off the top edge: the label
+        # y is strictly below the box top (so the line never strikes the text).
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        # the node boxes are the TOPO_NODE_H-tall rects; gather their top edges
+        tops = [float(s.get("y1")) for s in d.find("shapes").findall("shape")
+                if abs(float(s.get("y2")) - float(s.get("y1")) - q.TOPO_NODE_H) < 1]
+        self.assertTrue(tops, "no node boxes drawn")
+        ys = [float(i.get("y")) for i in d.find("inputs").findall("input")]
+        # every label baseline is strictly below the topmost box top edge minus
+        # the header — i.e. no label sits exactly on a box's top edge
+        for t in tops:
+            self.assertFalse(any(abs(y - t) < 1 for y in ys),
+                             "a label sits exactly on a box top edge")
+
+    def test_protocol_label_present_for_controlnet_bridge(self):
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("ControlNet", texts)
+
+    def test_classification_role_tags_rendered(self):
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        d = project.find("diagram")
+        texts = " | ".join(i.get("text")
+                           for i in d.find("inputs").findall("input"))
+        self.assertIn("Controlador", texts)
+        self.assertIn("Módulo de red", texts)
+        self.assertIn("HMI", texts)
+
+    def test_unknown_module_renders_generic_name_and_catalog_no_role(self):
+        # never-invent: an unknown catalog/role node carries its name + catalog
+        # and the generic role tag — NO invented role/protocol text.
+        mods = {
+            "Local": _tmod("Local", "Local", "1756-L81E"),
+            "WIDGET": _tmod("WIDGET", "Local", "ACME-XYZ-9000"),   # unknown
+        }
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", mods)
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("WIDGET", texts)
+        self.assertIn("ACME-XYZ-9000", texts)
+        self.assertIn(q.TOPOLOGY_ROLE_TAGS["generic"], texts)
+        # no protocol guessed for the unknown node
+        self.assertNotIn("ControlNet", texts)
+        self.assertNotIn("EtherNet/IP", texts)
+
+    def test_inherits_titleblock_and_no_token_leak(self):
+        project = ET.Element("project")
+        q.build_topology_folio(project, 2, "Local", _tiny_tree())
+        fields = q.resolve_title_block_fields(
+            {**{k: v for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items()
+                if isinstance(v, str)}, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        d = project.find("diagram")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        for prop in d.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+
+
+class TopologyWaddingRegressionTest(unittest.TestCase):
+    """E2.1 end-to-end: the topology folio is added at order 2 from the real
+    fixture WITHOUT moving the floor (10 drawings / 106 drawn / 75 matched),
+    bringing the total folio count to 33; the drawings stay at 101."""
+
+    FIXTURE = _wadding_fixture()
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "w.qet"
+            with redirect_stderr(buf):
+                rc = q.main([str(self.FIXTURE), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), xml, buf.getvalue()
+
+    def test_topology_folio_present_at_order_2_clean(self):
+        root, _, err = self._run()
+        diagrams = root.findall("diagram")
+        # exactly one topology folio, at order 2
+        topo = [d for d in diagrams
+                if d.get("title") == "Red de comunicaciones"]
+        self.assertEqual(len(topo), 1)
+        t = topo[0]
+        self.assertEqual(t.get("order"), "2")
+        # visual-only + title-blocked
+        self.assertEqual(len(t.find("elements").findall("element")), 0)
+        self.assertEqual(len(t.find("conductors").findall("conductor")), 0)
+        self.assertEqual(t.get("titleblocktemplate"), "exxerpro")
+        for prop in t.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+        # total folio count bumped to 33 (was 32 before E2.1)
+        self.assertEqual(len(diagrams), 33)
+
+    def test_floor_held_and_drawings_still_101(self):
+        root, _, err = self._run()
+        # the floor is UNMOVED (parsed from main()'s own summary)
+        self.assertEqual(int(re.search(r"points\s*:\s*(\d+)\s+drawn",
+                                       err).group(1)), 106)
+        self.assertEqual(int(re.search(r"symbols\s*:\s*(\d+)\s+matched",
+                                       err).group(1)), 75)
+        self.assertRegex(err, r"31\s+generic terminal")     # 0 false positives
+        # 10 drawing folios, first at order 101 (unchanged)
+        drawing = [d for d in root.findall("diagram")
+                   if re.match(r"^R\d", d.get("title") or "")]
+        self.assertEqual(len(drawing), 10)
+        self.assertEqual(sorted(int(d.get("order")) for d in drawing)[0], 101)
+
+    def test_topology_full_extent_inside_frame_on_real_fixture(self):
+        root, _, _ = self._run()
+        t = [d for d in root.findall("diagram")
+             if d.get("title") == "Red de comunicaciones"][0]
+        xs, ys = [], []
+        for s in t.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in t.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), 1010)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)
+
+
 class LoadProjectTemplateGroundingTest(unittest.TestCase):
     """T3.4: the nested 'grounding' object merges gracefully — string sub-values
     override, missing/absent/malformed entries keep the documented defaults, and
@@ -1838,9 +2113,11 @@ class WaddingRegressionTest(unittest.TestCase):
     def test_floor_folio_and_point_counts(self):
         root, _, err = self._run()
         diagrams = root.findall("diagram")
-        # 10 drawing folios (one per I/O card with mapped tags)
+        # 10 drawing folios (one per I/O card with mapped tags). Match the rack
+        # digit ("R1"..) so the new topology folio ("Red de comunicaciones") is
+        # NOT counted as a drawing.
         drawing = [d for d in diagrams
-                   if d.get("title", "").startswith("R")]
+                   if re.match(r"^R\d", d.get("title", ""))]
         self.assertEqual(len(drawing), 10)
         # Mechanically enforce the WADDING_1 floor from main()'s own summary so a
         # future change that drops symbol matches (or adds a false positive) turns
@@ -1888,9 +2165,10 @@ class WaddingRegressionTest(unittest.TestCase):
         ali = [d for d in diagrams if d.get("title") == "Alimentación"]
         self.assertEqual(len(ali), 1)
         self.assertEqual(ali[0].get("order"), "98")
-        # the card drawings are UNCHANGED at order 101 (first drawing folio)
+        # the card drawings are UNCHANGED at order 101 (first drawing folio).
+        # Match the rack digit so the topology folio is not swept in.
         draw_orders = sorted(int(d.get("order")) for d in diagrams
-                             if (d.get("title") or "").startswith("R"))
+                             if re.match(r"^R\d", d.get("title") or ""))
         self.assertEqual(draw_orders[0], 101)
         # the floor is still 106 drawn / 75 matched (parsed from main()'s summary)
         self.assertEqual(int(re.search(r"points\s*:\s*(\d+)\s+drawn",
@@ -1956,7 +2234,9 @@ class WaddingRegressionTest(unittest.TestCase):
         i_portada = idx(lambda t: t == "Portada")
         i_simb = idx(lambda t: t == "Simbología")
         i_supply = idx(lambda t: t == "Alimentación")
-        i_draw = idx(lambda t: t.startswith("R"))
+        # a drawing folio title is a rack/slot like "R1..." — match the rack
+        # digit so the topology folio ("Red de comunicaciones") is NOT picked up.
+        i_draw = idx(lambda t: re.match(r"^R\d", t))
         i_born = idx(lambda t: t.startswith("Bornero"))
         i_bom = idx(lambda t: "BOM" in t)
         i_chg = idx(lambda t: "revisiones" in t.lower())
@@ -1985,7 +2265,10 @@ class WaddingRegressionTest(unittest.TestCase):
         # QET's grid rulers (0–16 / A–H); the card drawings keep them.
         root, _, _ = self._run()
         for d in root.findall("diagram"):
-            is_drawing = (d.get("title") or "").startswith("R")
+            # a card drawing's title is a rack/slot ("R1"..); the topology folio
+            # ("Red de comunicaciones") is front matter and hides rulers like the
+            # other lists, so match the rack DIGIT, not a bare leading "R".
+            is_drawing = bool(re.match(r"^R\d", d.get("title") or ""))
             want = "true" if is_drawing else "false"
             self.assertEqual(d.get("displaycols"), want, d.get("title"))
             self.assertEqual(d.get("displayrows"), want, d.get("title"))
@@ -2014,7 +2297,7 @@ class WaddingRegressionTest(unittest.TestCase):
         # that folio's page as the prefix (so no -K1.. -K10.. survive).
         root, _, _ = self._run()
         drawing = [d for d in root.findall("diagram")
-                   if (d.get("title") or "").startswith("R")]
+                   if re.match(r"^R\d", d.get("title") or "")]
         self.assertEqual(len(drawing), 10)
         pages = sorted(int(d.get("order")) for d in drawing)
         self.assertEqual(pages, list(range(101, 111)))   # 101..110
@@ -2322,9 +2605,10 @@ class WaddingBorneroFloorTest(unittest.TestCase):
         # literal floor from the summary
         self.assertRegex(err, r"points\s*:\s*106\s+drawn")
         self.assertRegex(err, r"symbols\s*:\s*75\s+matched")
-        # exactly 10 drawing folios (one per I/O card with mapped tags)
+        # exactly 10 drawing folios (one per I/O card with mapped tags); match
+        # the rack digit so the topology folio is not swept in.
         drawing = [d for d in root.findall("diagram")
-                   if d.get("title", "").startswith("R")]
+                   if re.match(r"^R\d", d.get("title", ""))]
         self.assertEqual(len(drawing), 10)
         # the bornero summary line is honest about what it drew. T3.2: borneros
         # now list mapped + RESERVA terminals in channel order, so a wide card
@@ -2717,7 +3001,7 @@ class WaddingSpareFloorTest(unittest.TestCase):
         self.assertRegex(err, r"symbols\s*:\s*75\s+matched")
         self.assertRegex(err, r"31\s+generic terminal")   # 0 false positives
         drawing = [d for d in root.findall("diagram")
-                   if (d.get("title") or "").startswith("R")]
+                   if re.match(r"^R\d", d.get("title") or "")]
         self.assertEqual(len(drawing), 10)                 # 10 drawing folios
         # the SEPARATE spare counter: 62 reserves over 10 cards
         m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
