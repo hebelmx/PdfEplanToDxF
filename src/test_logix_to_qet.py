@@ -23,6 +23,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import logix_to_qet as q
 
 
+def _wadding_fixture() -> Path:
+    """Resolve the WADDING_1 reference L5X. The Fixtures tree is organized by
+    vendor (Fixtures/Rockwell/, Fixtures/Siemens/); fall back to the old flat
+    location so the floor tests keep finding it regardless of layout. Returns the
+    first existing candidate, else the preferred (vendor-subfolder) path so the
+    caller's `skipTest("... not present")` guard still fires cleanly."""
+    root = Path(__file__).resolve().parent.parent / "Fixtures"
+    candidates = (root / "Rockwell" / "WADDING_1.L5X", root / "WADDING_1.L5X")
+    for c in candidates:
+        if c.is_file():
+            return c
+    return candidates[0]
+
+
 class NextDesignationTest(unittest.TestCase):
     def test_format_is_page_prefixed(self):
         """-<L><page>.<n> — letter, page, dot, per-page sequence."""
@@ -1347,7 +1361,7 @@ class GroupChassisTest(unittest.TestCase):
     invented friendly name."""
 
     def test_real_fixture_yields_two_chassis_with_right_labels(self):
-        fixture = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+        fixture = _wadding_fixture()
         if not fixture.is_file():
             self.skipTest("WADDING_1.L5X fixture not present")
         import logix_to_eplan_csv as l2e
@@ -1805,7 +1819,7 @@ class WaddingRegressionTest(unittest.TestCase):
     %{token} leaks, and the supply folio touching no element/conductor. Skipped
     if the fixture is absent (public-repo hygiene: it is never committed)."""
 
-    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+    FIXTURE = _wadding_fixture()
 
     def setUp(self):
         if not self.FIXTURE.is_file():
@@ -2287,7 +2301,7 @@ class WaddingBorneroFloorTest(unittest.TestCase):
     main()'s own stderr summary and asserts the literal floor (106 points / 75
     matched) plus the new bornero folio line and 10 untouched drawing folios."""
 
-    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+    FIXTURE = _wadding_fixture()
 
     def setUp(self):
         if not self.FIXTURE.is_file():
@@ -2680,7 +2694,7 @@ class WaddingSpareFloorTest(unittest.TestCase):
     must NOT move, and the SEPARATE spare counter must read 62 (capacity-mapped
     summed over the 10 cards), with REM_AN_IN_1 contributing 14."""
 
-    FIXTURE = Path(__file__).resolve().parent.parent / "Fixtures" / "WADDING_1.L5X"
+    FIXTURE = _wadding_fixture()
 
     def setUp(self):
         if not self.FIXTURE.is_file():
