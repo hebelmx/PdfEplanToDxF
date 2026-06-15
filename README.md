@@ -6,7 +6,7 @@ A small toolbox for moving data between Rockwell ControlLogix, EPLAN Electric P8
 |------|---------|
 | [`src/eplan_pdf_to_dxf.py`](src/eplan_pdf_to_dxf.py) | Convert EPLAN-exported PDFs into editable DXF files |
 | [`src/logix_to_eplan_csv.py`](src/logix_to_eplan_csv.py) | Convert ControlLogix L5X exports into EPLAN PLC import CSVs |
-| [`src/logix_to_qet.py`](src/logix_to_qet.py) | Generate a QElectroTech project (one folio per I/O card) from a ControlLogix L5X |
+| [`src/logix_to_qet.py`](src/logix_to_qet.py) | Generate a near-finished QElectroTech drawing set (I/O cards, supply, grounding, borneros, BOM, title block) from a ControlLogix L5X |
 | [`src/CsvToEplan.py`](src/CsvToEplan.py) | Convert an enriched I/O CSV into a simple EPLAN XML structure |
 
 ---
@@ -182,41 +182,64 @@ L5X" triggers it automatically.
 
 # 3. ControlLogix to QElectroTech Project
 
-Generate a native [QElectroTech](https://qelectrotech.org/) (FOSS electrical
-CAD) project straight from an L5X export — one folio per I/O card, drawn as a
-classical card box with a connectable terminal element per point, the PLC tag,
-the EPLAN-style address, and a humanized function text.
+Generate a near-finished [QElectroTech](https://qelectrotech.org/) (FOSS
+electrical CAD) drawing **set** straight from an L5X export — not just I/O cards,
+but a complete document with cover sheet, symbol legend, supply and grounding
+folios, terminal strips (borneros), a bill of materials, and a revision history,
+all under an ISO 7200 title block. The goal is simple: **the engineer doing the
+final drafting does the least manual work possible.**
 
 ```bash
 python src/logix_to_qet.py PROJECT.L5X -o project.qet
 ```
 
-Requires QElectroTech **0.100+** to open the result (project format
-reverse-engineered from the official 0.100 example projects). The whole
-project can then be printed to PDF or exported to DXF from QET natively.
+| Flag | Effect |
+|------|--------|
+| `-o, --output PATH` | output `.qet` path (default: `<l5x>.qet`). A `<output>_bom.csv` sidecar is written alongside. |
+| `--include-hmi` | include PanelView/HMI-mapped points (excluded by default; not hardwired) |
+| `--no-symbols` | skip field-device symbol matching — draw plain terminals only |
+| `--wire-scheme {address,sequential}` | conductor wire numbers: `address` (EPLAN address verbatim, default) or `sequential` (`W<page>.<n>` per folio) |
 
-## Automatic field-device symbols (`src/symbol_db/`)
+A mapping summary (folios / points / matched symbols / spares / BOM / …) prints to
+stderr. Requires QElectroTech **0.100+** to open the result; the project can then
+be printed to PDF or exported to DXF from QET natively.
 
-Each digital point is semantically matched against a plain-JSON database of
-common control elements — limit switches, push buttons, e-stops, selectors,
-proximity/photo/pressure/level/flow sensors, solenoid valves, pilot lights,
-relay coils, horns. Matching works as an inverse of the tag humanizer: the
-tag is expanded through the abbreviation dictionary, pooled with the tag
-description, and fuzzy-matched (English/Spanish, accent-insensitive) against
-each entry's keyword phrases and tag-suffix conventions (`_LS`, `PB1`,
-`SV604WE1A`, `PARO`, ...). A confident match draws the device symbol at the
-end of the row, wired to the point's terminal; anything uncertain keeps the
-generic terminal. Disable with `--no-symbols`. See
-[`src/symbol_db/README.md`](src/symbol_db/README.md) to extend the database.
+## What it produces
 
-## Module database (`src/module_db/`)
+A single `.qet` project, ordered as a real drawing set:
 
-One JSON file per module catalog number enriches the folios with vendor,
-description, RTB type, point names (`IN-0`, `OUT-7`, `Ch3`) and the physical
-RTB terminal of each point. Pins ship as `"TBD"` (rendered as a `__` write-in
-placeholder) — fill them from the vendor's installation instructions; never
-guess pinouts. See [`src/module_db/README.md`](src/module_db/README.md) for
-the schema.
+| Section | Folio(s) | What's on it |
+|---------|----------|--------------|
+| Portada | cover | project / machine / controller metadata from the title block |
+| Simbología | legend | every field-device symbol actually used, with its localized name |
+| Alimentación | supply rails | the supply potentials (L1/N, L+/0V, PE…) the cards reference |
+| Puesta a tierra | grounding | one folio per chassis: FE + PE → ground bus → electrode system |
+| Card drawings | one per I/O card | classical card box, a terminal per point + RESERVA spares, the PLC tag, the EPLAN-style address, a humanized function text, an IEC 81346 device designation (`-K101.3`), the card's power terminals, and a matched field-device symbol wired to each digital point |
+| Borneros | one+ per card | the card's terminal strip `-X1` listing every terminal (mapped + spare) in channel order |
+| BOM / índice | summary | every module, matched device, generic terminal and spare — also emitted as the `_bom.csv` sidecar |
+| Historial | last | ISO 9001 revision history |
+
+On the bundled `WADDING_1` reference project that is **32 folios** from one L5X.
+For the full anatomy, data model, and how to extend it, see the
+**[logix_to_qet guide](docs/logix-to-qet-guide.md)**.
+
+## Data model (everything domain-specific is JSON, not code)
+
+- **Module database** [`src/module_db/`](src/module_db/README.md) — one file per
+  catalog number: vendor, description, RTB, point names, physical pins, and the
+  optional power-group structure. Pins ship `"TBD"` (rendered `__`) — fill them
+  from the vendor manual; **never guess pinouts.**
+- **Symbol database** [`src/symbol_db/`](src/symbol_db/README.md) — one file per
+  field-device type (+ its QET glyph): keyword/suffix conventions and the IEC
+  81346 class letter. Matched as an inverse of the tag humanizer (EN/ES today,
+  accent-insensitive). Uncertain points keep the generic terminal — **a wrong
+  symbol is worse than a plain one.**
+- **Project template** [`src/project_template.json`](src/project_template.json) —
+  the cajetín fields (company, logo, author, dates, revision), the `revisions`
+  changelog, and the optional `grounding` wire gauges.
+
+Python 3.10+, **standard library only**. The databases stay language-agnostic so
+new locales drop in as pure data.
 
 ---
 
