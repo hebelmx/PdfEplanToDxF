@@ -1,197 +1,166 @@
-# Handoff — next dev cycle (T3.4 DONE → Tier-3 must-do complete)
+# Handoff — Phase 2 in progress (E2.1 topology DONE → next: network addresses → IR → S7-300)
 
-> Self-contained handoff so a **fresh agent in a new session** can continue with no
-> prior context. Rewritten 2026-06-14 after **T3.4** (chassis grounding folio) landed
-> on branch `feat/t3-grounding`. Supersedes the T3.1+T3.2 handoff.
+> Self-contained handoff so a **fresh agent in a new session** can continue with no prior
+> context. Written 2026-06-15. Supersedes the post-T3.4 handoff. The product MVP (Phase 1)
+> is shipped; this is **Phase 2** (multi-vendor + LLM-aided diagrams), driven by
+> `docs/planning/{brief,prd,epics}.md`.
 
 ## TL;DR — read this first
 
-- Product: turn a Rockwell **L5X** export into a near-finished QElectroTech I/O drawing
-  set. Driver = `ProductPlanEnhancement.md`. Generator = `src/logix_to_qet.py`. Tests =
-  `src/test_logix_to_qet.py` (**226 tests**, stdlib unittest). Durable task list =
-  `docs/TIER3-tracker.md`.
-- **Tier 2 + the Document-assembly theme (DA.1–DA.8) + T3.1 + T3.2 are DONE and merged to
-  `main`** (`main @ 89b9208`, pushed to origin 2026-06-14).
-- **T3.3 (Column pagination) is DEFERRED** — [issue #1](https://github.com/hebelmx/PdfEplanToDxF/issues/1)
-  (no card in the wild >32 ch).
-- **T3.4 (chassis grounding folio) is DONE `778ad2b`, FF-MERGED to `main` (`b0e3689`) and
-  PUSHED to origin 2026-06-14** (on Abel's explicit go). Floor HELD **10/106/75/0 FP**;
-  **226 tests** green; WADDING_1 now emits **32 folios** (was 30) — two new **"Puesta a
-  tierra"** folios, one per chassis. `main == origin/main == b0e3689`. (QET eyeball of the
-  grounding folios is optional/at leisure — Abel chose to merge first.)
-- **With T3.4 the Tier-3 MUST-DO work is complete.** Only **T3.5 (extra languages IT/DE/ZH)**
-  remains and it is **demand-driven** (pure data, pull in only when a real project needs it).
+- Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
+  Generator = `src/logix_to_qet.py`; parser/domain-model = `src/logix_to_eplan_csv.py`
+  (`l2e`); tests = `src/test_logix_to_qet.py` (**247 tests**, stdlib unittest).
+- **Phase 1 (Rockwell L5X → 32-folio set) is COMPLETE and merged.** Docs: `README.md` §3 +
+  `docs/logix-to-qet-guide.md`.
+- **Phase 2 plan is captured as a BMAD chain:** `docs/planning/brief.md` → `prd.md`
+  (FR-1…FR-14) → `epics.md` (E1–E5) + `.decision-log.md`. **Read these** — they hold the
+  whole business case (Siemens multi-vendor, LLM config-driven folios, quick-win folios).
+- **DONE this session:** **E2.1 network/communications topology folio** ("Red de
+  comunicaciones", section page 2) — chassis-grouped layout, merged to `main` @ `18519cc`,
+  pushed. Floor held; now **33 folios** (was 32). The **S7-300 Siemens spike** ran on a real
+  sample → **strong GO** (see memory `siemens-import-findings`).
+- **`main` @ `18519cc` == `origin/main`.** Branch `feat/e2-network-topology` is ff-merged
+  (safe to delete).
+- **NEXT, in order:** (1) **add network addresses to the topology folio**; (2) **Epic 1 —
+  the vendor-neutral IR refactor** (Abel chose IR-first); (3) **S7-300 parser** (spike is GO,
+  fixture in hand). Then E4 (TIA 1200/1500) when its exports land.
 
-## ⚠️ Things still optionally pending Abel (not blocking — already merged)
+## ⚠️ Fixtures were REORGANIZED by vendor (2026-06-14) — paths changed
 
-1. **(Optional) Eyeball T3.4 in QET** — the two grounding folios (`Puesta a tierra — Chasis
-   R1 (Local)` at section page 099 and `Chasis R2 (RIO_RCP)` at 100), plus confirm
-   Alimentación reads 098 and the cards still read 101+. Already merged to `main` on Abel's
-   go; the layout (chassis box → FE/PE leads → Barra de tierra → electrode glyph) is
-   geometry-verified inside the frame, but a render confirms the Spanish labels/glyph read
-   cleanly. Render to a SCRATCH path (`-o Fixtures/_gen_check.qet`), never over WADDING_1.qet.
-2. **(Earlier, optional) Eyeball T3.2 in QET** — the RESERVA spares, the grown bornero
-   (incl. REM_IN_1's 2-sheet strip) and the 5-folio BOM, if not already done.
+- `Fixtures/Rockwell/` — `WADDING_1.{L5X,ACD,AML,L5K,RDF,qet,pdf,...}` + an `abel-backup`.
+  **The fixture is now `Fixtures/Rockwell/WADDING_1.L5X`.** **Abel's WORKING file is
+  `Fixtures/Rockwell/WADDING_1.qet` — NEVER `-o` over it** (memory `never-overwrite-working-qet`).
+- `Fixtures/Siemens/S7300/` — the first Siemens sample: `brpl2twin.txt.asc` (symbol table)
+  + `brpl2twin.txt.cfg` (HW config). More Siemens samples (1200/1500 CAx + PDF) coming.
+- The test suite was fixed for the move: `_wadding_fixture()` in the test file resolves
+  `Fixtures/Rockwell/WADDING_1.L5X` (fallback to the old flat path). **Before that fix the
+  move made the floor tests SILENTLY SKIP** — if you ever see `skipped` jump, the fixture
+  path is wrong, not the floor passing.
+- `Fixtures/` is **gitignored plant data** — never commit anything under it (now also
+  Siemens `*.asc`/`*.cfg`/`*.aml`/`*.pdf`).
 
-If a grounding-folio tweak is wanted after the eyeball, branch off `main` again
-(`feat/t3-grounding-fix`) and run another cycle.
+## Hard gate (run after every change)
 
-## What T3.4 did (branch `feat/t3-grounding`, floor intact)
+```
+cd src && python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_gen_check.qet
+```
+Floor that must NOT regress (from `main()`'s stderr): **10 drawing folios / 106 points /
+75 matched / 0 false positives**, 62 RESERVA spares, **33 total folios** (now incl. the
+topology folio at order 2). On the `.qet`: terminal ids unique; conductors resolve; every
+element `type` has an embedded `<definition>`; ISO 7200 title block on every folio; no raw
+`%{token}` in folio **properties** (the `%{...}` inside the embedded `<titleblocktemplate>`
+are native QET vars — expected, not a leak). Then run `python -m unittest test_logix_to_qet`
+from `src/` (**247 tests**) and **delete the scratch `_gen_check.qet`/`_bom.csv`/`.pdf`**.
+(Note: the VM has been very slow — the suite takes ~60-90 s; that's environmental.)
 
-A dedicated grounding folio **per physical chassis**, modeled on AB **1756-IN621 pp.12-14**
-(`docs/1756-in621_-en-p.pdf`, "Grounding Configuration Example"). Gated decisions (Abel,
-2026-06-14, memory `t3-pe-grounding-decisions`):
+## THE NEXT TASKS (in order)
 
-- **One folio PER CHASSIS.** Chassis = a distinct `rack` among `io_mods`
-  (`group_chassis()`); WADDING_1 has 2 — **R1 / parent `Local` / 6 modules** and **R2 /
-  parent `RIO_RCP` / 5 modules**.
-- **Each chassis = a labelled box** (`Chasis R<rack> (<parent>)` + `<n> módulos`, derived
-  from the parse — never invented) with **FE** (Tierra funcional) + **PE** (Tierra de
-  protección) studs, gauge-labelled leads → a central **Barra de tierra** → a lead to the
-  **Sistema de electrodos de tierra** (standard 3-bar earth glyph).
-- **Build pattern:** new `build_grounding_folios()` + `_add_grounding_diagram()` mirror
-  `build_supply_folios` — **text + shape primitives only**, empty `<elements>`/`<conductors>`
-  (so they inherit the ISO 7200 title block, zero floor impact). Only `add_rect`/`add_text`
-  exist (no line/circle helper) — leads are thin 2-px rects, like the supply rails.
-- **Gauges CONFIGURABLE** via `project_template.json` `"grounding"` block
-  (`fe_gauge`/`pe_gauge`/`electrode_gauge`), defaulting to the 1756-IN621 values (FE
-  `8 AWG (8.3 mm²)`, PE `14 AWG (2.1 mm², 1.35 N·m)`, electrode `mín. 8 AWG (8.3 mm²)`).
-  `PROJECT_TEMPLATE_DEFAULTS` gained a nested `"grounding"` dict; `load_project_template`
-  now merges that nested dict gracefully (string sub-values only).
+### 1. Add network addresses to the topology folio  ← do this first
+Abel reviewed the topology folio in QET and it "looks much better"; the one thing missing is
+**the network address of each node** (ControlNet node number / EtherNet IP / device address).
+- **First confirm the data exists** in the L5X — likely on each `<Module>`'s `Ports/Port`
+  (`Address`/`NodeAddress`) or the comms/connection elements. `l2e` may not parse it today;
+  you may need to extend the parse (and the `Module`/IR to carry an optional `address`).
+  **NEVER invent an address** — if absent, show nothing for that node (blank), like every
+  other never-invent fallback.
+- Render the address as an extra line in each node's row (topology folio is at
+  `build_topology_folio` / `_add_topology_diagram`, chassis-grouped). Keep it inside the box,
+  no strike-through, floor unchanged.
+- It is a **visual folio** — Abel iterates visually. Verify floor + positional tests, then
+  **render to a scratch `.qet` and launch QET** for his eyeball (workflow below).
 
-### Numbering — gated "keep cards at -K101.x" (Abel chose this over renumbering the cards)
+### 2. Epic 1 — vendor-neutral IR refactor  (PRD FR-1/2/3; epics E1)
+Promote `l2e`'s implicit, Rockwell-named domain model into an explicit `PlcProject` IR the
+renderer consumes. **Pure enabling refactor — Rockwell output must stay byte-equivalent;
+floor holds.** This is the prerequisite for the S7-300 parser. Abel explicitly chose
+**IR-first** over building the parser against the current model.
 
-The card drawings stay at section pages **101..110** (`-K101.x..-K110.x` UNCHANGED). The
-power+grounding block **floats just below 101**:
+### 3. S7-300 parser  (PRD FR-9/FR-10; epics E3) — spike is GO, fixture in hand
+Build a Siemens S7-300 front-end producing the IR, against `Fixtures/Siemens/S7300/`.
+**Full spike findings are in memory `siemens-import-findings`** — summary:
+- `.asc` symbol table: fixed-width `symbol · operand(I/Q/M/…) · address · datatype · comment`.
+  Use `I`/`Q` rows for physical I/O; filter `M`/`FC`/`FB`/`DB`/`T`/`C`.
+- `.cfg` HW config (CFG text, `FILEVERSION "3.2"`): `RACK n, SLOT m, "<6ES7 order#>", "<type>"`
+  lines where the **type string encodes kind + point count** (`DI32xDC24V`, `DO32xDC24V/0.5A`,
+  `AI8x12Bit`), each followed by `LOCAL_IN/OUT_ADDRESSES` (byte range). PROFIBUS-DP slaves are
+  `DPSUBSYSTEM … SLOT … "<x output bytes, y input bytes>"`. **Join `.asc`↔`.cfg` on the byte
+  address.** Masked `?` digits in order numbers are **version-independent wildcards — keep
+  as-is, never fill them.** Symbol-optional: tags from `.asc` when present, else address-only.
 
-- `main()` computes `n_grounding = len(group_chassis(io_mods))`, then
-  **`supply_order = SECTION_SUPPLY - n_grounding`** (`SECTION_SUPPLY` constant stays 100).
-  Grounding folios take `supply_order+1 .. 100` in rack order.
-- WADDING_1 (n=2): **Alimentación 098 → grounding 099 (R1) → grounding 100 (R2) → cards
-  101-110.** Reading order Alimentación → Puesta a tierra → cards.
-- **Backward-compatible:** `n_grounding = 0` ⇒ `supply_order = 100` (unchanged).
-- Grounding folios at 099/100 sit **below** the drawings continuation band (101-199), so
-  `add_continuation_refs` does NOT chain them (each chassis folio is a standalone sheet).
+### 4. (later) E4 — TIA S7-1200/1500  (PRD FR-11; epics E4) — sample-gated
+Tag-table XML is the clean tag source. Hardware via **CAx/AML export** — which needs Abel's
+user in the Windows "Siemens TIA Openness" group (he's granting it; this is a permission on
+*his* manual export, NOT a runtime dep — our parser just reads the `.aml` with stdlib). If
+CAx works, 1200/1500 hardware is clean like the `.cfg`; else a print-report PDF is the
+human-read reference for a curated Siemens `module_db`. Samples not yet delivered.
 
-### Verified from GROUND TRUTH (not the implementer's summary)
+## QET eyeball workflow (how Abel reviews visual folios)
+1. Render to a SCRATCH path: `python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_eyeball.qet`
+2. Launch QET: `"/c/Program Files/QElectroTech/bin/qelectrotech.exe" "E:\Dynamic\PdfEplanToDxF\Fixtures\Rockwell\_eyeball.qet" &` (background).
+3. Abel prints to PDF and tells you the page; **`Read` that PDF page** to see the render
+   (`Read` supports PDFs via the `pages` param). Page N = the Nth folio in document order
+   (Portada 0, Simbología 1, **topología 2**, …). QET has **no headless PDF export** CLI.
 
-- `python logix_to_qet.py ../Fixtures/WADDING_1.L5X -o ../Fixtures/_gen_check.qet` (scratch,
-  deleted after): floor **10 folios / 106 drawn / 75 matched / 0 FP**; 62 spares; **32
-  folios**; supply order 98, grounding 99..100.
-- Parsed the `.qet`: orders `[0,1,98,99,100,101..110,200..210,300..304,900]`; grounding
-  titles `Puesta a tierra — Chasis R1 (Local)` / `… R2 (RIO_RCP)`; grounding folios have
-  **0 elements / 0 conductors**, `titleblocktemplate="exxerpro"`, **no `%{token}` leak**, no
-  duplicate terminal ids, all conductors resolve. Geometry inside the frame (box 120-640 ×
-  80-200, bus y=380, electrode glyph ends y≈506, bottom label y=530 < 660).
-- `python -m unittest test_logix_to_qet` from `src/`: **226 tests OK (1 skip)**. The 1 skip
-  is the optional 2-column-card right-column spare-extent test — WADDING_1 has no
-  right-column card so it honestly skips (a triaged minor from the T3.1/T3.2 review).
+## Topology folio code map (current)
+`build_topology_folio(project, start_order, controller, modules)` (returns 1) called in
+`main()` right after `build_symbology_folio`; `SECTION_TOPOLOGY = 2`. Helpers:
+`build_topology_tree` (classified graph), `classify_node` (controller/bridge/hmi/io/generic by
+kind+catalog pattern), `topology_root` (self-parented root), `topology_protocol`
+(CNB/CN2→ControlNet, EN..→EtherNet/IP), `build_topology_chassis` (groups the full tree into
+physical chassis), `_add_chassis_box`/`_add_hmi_box`/`_add_topology_drop`/`_add_topology_diagram`.
+**Layout:** one enclosing box PER CHASSIS with plain-text module rows (no per-module boxes),
+a full-width network bus, drops at box edges. Uses the FULL `modules` dict (not `io_mods`) so
+it includes the controller, comms bridges and HMI. Mirrors `build_grounding_folios` (text +
+shape primitives only, empty `<elements>`/`<conductors>`).
 
-## Phase-boundary adversarial review (T3.1 + T3.2) — CLEARED 2026-06-14
+## ⚠️ HARD RULES (carry forward — these bit us)
+1. **NEVER `-o Fixtures/Rockwell/WADDING_1.qet`** (Abel's working file). Verify to a scratch
+   path; delete it after.
+2. **Don't trust a subagent's summary/`shipReady`.** Re-derive every number from ground truth
+   (run the generator → stderr; run the tests; parse the `.qet`). Verified twice this session.
+3. **Never invent.** Unmatched → generic; uncertain → graceful fallback; pins `TBD`→`__`;
+   Siemens catalogs keep masked `?`; missing network address → blank. Multilingual DBs stay
+   language-agnostic. Python 3.10+, **stdlib only**.
+4. **Public-repo hygiene:** never `git add` under `Fixtures/` or any
+   `*.L5X`/`*.qet`/`*_bom.csv`/`*.pdf`/`*.asc`/`*.cfg`/`*.aml`/personal file. The `assets/*.png/.bmp/.ai`
+   logo exports are intentionally untracked (`??`) — leave them.
+5. **QET caches title-block templates at startup** — restart QET to see `.titleblock` edits.
+6. **Verify from ground truth; one focused commit per item; feature branch → human merge gate.**
+   Footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
-A fresh skeptic re-derived everything from ground truth: **both items SOUND.** Floor held;
-T3.1 is pure data (a JSON `priority 0→1`, no NO/NC logic in Python; the tiebreak resolves all
-adversarial cases correctly and no fixture tag flipped); T3.2 spares carry no conductors,
-blank designation/type, counted separately, no proxy-assertion smell. One **minor** test gap
-(right-column spare extent on a 2-column card — triaged into the T3.4 cycle, test added but
-skips) + two nits (a `ResourceWarning` from an unclosed CSV handle at `test_logix_to_qet.py`
-~452; spare direction/analog derived from `mod.kind` — fine for homogeneous ControlLogix
-cards). Nothing blocking.
-
-## ⚠️ HARD RULES (these bit us — do not repeat)
-
-1. **NEVER run the generator with `-o Fixtures/WADDING_1.qet`.** That is **Abel's working
-   artifact**. **Verify to a SCRATCH path** (`-o Fixtures/_gen_check.qet`) and parse THAT;
-   delete the scratch `.qet`/`_bom.csv` after. (Memory: `never-overwrite-working-qet`.)
-2. **Don't trust a subagent's `shipReady`/summary.** Re-derive every number from ground
-   truth (run the generator → read stderr; run the tests; parse the `.qet`; eyeball in QET).
-3. **Never force / never invent.** Unmatched → generic; missing/ambiguous → graceful
-   fallback. Physical pins stay `"TBD"` → `__`. Grounding gauges are standard 1756-IN621
-   defaults (configurable), not per-site data; chassis labels are derived (`rack`/`parent`),
-   never invented Spanish names. Multilingual DBs stay language-agnostic. Python 3.10+,
-   **stdlib only.**
-4. **Public-repo hygiene:** NEVER `git add` anything under `Fixtures/` or any
-   `*.L5X` / `*.qet` / `*_eplan.csv` / `*_bom.csv` / `*.pdf` / personal file. Company assets
-   (`assets/exxerpro.titleblock`, the logo **`.svg`**) ARE committed; the `.png/.bmp/.ai`
-   logo exports are intentionally untracked (they show as `??` — leave them).
-5. **QET caches title-block templates at startup** — fully RESTART QET to see template edits.
-6. **QET numbers folios by DOCUMENT POSITION, not the `order` attribute.** Custom folio
-   numbers go through `%{page}` (filled per folio by `apply_titleblock` from `order`).
-7. **Card / folio bands are geometrically tight.** Drawing folios: power table top-right,
-   box title `y1-24`, continuation lane at 648 in the 15-px gap above the 660 frame. The new
-   grounding folios are roomy (one chassis per sheet) but still keep all text lifted clear of
-   lines (DA.8 lesson) and inside the frame.
-8. Commit footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-   One focused commit per item; doc/handoff changes in their OWN commit.
-
-## Code map (current `src/logix_to_qet.py`)
-
-`main()` builds folios in DEPENDENCY order, stamps each with a SECTION page, adds
-continuation refs, then re-sorts into document order before serialization:
-
-- `n_grounding = len(group_chassis(io_mods))`; `supply_order = SECTION_SUPPLY - n_grounding`.
-- Drawing-folio loop: `build_folio(project, page, …)` with `page = SECTION_DRAWINGS+i`
-  (101..110); `page` is ALSO the designation/wire-number prefix (DA.5a). Accumulates
-  `bom_rows`, `drawn_cards`, `sym_counts`. Spare RESERVA terminals per unused channel (T3.2).
-- `build_portada_folio(SECTION_PORTADA=0)` (DA.3); `build_symbology_folio(SECTION_SIMBOLOGIA=1)`
-  (DA.4); `build_supply_folios(supply_order)` — Alimentación;
-  **`build_grounding_folios(supply_order+1, io_mods, gauges)`** — one Puesta a tierra folio
-  per chassis (T3.4); `build_bornero_folios(SECTION_BORNERO=200)`;
-  `build_summary_folios(SECTION_BOM=300)`; `build_changelog_folios(SECTION_CHANGELOG=900)`.
-- `add_continuation_refs(project)` — stamps prev/next refs on the 101-199 / 200-299 / 300-899
-  bands (drawings/borneros/BOM); grounding (099/100) is below the band, untouched.
-- `reorder_diagrams_by_position(project)` — stable sort by int `order` (DA.2). Then
-  `sectionize_titleblock_page` + `attach_titleblocks` (fills `%{page}`), `build_collection`,
-  embed templates verbatim.
-
-The "append a folio → inherits the title block" pattern (text + shapes only) is shared by
-`build_summary/changelog/supply/grounding/bornero/portada_folios`. Non-schematic list folios
-set `displaycols/displayrows="false"` (DA.6); drawing folios keep them `"true"`.
-
-## Hard gate & guardrails (ALWAYS, after every change)
-
-- **Validation (SCRATCH output — NOT WADDING_1.qet):**
-  `python src/logix_to_qet.py Fixtures/WADDING_1.L5X -o Fixtures/_gen_check.qet`
-- **Floor that must NOT regress:** **10 drawing folios / 106 points / 75 matched / 0 FP**,
-  from `main()`'s stderr summary. Since T3.2: **62 spare RESERVA** (separate count). Since
-  T3.4: **2 grounding folios** and **32 total folios** (supply at 100−n_grounding); terminal
-  ids unique per diagram; every conductor resolves; no zero-length conductors; every element
-  `type` has an embedded `<definition>`; ISO 7200 title block on every folio with a
-  `<property>` for every custom token (incl. `page`) so QET leaks no raw `%{token}`.
-- Run the full suite from `src/`: `python -m unittest test_logix_to_qet` (**226 tests**).
-- **Eyeball in QET** (fully restart it) — offer to launch QET on the scratch output.
+## Deferred housekeeping (small, do when convenient)
+- `docs/logix-to-qet-guide.md` §9 and a couple of planning-doc gate commands still cite the
+  old `Fixtures/WADDING_1.L5X`/`.qet` path — repoint to `Fixtures/Rockwell/`.
+- Fold the Siemens spike specifics (now in memory `siemens-import-findings`) into
+  `docs/planning/{brief,prd,epics}` when next on a clean main.
 
 ## Git state / how to resume
-
-- **`main` @ `b0e3689` == `origin/main`** — Tier 2 + DA + T3.1 + T3.2 + **T3.4**, pushed to
-  origin 2026-06-14. `feat/t3-grounding` is FF-merged (can be deleted; harmless to keep).
-- **T3.3 deferred** (issue #1). **T3.4 done & merged.** The Tier-3 must-do work is COMPLETE.
-  Next actionable backlog = **T3.5 (extra languages, demand-driven only)** — start from a
-  fresh branch off `main` when a real multilingual project needs it.
+- **`main` @ `18519cc` == `origin/main`** — Phase-1 + planning chain + fixture-test-fix +
+  E2.1 topology, all pushed. `feat/e2-network-topology` is ff-merged (deletable).
+- Memory to read: `siemens-import-findings`, `never-overwrite-working-qet` (updated paths),
+  `qet-generator-status`, `bmad-orchestration`. Plan: `docs/planning/`.
 
 ## Kickoff prompt — paste into the new session
-
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py). Tier 2 + DA + T3.1 + T3.2 +
-T3.4 are ALL merged to main and pushed (main @ b0e3689 == origin/main). T3.3 DEFERRED
-(issue #1). T3.4 (chassis grounding folio, 778ad2b) DONE & verified — floor 10/106/75/0 FP;
-226 tests green; WADDING_1 emits 32 folios (2 "Puesta a tierra" per-chassis folios;
-Alimentación 098, grounding 099/100, cards 101-110 unchanged). The Tier-3 must-do work is
-COMPLETE; only T3.5 (extra languages, demand-driven) remains — pull in only when a real
-multilingual project needs it.
+Continue the PLC → mini-EPLAN product (src/logix_to_qet.py), Phase 2. main @ 18519cc ==
+origin/main; 247 tests; floor 10 drawing folios/106/75/0; WADDING_1 emits 33 folios incl.
+the new "Red de comunicaciones" topology folio (order 2). Phase-1 done; Phase-2 plan in
+docs/planning/{brief,prd,epics}.md.
 
-READ FIRST: docs/HANDOFF-next-cycle.md (this file — state, HARD RULES, code map),
-docs/TIER3-tracker.md, ProductPlanEnhancement.md, memory t3-pe-grounding-decisions +
-qet-generator-status.
+READ FIRST: docs/HANDOFF-next-cycle.md (this file — fixture reorg to Fixtures/Rockwell,
+gate command, code map, HARD RULES), docs/planning/* , and memory siemens-import-findings +
+never-overwrite-working-qet.
 
-OPTIONAL (not blocking, already merged): eyeball T3.4 in QET (2 grounding folios 099/100,
-Alimentación 098, cards 101+) and/or T3.2 (RESERVA spares, grown bornero/BOM). Tweaks →
-fresh branch off main.
+NEXT IN ORDER: (1) add NETWORK ADDRESSES to the topology folio — first confirm the L5X
+carries them (Module Ports/Port Address?), extend l2e/IR if needed, never invent (blank if
+absent); visual folio → QET eyeball. (2) Epic 1: vendor-neutral PlcProject IR refactor,
+byte-equivalent Rockwell output, floor holds (Abel chose IR-first). (3) S7-300 parser against
+Fixtures/Siemens/S7300/ (.cfg+.asc join, spike is GO — see the memory).
 
-HARD RULES: never -o Fixtures/WADDING_1.qet (use Fixtures/_gen_check.qet); never invent
-(TBD→__, derived labels, configurable gauge defaults); stdlib only; never git add Fixtures/
-or *.L5X/*.qet/*.pdf/*_bom.csv; restart QET to see template edits; don't push without Abel's OK.
+HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet (use a scratch path); never invent;
+stdlib only; never git add Fixtures/ (incl. Siemens *.asc/*.cfg/*.aml/*.pdf); verify every
+result from ground truth (stderr floor + 247 tests + parse the .qet); restart QET for
+template edits; one commit per item, feature branch → human merge gate.
 ```
-
 ---
-*Overwrite this file for the cycle after the T3.4 merge / T3.5.*
+*Overwrite this file for the cycle after the network-address + IR work.*
