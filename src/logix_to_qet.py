@@ -2320,12 +2320,39 @@ def main(argv=None):
 
     out_path = args.output or re.sub(r"\.l5x$", "", args.l5x, flags=re.I) + ".qet"
 
-    # Build the vendor-neutral PlcProject IR via the Rockwell builder, then read
-    # the data off the IR (instead of a loose tuple). A future Siemens builder
-    # mirrors this call and yields the same PlcProject shape; the rendering logic
-    # below is unchanged — only how it OBTAINS the data.
+    # Build the vendor-neutral PlcProject IR via the Rockwell builder, then hand
+    # it to the shared renderer. A future / sibling Siemens command (tia_to_qet)
+    # mirrors this: build a PlcProject, then call the SAME render_project — only
+    # the front-end that OBTAINS the IR differs.
     project_ir = plc_ir.build_rockwell_project(args.l5x,
                                                include_hmi=args.include_hmi)
+    return render_project(project_ir, out_path,
+                          no_symbols=args.no_symbols,
+                          wire_scheme=args.wire_scheme)
+
+
+def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
+                   wire_scheme="address", emit_vendor_folios=True):
+    """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
+    write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
+    and the Siemens command (tia_to_qet); the only difference between vendors is
+    which IR is passed in and `emit_vendor_folios`.
+
+    `emit_vendor_folios` gates the Rockwell-specific folios (topología, supply
+    'Alimentación', and chassis grounding). These classify ControlNet/EtherNet
+    comms, read AB-1756 grounding gauges, and group power off module_db — all
+    Rockwell-only data that would be INVENTED for a Siemens panel. The Siemens
+    command passes emit_vendor_folios=False; it is also auto-forced off for any
+    non-rockwell IR (belt and suspenders), so the Rockwell path is untouched.
+
+    Returns 0. `include_hmi` is accepted for signature symmetry with the front
+    ends (the IR is already built when this is called, so it has no effect here).
+    """
+    # Rockwell-only folios are emitted only when explicitly requested AND the IR
+    # actually came from the Rockwell front end — never invent comms/grounding/
+    # power topology for another vendor.
+    emit_vendor_folios = emit_vendor_folios and \
+        project_ir.source_vendor == "rockwell"
     controller = project_ir.name
     modules = project_ir.modules
     io_mods = project_ir.io_mods
@@ -2343,7 +2370,7 @@ def main(argv=None):
         seen.add(key)
         per_module.setdefault(pt.module.name, []).append(pt)
 
-    symbols = [] if args.no_symbols else load_symbol_db()
+    symbols = [] if no_symbols else load_symbol_db()
     sym_counts: dict[str, int] = {}
     # IEC 81346 counter keyed by (page, class letter) -> last sequential number,
     # so each folio numbers its own devices from 1; filled in the deterministic
@@ -2383,7 +2410,7 @@ def main(argv=None):
         if not pts:
             continue
         build_folio(project, page, mod, pts, symbols, sym_counts, designations,
-                    args.wire_scheme, wire_counters, bom_rows=bom_rows,
+                    wire_scheme, wire_counters, bom_rows=bom_rows,
                     spare_counter=spare_counter)
         drawn_cards.append((mod, pts))
         page += 1
@@ -2403,27 +2430,34 @@ def main(argv=None):
     # Simbología (symbol legend) — one row per used symbol type (glyph + name);
     # sorts right after the cover (section page 1).
     symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)
-    # Network / communications topology overview (E2.1) — the "page 1 of any real
-    # set": controller → comms bridges → remote adapters / HMI → I/O drops, drawn
-    # from the FULL module tree. Front matter, section page 2 (the 2..99 band is
-    # free, so this does NOT disturb Alimentación/grounding/drawings). Visual-only.
-    topology_folios = build_topology_folio(project, SECTION_TOPOLOGY,
-                                           controller, modules)
-    # Power+grounding block FLOATS just below the card drawings band (T3.4): one
-    # grounding folio per chassis (= distinct rack), so the supply order is
-    # COMPUTED as 100 - n_grounding. Alimentación sits first, then the grounding
-    # folios at supply_order+1 .. 100. Backward-compatible: n_grounding=0 ⇒
-    # supply_order = 100 (unchanged). The card drawings stay fixed at 101..110.
-    n_grounding = len(group_chassis(io_mods))
+    # Vendor-specific folios (Rockwell only — gated by emit_vendor_folios):
+    #   * topología: classifies ControlNet/EtherNet comms off the AB module tree
+    #   * supply 'Alimentación': power rails grouped via module_db
+    #   * grounding 'Puesta a tierra': AB-1756 chassis grounding gauges
+    # For a Siemens panel none of these data exist, so the Siemens command gates
+    # them off rather than INVENT Rockwell topology/power/grounding. When off,
+    # the folios are simply not built; supply_order stays at its baseline so the
+    # stderr summary still reports cleanly (counts are 0).
+    n_grounding = len(group_chassis(io_mods)) if emit_vendor_folios else 0
     supply_order = SECTION_SUPPLY - n_grounding
-    # supply-rail folio ('Alimentación') — draws the rails the cards' power
-    # blocks reference; sits before the card drawings in the final order.
-    supply_folios = build_supply_folios(project, supply_order, io_mods)
-    # chassis grounding folios ('Puesta a tierra') — one per chassis, at
-    # supply_order+1 .. 100, just below the drawings band. Gauges come from the
-    # loaded project_template's grounding block (documented manual defaults).
-    grounding_folios = build_grounding_folios(
-        project, supply_order + 1, io_mods, tmpl.get("grounding"))
+    if emit_vendor_folios:
+        # Network / communications topology overview (E2.1) — the "page 1 of any
+        # real set": controller → comms bridges → remote adapters / HMI → I/O
+        # drops, drawn from the FULL module tree. Front matter, section page 2
+        # (the 2..99 band is free, so this does NOT disturb Alimentación /
+        # grounding / drawings). Visual-only.
+        topology_folios = build_topology_folio(project, SECTION_TOPOLOGY,
+                                               controller, modules)
+        # supply-rail folio ('Alimentación') — draws the rails the cards' power
+        # blocks reference; sits before the card drawings in the final order.
+        supply_folios = build_supply_folios(project, supply_order, io_mods)
+        # chassis grounding folios ('Puesta a tierra') — one per chassis, at
+        # supply_order+1 .. 100, just below the drawings band. Gauges come from
+        # the loaded project_template's grounding block (documented defaults).
+        grounding_folios = build_grounding_folios(
+            project, supply_order + 1, io_mods, tmpl.get("grounding"))
+    else:
+        topology_folios = supply_folios = grounding_folios = 0
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -2495,17 +2529,22 @@ def main(argv=None):
           f"folio(s)", file=err)
     print(f"changelog  : {len(revisions)} revision(s) over "
           f"{changelog_folios} folio(s)", file=err)
-    print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s) "
-          f"(order {supply_order})", file=err)
-    print(f"grounding  : {grounding_folios} '{GROUNDING_TITLE_PREFIX}' chassis "
-          f"folio(s) (orders {supply_order + 1}..{SECTION_SUPPLY})", file=err)
+    # Rockwell-only summary lines — omitted for vendors that don't emit them so
+    # the Siemens summary never advertises supply/grounding/topology it skipped.
+    if emit_vendor_folios:
+        print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s) "
+              f"(order {supply_order})", file=err)
+        print(f"grounding  : {grounding_folios} '{GROUNDING_TITLE_PREFIX}' chassis "
+              f"folio(s) (orders {supply_order + 1}..{SECTION_SUPPLY})", file=err)
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
           f"folio(s), mapped + RESERVA in channel order", file=err)
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
     print(f"simbología : {symbology_folios} legend folio(s), "
           f"{len(used)} symbol type(s)", file=err)
-    print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
-          f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree", file=err)
+    if emit_vendor_folios:
+        print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
+              f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree",
+              file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

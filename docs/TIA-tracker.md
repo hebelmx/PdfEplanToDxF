@@ -31,15 +31,22 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 - `source_vendor="siemens"`; same `PlcProject` shape → renderer needs no vendor branch.
 
 ## Backlog (recommended order)
-- [ ] **TIA-1** — `build_tia_project()` IR front-end: parse IMV1 `IO_Channels.xml` → modules +
-      points + spares; join `PLCTagsS71200.xlsx` for descriptions; classify kind from %I/%Q/%IW;
-      set module bases / point index from the REAL absolute address so the rendered address ==
-      the real Siemens address. Returns `PlcProject(source_vendor="siemens")`. Tests assert the
-      IR floor 6/88/48/40. No CLI/render yet. Rockwell path untouched.
-- [ ] **TIA-2** — `src/tia_to_qet.py` entry (separate command) + render the core I/O folios +
-      emit a stderr fixture-floor summary; floor test parses it. Structurally verify the `.qet`
-      (unique terminal ids; conductors resolve; ISO title block; no `%{token}` leak). Gracefully
-      omit any folio that is genuinely Rockwell-specific for now (never invent). Eyeball gate.
+- [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
+      `plc_ir.build_tia_project()`. IR ground truth: vendor=siemens, station "Q100-Cooling1/UV",
+      7 IR modules (F-DQ1500 split [DO]+[DI]), 88 ch / 48 points / 40 spares / 0 unparsable.
+      Descriptions all "" (PLCTagsS71200.xlsx Comment column empty — never-invent, correct).
+      Suite 287 green; WADDING_1 holds 10/106/75/0, 62 RESERVA. (Orchestrator fixed one bad
+      round-trip test example — %Q11.7 is a spare, swapped for %Q11.3.)
+- [x] **TIA-2** — `src/tia_to_qet.py` (separate Siemens command) + render. DONE @ (commit below).
+      Extracted shared `render_project(ir, out, *, emit_vendor_folios=...)`; Rockwell **byte-equivalent**
+      (UUID+filename-normalized diff EMPTY, re-derived by orchestrator) + floor 10/106/75/0 holds.
+      Siemens set = 18 folios (6 I/O cards + portada + símbología + 6 bornero + 3 BOM + changelog),
+      ISO title block on all, 0 token leaks, 0 unresolved conductors. **Omits topology + grounding +
+      supply/Alimentación** (all Rockwell-specific OR underivable from IO_Channels — never invent;
+      reconciles the earlier status-log note that wrongly kept Alimentación). Floor 48 drawn/40
+      skipped/88 ch. ⚠️ NOTE for review: the all-spare `F-DQ1500 [DI]` card is skipped (Rockwell
+      "folio per card with mapped tags" rule) → 36 RESERVA drawn vs 40 at IR; 4 unused safety-input
+      spares not drawn. Suite 300 green (+13). **Pending Abel eyeball gate.**
 - [ ] **TIA-3** — `.aml` hardware map (Story 4.1): module catalog/order# (`TypeIdentifier`
       `OrderNumber:6ES7…`), `TypeName`, kind/points, PROFINET `NetworkAddress` (192.168.10.x).
       `module_db` schema; pins `"TBD"`; masked `?` digits kept; nothing invented.
@@ -48,3 +55,9 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 
 ## Status log
 - 2026-06-16: tracker created; decisions gated & locked; TIA-1 delegated.
+- 2026-06-16: TIA-1 DONE & committed @ `3be4655`, verified from ground truth. Next: TIA-2.
+  ⚠️ TIA-2 folio-scope decision (orchestrator, never-invent): render the VENDOR-NEUTRAL folios
+  (cover, símbología, I/O point folios, bornero, BOM, changelog, Alimentación) and GRACEFULLY
+  OMIT the Rockwell-specific topology (ControlNet/EtherNet classification) + AB-1756 grounding
+  folios for the Siemens path — to be revisited as Siemens-specific folios later. Confirm main()
+  coupling before delegating (Explore).
