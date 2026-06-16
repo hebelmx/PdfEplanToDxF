@@ -11,6 +11,12 @@
   NOT the synthetic `S71200/Project1`.
 - **CLI = a SEPARATE command:** new `src/tia_to_qet.py` for the Siemens path, sharing the
   renderer + the `plc_ir.PlcProject` seam. (`logix_to_qet.py` stays Rockwell/`.L5X`.)
+- **F-DQ1500 [DI] all-spare half → DRAW a RESERVA-only folio** (Abel, 2026-06-16, post-eyeball
+  gate). All 88 channels must be represented → 40 RESERVA drawn (not 36); the 4 unused safety-
+  input spares get a RESERVA-only I/O folio. Matches the Tier-3 "spares are counted &
+  represented" philosophy. New work item **TIA-2b** below. (Overrides the Rockwell "folio only
+  for cards with mapped tags" rule FOR all-spare halves of split direction-cards on the Siemens
+  path.)
 
 ## Ground-truth fixture floor (IMV1 1200 station — verified by orchestrator from IO_Channels.xml)
 Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 spare**:
@@ -47,14 +53,32 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       skipped/88 ch. ⚠️ NOTE for review: the all-spare `F-DQ1500 [DI]` card is skipped (Rockwell
       "folio per card with mapped tags" rule) → 36 RESERVA drawn vs 40 at IR; 4 unused safety-input
       spares not drawn. Suite 300 green (+13). **Pending Abel eyeball gate.**
-- [ ] **TIA-3** — `.aml` hardware map (Story 4.1): module catalog/order# (`TypeIdentifier`
-      `OrderNumber:6ES7…`), `TypeName`, kind/points, PROFINET `NetworkAddress` (192.168.10.x).
-      `module_db` schema; pins `"TBD"`; masked `?` digits kept; nothing invented.
+- [x] **TIA-3** — `.aml` hardware map (Story 4.1). DONE @ (commit below). `src/tia_aml.py`
+      (+`test_tia_aml.py`, 20 tests) parses the CAx/AML for order# (`6ES7…`) + PROFINET
+      `NetworkAddress`; `tia_front_end` joins onto IR `Module.catalog`/`network_address` by
+      physical name (split `[DI]/[DO]` halves share the physical module); `tia_to_qet --aml`
+      flag + sibling auto-discovery. **Verified from ground truth (orchestrator):** suite 320
+      green (1 pre-existing skip); WADDING_1 floor holds 10/106/75/0, 62 RESERVA; Siemens render
+      18 folios, floor 48/40/88, order numbers present in BOM. Never-invent preserved (no match →
+      catalog ``/addr None; masked `?` kept; pins TBD).
+      ⚠️ **CORRECTION (verified):** the `.aml` is the FULL plant (91 entries), NOT "1214C +
+      8×ET200SP". The Q100-Cooling1/UV station CPU is **`CPU 1512SP F-1 PN` (`6ES7 512-1SK01-0AB0`),
+      an S7-1500-class F-CPU** — both `CPU 1214C` and the 1512SP F-1 exist in the file. So our
+      "1200 floor machine" is really a 1500-class ET200SP system. Handoff line "1500 hardware not
+      in the .aml" is wrong for this station.
+- [ ] **TIA-2b** — RESERVA-only folio for all-spare halves of split direction-cards (Abel
+      decision above). Emit an I/O folio for the F-DQ1500 `[DI]` all-spare half so all 88 channels
+      are represented → **40 RESERVA** drawn (was 36). New Siemens floor: all-spare card folios
+      emitted; folio count grows by the all-spare folio(s) — derive exact count from ground truth.
+      Queued BEHIND TIA-3 (overlaps `render_project`/`tia_to_qet.py`; don't run concurrently).
 - [ ] **Adversarial review** at the phase boundary (3-lens + general) vs `docs/planning/*` before
       proposing the merge gate.
 
 ## Status log
 - 2026-06-16: tracker created; decisions gated & locked; TIA-1 delegated.
+- 2026-06-16: Eyeball render refreshed (`_eyeball_tia.qet`, 18 folios) + QET launched for Abel.
+  F-DQ1500 [DI] gate RESOLVED → "draw RESERVA-only folio" (new item TIA-2b, queued behind TIA-3).
+  TIA-3 delegated to background dev agent (independent of the F-DQ1500 render change).
 - 2026-06-16: TIA-1 DONE & committed @ `3be4655`, verified from ground truth. Next: TIA-2.
   ⚠️ TIA-2 folio-scope decision (orchestrator, never-invent): render the VENDOR-NEUTRAL folios
   (cover, símbología, I/O point folios, bornero, BOM, changelog, Alimentación) and GRACEFULLY

@@ -47,6 +47,15 @@ def _discover_tags(io_channels_path: str) -> str | None:
     return str(chosen)
 
 
+def _discover_aml(io_channels_path: str) -> str | None:
+    """Auto-discover a sibling CAx/AML hardware export (`*.aml`) next to the
+    IO_Channels.xml. Returns None when none exists — catalog/network_address then
+    stay blank/None (NEVER invent). Deterministic (sorted; first .aml)."""
+    folder = Path(io_channels_path).resolve().parent
+    candidates = sorted(folder.glob("*.aml"))
+    return str(candidates[0]) if candidates else None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a Siemens TIA Portal IO_Channels.xml export to a "
@@ -57,6 +66,11 @@ def main(argv=None):
     ap.add_argument("--tags",
                     help="path to a PLCTags*.xlsx tag table (overrides the "
                          "sibling auto-discovery; absent => descriptions stay \"\")")
+    ap.add_argument("--aml",
+                    help="path to a CAx/AML hardware export (<project>.aml) for "
+                         "module order numbers + PROFINET addresses (overrides "
+                         "the sibling *.aml auto-discovery; absent => catalog/"
+                         "network_address stay blank)")
     ap.add_argument("--no-symbols", action="store_true",
                     help="skip field-device symbol matching (terminals only)")
     ap.add_argument("--wire-scheme", choices=("address", "sequential"),
@@ -67,10 +81,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     tags_path = args.tags or _discover_tags(args.io_channels)
+    aml_path = args.aml or _discover_aml(args.io_channels)
 
     # Build the vendor-neutral PlcProject IR via the Siemens front end, then hand
     # it to the SAME renderer logix_to_qet uses — only emit_vendor_folios differs.
-    project_ir = plc_ir.build_tia_project(args.io_channels, tags_path)
+    project_ir = plc_ir.build_tia_project(args.io_channels, tags_path, aml_path)
 
     # default output: <input-dir>/<station>.qet (station name from the IR; fall
     # back to the input file stem when the station name is empty/unsafe).

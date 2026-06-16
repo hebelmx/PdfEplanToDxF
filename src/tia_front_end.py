@@ -219,7 +219,9 @@ def _split_key(direction: str, analog: bool) -> str:
 
 
 def build_modules_and_points(
-    xml_path: str, tag_table: dict[str, dict] | None = None
+    xml_path: str,
+    tag_table: dict[str, dict] | None = None,
+    aml_path: str | None = None,
 ):
     """Parse IO_Channels.xml into (station_name, modules, io_mods, points, skipped).
 
@@ -230,6 +232,14 @@ def build_modules_and_points(
               mirroring Rockwell where unmapped points are not emitted as points)
     skipped:  list of (tag-or-address, raw-address, reason) — spares + any
               channel whose address could not be parsed.
+
+    When `aml_path` is given, the TIA CAx/AML hardware map (order number +
+    PROFINET NetworkAddress) is joined onto each Module by its physical name
+    (the rack-child <Module Name> matches the .aml rack-child module Name). The
+    join fills Module.catalog and Module.network_address. A module with no .aml
+    match keeps catalog "" / network_address None — NEVER invented. Split IR
+    modules (e.g. "F-DQ1500 [DI]") strip the kind suffix back to the physical
+    name before looking up, so both halves of a split share the same hardware.
     """
     tag_table = tag_table or {}
     tree = ET.parse(xml_path)
@@ -348,4 +358,35 @@ def build_modules_and_points(
                 )
             )
 
+    # --- Optional .aml hardware join: fill catalog (order#) + network_address.
+    # Join on the physical module name. IR module names for a split physical
+    # module carry a " [KIND]" suffix (e.g. "F-DQ1500 [DI]"); strip it to recover
+    # the physical name the .aml uses. NEVER invent: no match leaves catalog ""
+    # and network_address None.
+    if aml_path:
+        import tia_aml
+
+        hw = tia_aml.hardware_for_station(tia_aml.parse_aml(aml_path), station_name)
+        for mod in io_mods:
+            phys = _physical_name(mod.name)
+            info = hw.get(phys)
+            if not info:
+                continue
+            order = info.get("order_number", "")
+            if order:
+                mod.catalog = order  # masked '?' digits kept verbatim
+            addr = info.get("network_address")
+            if addr:
+                mod.network_address = addr
+
     return station_name, modules, io_mods, points, skipped
+
+
+_SPLIT_SUFFIX_RE = re.compile(r"\s*\[(?:DI|DO|AI|AO)\]\s*$")
+
+
+def _physical_name(ir_name: str) -> str:
+    """Recover the physical module name from an IR module name by stripping a
+    trailing split-kind suffix ('F-DQ1500 [DI]' -> 'F-DQ1500'). Names without a
+    suffix pass through unchanged."""
+    return _SPLIT_SUFFIX_RE.sub("", ir_name).strip()
