@@ -1910,6 +1910,168 @@ class TopologyWaddingRegressionTest(unittest.TestCase):
         self.assertEqual(len(self._enclosing_boxes(t)), 3)
 
 
+def _addr_tmod(name, parent, catalog, kind=None, network_address=None):
+    """A topology Module stand-in that also carries a network_address (the field
+    the address feature reads). Mirrors _tmod but adds the new field."""
+    return SimpleNamespace(name=name, parent=parent, catalog=catalog, kind=kind,
+                           slot=0, points=0, network_address=network_address)
+
+
+class NetworkAddressParserTest(unittest.TestCase):
+    """E2 network-addresses: load_l5x captures the node address from the first
+    NON-ICP port carrying a non-empty Address (ControlNet/DeviceNet/Ethernet);
+    a module whose only non-ICP port has no Address stays None (never invent)."""
+
+    def _load(self, xml):
+        import logix_to_eplan_csv as l2e
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "m.L5X"
+            p.write_text(xml, encoding="utf-8")
+            _, modules, _, _ = l2e.load_l5x(str(p))
+        return modules
+
+    def test_controlnet_address_captured_as_raw_string(self):
+        xml = (
+            '<RSLogix5000Content><Controller Name="P"><Modules>'
+            '<Module Name="BRIDGE" CatalogNumber="1756-CNB/D" '
+            'ParentModule="Local"><Ports>'
+            '<Port Id="1" Address="0" Type="ICP"/>'
+            '<Port Id="2" Address="3" Type="ControlNet"/>'
+            '</Ports></Module>'
+            '</Modules></Controller></RSLogix5000Content>'
+        )
+        mods = self._load(xml)
+        self.assertEqual(mods["BRIDGE"].network_address, "3")
+        # ICP slot still parsed from the ICP port (unchanged behaviour)
+        self.assertEqual(mods["BRIDGE"].slot, 0)
+
+    def test_no_address_on_non_icp_port_stays_none(self):
+        # never-invent: an Ethernet port with no Address attribute -> None
+        xml = (
+            '<RSLogix5000Content><Controller Name="P"><Modules>'
+            '<Module Name="CPU" CatalogNumber="1756-L81E" '
+            'ParentModule="Local"><Ports>'
+            '<Port Id="1" Address="0" Type="ICP"/>'
+            '<Port Id="2" Type="Ethernet"/>'
+            '</Ports></Module>'
+            '</Modules></Controller></RSLogix5000Content>'
+        )
+        mods = self._load(xml)
+        self.assertIsNone(mods["CPU"].network_address)
+
+    def test_io_card_with_only_icp_port_stays_none(self):
+        xml = (
+            '<RSLogix5000Content><Controller Name="P"><Modules>'
+            '<Module Name="CARD" CatalogNumber="1756-IA16" '
+            'ParentModule="Local"><Ports>'
+            '<Port Id="1" Address="5" Type="ICP"/>'
+            '</Ports></Module>'
+            '</Modules></Controller></RSLogix5000Content>'
+        )
+        mods = self._load(xml)
+        self.assertIsNone(mods["CARD"].network_address)
+
+    def test_real_fixture_node_addresses_match_ground_truth(self):
+        fixture = _wadding_fixture()
+        if not fixture.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+        import logix_to_eplan_csv as l2e
+        _, modules, _, _ = l2e.load_l5x(str(fixture))
+        # the three ControlNet nodes carry their real node numbers
+        self.assertEqual(modules["RIO_LOCAL"].network_address, "1")
+        self.assertEqual(modules["RIO_RCP"].network_address, "2")
+        self.assertEqual(modules["PV_PUPITRE"].network_address, "3")
+        # the controller's only non-ICP port is Ethernet with NO Address -> None
+        self.assertIsNone(modules["Local"].network_address)
+        # plain I/O cards (only an ICP port) carry no node address
+        for n in ("MOD_ENT_1", "MOD_SAL_1", "REM_IN_1", "REM_AN_IN_1"):
+            self.assertIsNone(modules[n].network_address, n)
+
+
+class NetworkAddressRenderTest(unittest.TestCase):
+    """E2 network-addresses render INLINE on the chassis module row (and the HMI
+    detail row), only when present, and stay inside the enclosing box bounds."""
+
+    def test_row_text_contains_inline_node_token(self):
+        node = {"module": _addr_tmod("BRIDGE", "Local", "1756-CNB/D",
+                                     network_address="3"),
+                "role": "bridge", "protocol": "ControlNet", "parent": "Local"}
+        txt = q._topo_module_row_text(node)
+        self.assertIn("Nodo 3", txt)
+        self.assertIn("BRIDGE", txt)
+
+    def test_row_text_omits_token_when_no_address(self):
+        # never-invent: no network_address -> no "Nodo" token at all
+        node = {"module": _addr_tmod("CARD", "Local", "1756-IA16", kind="DI"),
+                "role": "io", "protocol": None, "parent": "Local"}
+        txt = q._topo_module_row_text(node)
+        self.assertNotIn("Nodo", txt)
+
+    def test_addressed_row_text_fits_inside_chassis_box(self):
+        # positional convention: the FULL text extent (x..x+width, y±font) of an
+        # addressed module row stays inside the chassis box rectangle.
+        nodes = {
+            "Local": {"module": _addr_tmod("Local", "Local", "1756-L81E"),
+                      "role": "controller", "protocol": None, "parent": "Local"},
+            "BRIDGE": {"module": _addr_tmod("BRIDGE", "Local", "1756-CNB/D",
+                                            network_address="3"),
+                       "role": "bridge", "protocol": "ControlNet",
+                       "parent": "Local"},
+        }
+        chassis = {"head": "Local", "label": "Chasis Local",
+                   "rows": ["Local", "BRIDGE"]}
+        shapes = ET.Element("shapes")
+        inputs = ET.Element("inputs")
+        x, y, w = q.TOPO_X_MARGIN, q.TOPO_LOCAL_Y1, q.TOPO_LOCAL_W
+        bx1, by1, bx2, by2 = q._add_chassis_box(shapes, inputs, nodes, chassis,
+                                                x, y, w)
+        # the addressed row's input carries the inline token
+        addr_inputs = [i for i in inputs.findall("input")
+                       if "Nodo 3" in (i.get("text") or "")]
+        self.assertEqual(len(addr_inputs), 1)
+        ip = addr_inputs[0]
+        ix, iy = float(ip.get("x")), float(ip.get("y"))
+        # font px estimate (Sans Serif 7pt): ~5 px/char advance, ~9 px tall
+        char_w, font_h = 5.0, 9.0
+        x_end = ix + char_w * len(ip.get("text"))
+        # full horizontal extent inside the box
+        self.assertGreaterEqual(ix, bx1)
+        self.assertLessEqual(x_end, bx2)
+        # vertical extent (baseline ± font height) inside the box
+        self.assertGreaterEqual(iy - font_h, by1)
+        self.assertLessEqual(iy + font_h, by2)
+
+    def test_hmi_box_detail_row_carries_address_when_present(self):
+        node = {"module": _addr_tmod("PV_PUPITRE", "RIO_LOCAL", "PanelView",
+                                     network_address="3"),
+                "role": "hmi", "protocol": None, "parent": "RIO_LOCAL"}
+        shapes = ET.Element("shapes")
+        inputs = ET.Element("inputs")
+        bx1, by1, bx2, by2 = q._add_hmi_box(shapes, inputs, node,
+                                            q.TOPO_X_MARGIN, q.TOPO_LOCAL_Y1,
+                                            q.TOPO_HMI_W)
+        joined = " | ".join(i.get("text") for i in inputs.findall("input"))
+        self.assertIn("Nodo 3", joined)
+        # the address-bearing input stays inside the HMI box bounds
+        ip = [i for i in inputs.findall("input")
+              if "Nodo 3" in (i.get("text") or "")][0]
+        ix, iy = float(ip.get("x")), float(ip.get("y"))
+        self.assertGreaterEqual(ix, bx1)
+        self.assertLessEqual(ix + 5.0 * len(ip.get("text")), bx2)
+        self.assertGreaterEqual(iy - 9.0, by1)
+        self.assertLessEqual(iy + 9.0, by2)
+
+    def test_hmi_box_omits_token_when_no_address(self):
+        node = {"module": _addr_tmod("PV_PUPITRE", "RIO_LOCAL", "PanelView"),
+                "role": "hmi", "protocol": None, "parent": "RIO_LOCAL"}
+        shapes = ET.Element("shapes")
+        inputs = ET.Element("inputs")
+        q._add_hmi_box(shapes, inputs, node, q.TOPO_X_MARGIN, q.TOPO_LOCAL_Y1,
+                       q.TOPO_HMI_W)
+        joined = " | ".join(i.get("text") for i in inputs.findall("input"))
+        self.assertNotIn("Nodo", joined)
+
+
 class LoadProjectTemplateGroundingTest(unittest.TestCase):
     """T3.4: the nested 'grounding' object merges gracefully — string sub-values
     override, missing/absent/malformed entries keep the documented defaults, and

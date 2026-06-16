@@ -1966,6 +1966,12 @@ def _topo_module_row_text(node: dict) -> str:
     if kind in ("DI", "DO", "AI", "AO"):
         parts.append(f"[{kind}]")
     parts.append(f"({tag})")
+    addr = getattr(node["module"], "network_address", None)
+    if addr:
+        # inline network-node address (Spanish "Nodo"); only when present
+        # in the source — never invented. Kept on the SAME row to preserve
+        # the one-text-row-per-module geometry.
+        parts.append(f"Nodo {addr}")
     return "  ".join(parts)
 
 
@@ -2062,8 +2068,13 @@ def _add_hmi_box(shapes, inputs, node, x, y, w):
     add_rect(shapes, x, y, x2, y2)
     name, catalog, tag = _topo_node_label(node)
     add_text(inputs, x + TOPO_ROW_X, y + 16, f"{name} ({tag})", FONT_HEADER)
-    if catalog:
-        add_text(inputs, x + TOPO_ROW_X, y + TOPO_HEADER_DY + 14, catalog,
+    addr = getattr(node["module"], "network_address", None)
+    detail = catalog
+    if addr:
+        # inline node address on the single detail row (never invented)
+        detail = f"{catalog}  Nodo {addr}" if catalog else f"Nodo {addr}"
+    if detail:
+        add_text(inputs, x + TOPO_ROW_X, y + TOPO_HEADER_DY + 14, detail,
                  FONT_SMALL)
     return x, y, x2, y2
 

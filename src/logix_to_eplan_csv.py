@@ -178,6 +178,7 @@ class Module:
     out_byte_base: int = 0
     an_in_word_base: int = 0
     an_out_word_base: int = 0
+    network_address: str | None = None  # node addr from the non-ICP port (ControlNet/Ethernet/...); raw string, never invented
 
 
 @dataclass
@@ -248,18 +249,27 @@ def load_l5x(path: str):
     for me in controller.findall("./Modules/Module"):
         name = me.get("Name", "")
         slot = None
+        network_address = None
         for pe in me.findall("./Ports/Port"):
-            if pe.get("Type") == "ICP":
+            ptype = pe.get("Type")
+            if ptype == "ICP":
                 try:
                     slot = int(pe.get("Address", ""))
                 except ValueError:
                     pass
-                break
+            elif network_address is None:
+                # first NON-ICP port carrying a node address (ControlNet node
+                # number, DeviceNet MAC, Ethernet IP...). Raw string, never
+                # coerced; absent/empty Address -> stays None (never invented).
+                addr = pe.get("Address")
+                if addr:
+                    network_address = addr
         mod = Module(
             name=name,
             catalog=me.get("CatalogNumber", ""),
             parent=me.get("ParentModule", ""),
             slot=slot,
+            network_address=network_address,
         )
         cls = classify_catalog(mod.catalog)
         if cls:
