@@ -3310,5 +3310,63 @@ class WaddingSpareFloorTest(unittest.TestCase):
         self.assertTrue(reserva_seen, "no RESERVA row reached a BOM summary folio")
 
 
+class BuildRockwellProjectTest(unittest.TestCase):
+    """Epic 1: the Rockwell builder yields a vendor-neutral PlcProject IR whose
+    fields match the legacy tuple path exactly (no behaviour change)."""
+
+    FIXTURE = _wadding_fixture()
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("WADDING_1.L5X fixture not present")
+        import plc_ir
+        self.plc_ir = plc_ir
+
+    def test_returns_plcproject_with_expected_counts(self):
+        proj = self.plc_ir.build_rockwell_project(str(self.FIXTURE))
+        self.assertIsInstance(proj, self.plc_ir.PlcProject)
+        self.assertEqual(proj.name, "WADDING_1")
+        self.assertEqual(proj.controller_name, "WADDING_1")  # neutral alias
+        self.assertEqual(proj.source_vendor, "rockwell")
+        # WADDING_1 floor: 15 modules in tree, 10 rack-assigned I/O cards,
+        # 106 drawn points pre-dedup is the raw collect count (186), but the
+        # builder carries the raw points list — assert against the tuple path.
+        self.assertEqual(len(proj.modules), 15)
+        # 11 rack-assigned I/O cards (one has no mapped tags, so only 10 get a
+        # drawing folio); assert the rack-assignment count here.
+        self.assertEqual(len(proj.io_mods), 11)
+        self.assertGreater(len(proj.points), 0)
+        self.assertGreater(len(proj.skipped), 0)
+
+    def test_ir_fields_match_legacy_tuple_path(self):
+        import logix_to_eplan_csv as l2e
+        controller, modules, ctrl_tags, program_tags = l2e.load_l5x(
+            str(self.FIXTURE))
+        io_mods = l2e.assign_racks_and_addresses(modules)
+        points, skipped = l2e.collect_points(modules, ctrl_tags, program_tags)
+
+        proj = self.plc_ir.build_rockwell_project(str(self.FIXTURE))
+        self.assertEqual(proj.name, controller)
+        self.assertEqual(set(proj.modules), set(modules))
+        self.assertEqual(len(proj.io_mods), len(io_mods))
+        self.assertEqual([m.name for m in proj.io_mods],
+                         [m.name for m in io_mods])
+        self.assertEqual(len(proj.points), len(points))
+        self.assertEqual([(p.tag, p.module.name, p.direction, p.index, p.analog)
+                          for p in proj.points],
+                         [(p.tag, p.module.name, p.direction, p.index, p.analog)
+                          for p in points])
+        self.assertEqual(len(proj.skipped), len(skipped))
+        self.assertEqual(set(proj.controller_tags), set(ctrl_tags))
+        self.assertEqual(set(proj.program_tags), set(program_tags))
+
+    def test_include_hmi_flag_forwarded(self):
+        base = self.plc_ir.build_rockwell_project(str(self.FIXTURE))
+        hmi = self.plc_ir.build_rockwell_project(str(self.FIXTURE),
+                                                 include_hmi=True)
+        # including HMI points can only add points / remove skips, never fewer
+        self.assertGreaterEqual(len(hmi.points), len(base.points))
+
+
 if __name__ == "__main__":
     unittest.main()

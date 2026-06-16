@@ -35,6 +35,7 @@ from pathlib import Path
 from xml.dom import minidom
 
 import logix_to_eplan_csv as l2e
+import plc_ir
 
 MODULE_DB_DIR = Path(__file__).resolve().parent / "module_db"
 SYMBOL_DB_DIR = Path(__file__).resolve().parent / "symbol_db"
@@ -2319,10 +2320,17 @@ def main(argv=None):
 
     out_path = args.output or re.sub(r"\.l5x$", "", args.l5x, flags=re.I) + ".qet"
 
-    controller, modules, ctrl_tags, program_tags = l2e.load_l5x(args.l5x)
-    io_mods = l2e.assign_racks_and_addresses(modules)
-    points, skipped = l2e.collect_points(modules, ctrl_tags, program_tags,
-                                         include_hmi=args.include_hmi)
+    # Build the vendor-neutral PlcProject IR via the Rockwell builder, then read
+    # the data off the IR (instead of a loose tuple). A future Siemens builder
+    # mirrors this call and yields the same PlcProject shape; the rendering logic
+    # below is unchanged — only how it OBTAINS the data.
+    project_ir = plc_ir.build_rockwell_project(args.l5x,
+                                               include_hmi=args.include_hmi)
+    controller = project_ir.name
+    modules = project_ir.modules
+    io_mods = project_ir.io_mods
+    points = project_ir.points
+    skipped = project_ir.skipped
 
     # group points per module, first tag wins on duplicates
     per_module: dict[str, list] = {}
