@@ -81,3 +81,30 @@ def build_rockwell_project(path: str, include_hmi: bool = False) -> PlcProject:
         controller_tags=ctrl_tags,
         program_tags=program_tags,
     )
+
+
+def build_tia_project(io_channels_path: str, tags_xlsx_path: str | None = None) -> PlcProject:
+    """Siemens TIA front-end: build a `PlcProject` from a TIA Portal export.
+
+    Mirrors `build_rockwell_project` but reads an `<project>_IO_Channels.xml`
+    (the real absolute-address point source) and, optionally, a `PLCTags*.xlsx`
+    tag table for descriptions/comments (joined on Tag == xlsx.Name). Returns
+    the SAME `PlcProject` shape with `source_vendor="siemens"`. The heavy parsing
+    lives in tia_front_end so this module stays the single vendor seam.
+    """
+    import tia_front_end as tia
+
+    tag_table = tia.load_tag_table(tags_xlsx_path) if tags_xlsx_path else {}
+    station_name, modules, io_mods, points, skipped = tia.build_modules_and_points(
+        io_channels_path, tag_table
+    )
+    return PlcProject(
+        name=station_name,
+        source_vendor="siemens",
+        modules=modules,
+        io_mods=io_mods,
+        points=points,
+        skipped=skipped,
+        controller_tags={},
+        program_tags={},
+    )
