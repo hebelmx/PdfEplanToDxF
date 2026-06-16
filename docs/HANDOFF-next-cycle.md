@@ -1,7 +1,7 @@
-# Handoff — Phase 2 in progress (E2.1 topology DONE → next: network addresses → IR → S7-300)
+# Handoff — Phase 2 (network addresses + IR refactor DONE → next: TIA S7-1200/1500 parser)
 
 > Self-contained handoff so a **fresh agent in a new session** can continue with no prior
-> context. Written 2026-06-15. Supersedes the post-T3.4 handoff. The product MVP (Phase 1)
+> context. Updated 2026-06-16 (supersedes the 2026-06-15 version). The product MVP (Phase 1)
 > is shipped; this is **Phase 2** (multi-vendor + LLM-aided diagrams), driven by
 > `docs/planning/{brief,prd,epics}.md`.
 
@@ -21,17 +21,27 @@
   sample → **strong GO** (see memory `siemens-import-findings`).
 - **`main` @ `18519cc` == `origin/main`.** Branch `feat/e2-network-topology` is ff-merged
   (safe to delete).
-- **DONE 2026-06-16:** network addresses on the topology folio (inline `Nodo N` from the L5X
-  non-ICP port `Address`; floor held; 256 tests) — `feat/e2-network-addresses` @ `0c6f80c`,
-  pushed, **awaiting human merge-to-main gate.**
+- **DONE 2026-06-16 (both MERGED to `main` @ `ab51e04`, pushed):**
+  1. **Network addresses on the topology folio** — inline `Nodo N` from the L5X non-ICP port
+     `Address` (ControlNet node #); never-invent (blank for Ethernet/I-O cards); Abel
+     eyeball-approved. `0c6f80c`.
+  2. **Epic 1 — vendor-neutral PlcProject IR** (`src/plc_ir.py`): `PlcProject` dataclass +
+     `build_rockwell_project()` seam; `logix_to_qet.main()` consumes the IR. Rockwell output
+     **proven byte-equivalent** (UUID-normalized diff vs on-main baseline empty). `ab51e04`.
+- Floor unchanged throughout: **10 folios / 106 / 75 / 0**, 62 RESERVA, 33 folios. Suite now
+  **259 tests** (was 247).
 - **TIA fixtures LANDED 2026-06-16** (`Fixtures/Siemens/TiaPortal/`, project IMV1_QRO001):
   `.aml` CAx hardware + `IO_Channels.xml` (pre-joined addr↔tag) + `PLCTags*.xlsx` + 63MB PDF.
-  Characterized — see memory `tia-import-findings`. **Decision: TIA is the FIRST Siemens
-  target** (cleaner than S7-300), after the IR refactor.
-- **NEXT, in order:** (1) **Epic 1 — the vendor-neutral IR refactor** (Abel chose IR-first;
-  prerequisite for all parsers); (2) **TIA S7-1200/1500 parser** (samples in hand, TIA-first);
-  (3) **S7-300 parser** (spike GO, fixture in hand). ⚠️ TIA `.aml` has only the S7-1200 +
-  8×ET200SP — the S7-1500 hardware export is missing; confirm with Abel in the TIA cycle.
+  Characterized — see memory `tia-import-findings`. **Decision: TIA is the FIRST Siemens target**
+  (cleaner than S7-300).
+- **NEXT, in order:** (1) **TIA S7-1200/1500 parser** — build a `build_tia_project()` Siemens
+  front-end mirroring `build_rockwell_project` (same `PlcProject` shape; the renderer needs no
+  vendor branch). Sources per memory `tia-import-findings`. (2) **S7-300 parser** (spike GO).
+  ⚠️ **OPEN QUESTION for the TIA cycle (Abel to resolve):** the CAx `.aml` contains ONLY the
+  **S7-1200** (CPU 1214C + 8×ET200SP); the **S7-1500 hardware export is absent** — its I/O lives
+  in `IO_Channels.xml` + `PLCTagsS71500.xlsx` (e.g. `%I10.0 → fctr_ir2coolpdt` appears in both
+  the IO map and the 1500 tag table) but no AML for its racks. Abel paused the TIA cycle (may
+  re-export the 1500 CAx). Build the 1200 path first or wait for the 1500 export — confirm.
 
 ## ⚠️ Fixtures were REORGANIZED by vendor (2026-06-14) — paths changed
 
@@ -145,27 +155,36 @@ shape primitives only, empty `<elements>`/`<conductors>`).
   `docs/planning/{brief,prd,epics}` when next on a clean main.
 
 ## Git state / how to resume
-- **`main` @ `18519cc` == `origin/main`** — Phase-1 + planning chain + fixture-test-fix +
-  E2.1 topology, all pushed. `feat/e2-network-topology` is ff-merged (deletable).
-- Memory to read: `siemens-import-findings`, `never-overwrite-working-qet` (updated paths),
+- **`main` @ `ab51e04` == `origin/main`** — Phase-1 + planning chain + E2.1 topology +
+  network addresses (`0c6f80c`) + Epic-1 IR (`ab51e04`), all pushed. Merged branches
+  `feat/e2-network-addresses` + `feat/e1-plc-ir` are ff-merged (deletable).
+- IR seam: `src/plc_ir.py` `PlcProject` + `build_rockwell_project()`. A Siemens front-end adds
+  `build_tia_project()` returning the SAME `PlcProject` shape — the renderer needs no change.
+- Refactor gate (reuse for any future "no output change" work): generate the `.qet`, run
+  `sed -E 's/uuid="\{[0-9a-fA-F-]+\}"/uuid="{X}"/g'` on it, diff vs a baseline captured the
+  same way from `main` — must be empty (UUIDs are the only nondeterminism).
+- Memory to read: `tia-import-findings`, `siemens-import-findings`, `never-overwrite-working-qet`,
   `qet-generator-status`, `bmad-orchestration`. Plan: `docs/planning/`.
 
 ## Kickoff prompt — paste into the new session
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py), Phase 2. main @ 18519cc ==
-origin/main; 247 tests; floor 10 drawing folios/106/75/0; WADDING_1 emits 33 folios incl.
-the new "Red de comunicaciones" topology folio (order 2). Phase-1 done; Phase-2 plan in
-docs/planning/{brief,prd,epics}.md.
+Continue the PLC → mini-EPLAN product (src/logix_to_qet.py), Phase 2. main @ ab51e04 ==
+origin/main; 259 tests; floor 10 drawing folios/106/75/0; WADDING_1 emits 33 folios incl.
+the "Red de comunicaciones" topology folio (order 2, now with node addresses). Phase-1 done;
+the vendor-neutral PlcProject IR (src/plc_ir.py) is in — a Siemens front-end just adds a
+build_tia_project() returning the same PlcProject shape.
 
-READ FIRST: docs/HANDOFF-next-cycle.md (this file — fixture reorg to Fixtures/Rockwell,
-gate command, code map, HARD RULES), docs/planning/* , and memory siemens-import-findings +
+READ FIRST: docs/HANDOFF-next-cycle.md (this file — fixture layout, gate command, code map,
+HARD RULES), docs/planning/* , and memory tia-import-findings + siemens-import-findings +
 never-overwrite-working-qet.
 
-NEXT IN ORDER: (1) add NETWORK ADDRESSES to the topology folio — first confirm the L5X
-carries them (Module Ports/Port Address?), extend l2e/IR if needed, never invent (blank if
-absent); visual folio → QET eyeball. (2) Epic 1: vendor-neutral PlcProject IR refactor,
-byte-equivalent Rockwell output, floor holds (Abel chose IR-first). (3) S7-300 parser against
-Fixtures/Siemens/S7300/ (.cfg+.asc join, spike is GO — see the memory).
+NEXT: build the TIA S7-1200/1500 front-end (build_tia_project → PlcProject) against
+Fixtures/Siemens/TiaPortal/ (.aml CAx hardware + IO_Channels.xml pre-joined addr↔tag +
+PLCTags*.xlsx; schema in memory tia-import-findings). ⚠️ FIRST confirm with Abel the
+S7-1500 hardware: the .aml has only the S7-1200 + 8×ET200SP — the 1500's racks aren't in the
+CAx export (its I/O is in IO_Channels.xml + PLCTagsS71500.xlsx). Then S7-300 (spike GO).
+Never invent; stdlib only; never git add Fixtures/; one commit per item, feature branch →
+human merge gate.
 
 HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet (use a scratch path); never invent;
 stdlib only; never git add Fixtures/ (incl. Siemens *.asc/*.cfg/*.aml/*.pdf); verify every
