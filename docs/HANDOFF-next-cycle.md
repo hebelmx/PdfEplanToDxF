@@ -21,9 +21,17 @@
   sample → **strong GO** (see memory `siemens-import-findings`).
 - **`main` @ `18519cc` == `origin/main`.** Branch `feat/e2-network-topology` is ff-merged
   (safe to delete).
-- **NEXT, in order:** (1) **add network addresses to the topology folio**; (2) **Epic 1 —
-  the vendor-neutral IR refactor** (Abel chose IR-first); (3) **S7-300 parser** (spike is GO,
-  fixture in hand). Then E4 (TIA 1200/1500) when its exports land.
+- **DONE 2026-06-16:** network addresses on the topology folio (inline `Nodo N` from the L5X
+  non-ICP port `Address`; floor held; 256 tests) — `feat/e2-network-addresses` @ `0c6f80c`,
+  pushed, **awaiting human merge-to-main gate.**
+- **TIA fixtures LANDED 2026-06-16** (`Fixtures/Siemens/TiaPortal/`, project IMV1_QRO001):
+  `.aml` CAx hardware + `IO_Channels.xml` (pre-joined addr↔tag) + `PLCTags*.xlsx` + 63MB PDF.
+  Characterized — see memory `tia-import-findings`. **Decision: TIA is the FIRST Siemens
+  target** (cleaner than S7-300), after the IR refactor.
+- **NEXT, in order:** (1) **Epic 1 — the vendor-neutral IR refactor** (Abel chose IR-first;
+  prerequisite for all parsers); (2) **TIA S7-1200/1500 parser** (samples in hand, TIA-first);
+  (3) **S7-300 parser** (spike GO, fixture in hand). ⚠️ TIA `.aml` has only the S7-1200 +
+  8×ET200SP — the S7-1500 hardware export is missing; confirm with Abel in the TIA cycle.
 
 ## ⚠️ Fixtures were REORGANIZED by vendor (2026-06-14) — paths changed
 
@@ -92,7 +100,9 @@ Tag-table XML is the clean tag source. Hardware via **CAx/AML export** — which
 user in the Windows "Siemens TIA Openness" group (he's granting it; this is a permission on
 *his* manual export, NOT a runtime dep — our parser just reads the `.aml` with stdlib). If
 CAx works, 1200/1500 hardware is clean like the `.cfg`; else a print-report PDF is the
-human-read reference for a curated Siemens `module_db`. Samples not yet delivered.
+human-read reference for a curated Siemens `module_db`. **Samples LANDED 2026-06-16 and the
+CAx `.aml` parses cleanly (stdlib xml.etree) — see memory `tia-import-findings`; this is now
+the FIRST Siemens target, ahead of S7-300.**
 
 ## QET eyeball workflow (how Abel reviews visual folios)
 1. Render to a SCRATCH path: `python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_eyeball.qet`
