@@ -41,6 +41,11 @@ class PlcProject:
       skipped         list of (tag, addr, reason) tuples not bound to a point
       controller_tags controller-scope tag dict (collectors may still need it)
       program_tags    program-scope tag dicts keyed by program name
+      network_nodes   list[(ip, name, type, subnet_mask, is_controller)]
+                      PROFINET subnet nodes for the network/topology folio;
+                      empty unless a front-end populates it (Siemens fills it
+                      from the CAx/AML — subnet_mask + is_controller are REAL
+                      .aml provenance, never invented).
     """
 
     name: str
@@ -51,6 +56,7 @@ class PlcProject:
     skipped: list = field(default_factory=list)
     controller_tags: dict = field(default_factory=dict)
     program_tags: dict = field(default_factory=dict)
+    network_nodes: list = field(default_factory=list)
 
     # convenience alias: the renderer/old tuple called this `controller`
     @property
@@ -80,4 +86,46 @@ def build_rockwell_project(path: str, include_hmi: bool = False) -> PlcProject:
         skipped=skipped,
         controller_tags=ctrl_tags,
         program_tags=program_tags,
+    )
+
+
+def build_tia_project(
+    io_channels_path: str,
+    tags_xlsx_path: str | None = None,
+    aml_path: str | None = None,
+) -> PlcProject:
+    """Siemens TIA front-end: build a `PlcProject` from a TIA Portal export.
+
+    Mirrors `build_rockwell_project` but reads an `<project>_IO_Channels.xml`
+    (the real absolute-address point source) and, optionally, a `PLCTags*.xlsx`
+    tag table for descriptions/comments (joined on Tag == xlsx.Name) and a CAx
+    `<project>.aml` hardware export (joined on module name) that fills each
+    `Module.catalog` (Siemens order number) and `Module.network_address`
+    (PROFINET). Returns the SAME `PlcProject` shape with `source_vendor="siemens"`.
+    The heavy parsing lives in tia_front_end so this module stays the single
+    vendor seam. Missing optional inputs degrade gracefully — NEVER invented.
+    """
+    import tia_front_end as tia
+
+    tag_table = tia.load_tag_table(tags_xlsx_path) if tags_xlsx_path else {}
+    station_name, modules, io_mods, points, skipped = tia.build_modules_and_points(
+        io_channels_path, tag_table, aml_path
+    )
+    # PROFINET subnet nodes for the network/topology folio. Populated ONLY when a
+    # CAx/AML is supplied (the IO_Channels.xml carries no addresses); empty
+    # otherwise so the folio is gracefully omitted — NEVER invented.
+    network_nodes: list = []
+    if aml_path:
+        import tia_aml
+        network_nodes = tia_aml.profinet_nodes(aml_path)
+    return PlcProject(
+        name=station_name,
+        source_vendor="siemens",
+        modules=modules,
+        io_mods=io_mods,
+        points=points,
+        skipped=skipped,
+        controller_tags={},
+        program_tags={},
+        network_nodes=network_nodes,
     )

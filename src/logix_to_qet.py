@@ -46,7 +46,15 @@ ORIENT_CODE = {"n": 0, "e": 1, "s": 2, "w": 3}
 # semantic symbol matching (digital points only)
 SYM_FUZZ = 0.82        # min difflib ratio for a fuzzy word hit
 SYM_MIN_SCORE = 0.95   # below this the point keeps the generic terminal
-SYM_X_OFF = 290        # device symbol center, right of the tag/function texts
+# EYE-4 (2026-06-17, Abel desktop eyeball): the strip + device symbol were pushed
+# RIGHT by +70 (SYM_X_OFF 290->360, STRIP_X_OFF 235->305) to WIDEN the row-text
+# lane so long AB tag names (e.g. FROM_ABB_WE_SUPPLY_AIR_FAN_RUN_CONFIRM) stop
+# colliding with the bornera (X1:n) column + symbol. +70 is the safe maximum: a
+# device symbol ("simple", w40/h60, hotspot 28/31) rotated 90° reaches anchor+31
+# horizontally, so the LEFT column symbol right edge (COL_X[0]+360+31 = 501) still
+# clears the RIGHT column box-left (COL_X[1]-BOX_LEFT = 530) and the RIGHT column
+# symbol (COL_X[1]+360+31 = 981) stays inside the 1010 frame — both ~29 px margin.
+SYM_X_OFF = 360        # device symbol center, right of the tag/function texts
 
 
 def _strip_accents(s: str) -> str:
@@ -322,19 +330,26 @@ PIN_PLACEHOLDER = "__"
 
 # Inline terminal-strip (bornero) geometry. Each field conductor is broken by a
 # numbered strip terminal that sits in the clean slot BETWEEN the row text band
-# (which runs ~x+20…x+200) and the device symbol (x+SYM_X_OFF = x+290). The
-# device's WEST pin is NOT a fixed x+280: it varies per symbol — the closest one
-# in the symbol DB is the photocell at x+260, the rest sit at ≥ x+269. The strip
-# terminal centre is at x+STRIP_X_OFF; its borne_2 pin extent spans
-# x+STRIP_X_OFF … x+STRIP_X_OFF+10 (east pin) and y ± 10. STRIP_X_OFF=235 keeps
-# that full extent (…+245) clear of the row text (<x+200, margin 35), clear of
-# the CLOSEST device west pin (x+260, margin 15 — not the optimistic x+280),
-# well clear of the card box (right edge x+10), and on-sheet (smallest column
-# x=110 -> 345 ≥ 0). Every card's strip designation is "-X1" (resets per card);
-# the terminal number is the I/O channel = pt.index (0-based), so the strip reads
-# 1:1 against the drawn points (-X1:0 … -X1:15 on a single-column card).
-STRIP_X_OFF = 235
+# and the device symbol (x+SYM_X_OFF). EYE-4 widened the row-text lane (+70): the
+# strip centre moved from x+235 to x+305 so the band can run to ~x+285 (the
+# strip's borne_2 west extent) before the bornera, instead of the old ~x+200 that
+# long AB tags overran. The strip's pin extent spans x+STRIP_X_OFF … +10 (east)
+# and y ± 10; at 305 that east extent (…+315) stays clear of the device symbol
+# (west pin ≥ x+SYM_X_OFF-… ), well clear of the card box (right edge x+10), and
+# on-sheet for both columns (see the SYM_X_OFF note for the right-frame proof).
+# Every card's strip designation is "-X1" (resets per card); the terminal number
+# is the I/O channel = pt.index (0-based), so the strip reads 1:1 against the
+# drawn points (-X1:0 … -X1:15 on a single-column card).
+STRIP_X_OFF = 305
 STRIP_DESIGNATION = "-X1"
+
+# Split-card sibling suffix: a physical I/O module carrying BOTH outputs and
+# inputs is split in the IR into two `Module`s whose names carry a trailing
+# ` [KIND]` suffix ("F-DQ1500 [DO]" / "F-DQ1500 [DI]"). Stripping it recovers the
+# shared physical name (mirrors tia_front_end._physical_name's grammar). Used by
+# build_split_card_folio / _is_split_sibling_pair to merge the two halves onto
+# one folio.
+_SPLIT_SUFFIX_RE = re.compile(r"\s*\[(?:DI|DO|AI|AO)\]\s*$")
 
 # Per-card power table (DA.8 review fix): the card's supply/common potentials are
 # listed as a compact boxed table in the clear TOP-RIGHT corner of the sheet,
@@ -887,7 +902,8 @@ def build_folio(project: ET.Element, order: int, mod, points,
     (the BOM rows are a pure side-channel; a card's own elements, including the
     inline power terminals drawn from its module_db power block, are unaffected
     by the accumulator)."""
-    title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
+    slot_txt = "" if mod.slot is None else str(mod.slot)
+    title = f"R{mod.rack}.S{slot_txt} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -909,7 +925,7 @@ def build_folio(project: ET.Element, order: int, mod, points,
 
     db = load_module_db(mod.catalog)
     header = (f"{mod.name}   |   {mod.catalog}   |   Rack {mod.rack}"
-              f"  Slot {mod.slot}   |   {mod.kind}{mod.points}")
+              f"  Slot {slot_txt}   |   {mod.kind}{mod.points}")
     # Header + sub-header sit at the top-left of the sheet. (The per-card power
     # potentials now render as a boxed table in the top-RIGHT corner — see
     # add_power_terminals — so nothing competes with the sub-header's lane.)
@@ -1027,16 +1043,19 @@ def build_folio(project: ET.Element, order: int, mod, points,
             if bom_rows is not None:
                 bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
 
-    # T3.2 — SPARE / RESERVA terminals: every empty channel slot in the card's
+    # CHAN — SPARE / RESERVA channels: every empty channel slot in the card's
     # full-capacity box (a channel in range(mod.points) with no mapped point) is
-    # drawn as a plain reserve terminal so the physical strip is complete for the
-    # panel builder. A spare is NEVER a device or a tag: it adds one borne_2
-    # terminal (reused via add_terminal_element) in the SAME strip slot geometry
-    # as the inline strip terminal above, the Spanish word RESERVA + the channel
-    # number, and a (spare) BOM row — but NO point/pin texts, NO device symbol,
-    # and NO conductor (a terminal with no conductor is valid; spares carry no
-    # field wire). Spares are counted SEPARATELY from the matched/mapped floor:
-    # they are never added to per_module / the points lists / sym_counts.
+    # drawn as a FULL box I/O point (a left-side I/O stub) so a DI16/DQ16 shows
+    # ALL its channels, the unused ones as RESERVA stubs. Mirrors the mapped
+    # generic-point path above — card terminal inside the box, a point name +
+    # placeholder pin, the inline strip terminal, and a conductor from the card
+    # terminal to the strip — but with NO invented identity: pin '__', blank
+    # address, blank description, a GENERIC terminal (never a device symbol),
+    # function 'RESERVA'. The point name is the card-direction generic stub
+    # (IN-n / OUT-n), the same default the mapped path uses when module_db has no
+    # name. No address means the card->strip conductor carries no wire number
+    # (never invented). Spares are counted SEPARATELY from the matched/mapped
+    # floor: they are never added to per_module / the points lists / sym_counts.
     mapped = {pt.index for pt in points}
     direction = "I" if mod.kind in ("DI", "AI") else "O"
     analog = mod.kind in ("AI", "AO")
@@ -1046,14 +1065,28 @@ def build_folio(project: ET.Element, order: int, mod, points,
         row = (cp - 1) % POINTS_PER_COL
         x = COL_X[min(col, len(COL_X) - 1)]
         y = ROW_Y0 + row * ROW_DY
+        # left-side I/O stub inside the card box: generic point name per the
+        # card direction (IN-n / OUT-n) + placeholder pin '__'. No address and no
+        # description (never invented) — only the RESERVA marker in the row text.
+        point_name = f"{'IN' if direction == 'I' else 'OUT'}-{index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {PIN_PLACEHOLDER}",
+                 FONT_SMALL)
+        # card-side I/O terminal (the box I/O point), reuses borne_2 (no new
+        # element type); east pin (index 2) = field side. ids stay diagram-unique
+        # via the shared `ids` counter.
+        term_ids = add_terminal_element(elements, x, y, str(cp), "RESERVA", ids)
+        add_text(inputs, x + 20, y, "RESERVA", FONT_SMALL)
         strip_label = strip_terminal_label(index)
-        # the reserve terminal occupies the SAME strip slot as a mapped point's
-        # inline strip terminal; reuses borne_2 (no new element type); ids stay
-        # diagram-unique via the shared `ids` counter. function = 'RESERVA'.
-        add_terminal_element(elements, x + STRIP_X_OFF, y, strip_label, "RESERVA",
-                             ids)
+        # the reserve strip terminal occupies the SAME strip slot as a mapped
+        # point's inline strip terminal; reuses borne_2; function = 'RESERVA'.
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, "RESERVA", ids)
         add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
-        add_text(inputs, x + STRIP_X_OFF + 14, y, "RESERVA", FONT_SMALL)
+        # field conductor: card terminal east pin -> strip north pin, mirroring
+        # the generic mapped path. A spare has no address, so no wire number is
+        # carried (never invented). Both pin ids resolve to terminals just added.
+        add_conductor(conductors, term_ids[2], strip_ids[0], "")
         if spare_counter is not None:
             spare_counter[mod.name] = spare_counter.get(mod.name, 0) + 1
         if bom_rows is not None:
@@ -1063,6 +1096,201 @@ def build_folio(project: ET.Element, order: int, mod, points,
             address = l2e.eplan_address(mod, direction, index, analog)
             bom_rows.append(spare_bom_row(order, channel=index, address=address))
 
+    return diagram
+
+
+def _is_split_sibling_pair(a, b) -> bool:
+    """True iff modules `a` and `b` are the two halves of ONE physical I/O card
+    that the IR split into a `[DO]`/`[DI]` (etc.) pair.
+
+    A split physical module (e.g. a Siemens F-DQ1500 carrying both outputs and
+    inputs) is split in the IR into two `Module` objects whose names share the
+    SAME physical name once the trailing ` [KIND]` suffix is stripped, and which
+    share the SAME `parent` (rack), `slot`, and `catalog`. Two unrelated modules
+    (different physical name / parent / slot / catalog) are NOT a pair. The suffix
+    stripper is shared with the IR (tia_front_end._physical_name) via the same
+    `[KIND]` grammar; here we strip inline so logix_to_qet stays import-free of
+    the front end. NEVER invents: if either name has no split suffix, or any of
+    physical-name / parent / slot / catalog differ, the pair is rejected."""
+    name_a = _SPLIT_SUFFIX_RE.sub("", a.name).strip()
+    name_b = _SPLIT_SUFFIX_RE.sub("", b.name).strip()
+    # both names must actually carry a split-kind suffix (so the stripped name is
+    # SHORTER than the raw name) — a plain module that merely happens to share a
+    # parent/slot is not a split half.
+    if name_a == a.name or name_b == b.name:
+        return False
+    return (name_a == name_b
+            and a.parent == b.parent
+            and a.slot == b.slot
+            and a.catalog == b.catalog)
+
+
+def _draw_card_half(diagram_parts, x: int, order: int, mod, points,
+                    symbols, sym_counts, designations, wire_scheme,
+                    wire_counters, ids, bom_rows, spare_counter):
+    """Draw ONE single-column I/O card half at column-x `x`, mirroring
+    build_folio's single-column geometry VERBATIM (card box, header, sub-header,
+    per-point card terminal / texts / inline strip terminal / device-or-generic
+    conductor, and the spare/RESERVA loop). Shares one `ids` terminal counter and
+    one set of diagram sub-elements with the other half, so terminal ids stay
+    unique per merged diagram. Appends this half's BOM rows (module + per drawn
+    point + spares) to `bom_rows`. NEVER invents (pin TBD->'__', blank address ->
+    no wire number, unmatched/analog point -> generic terminal, spares counted
+    separately)."""
+    elements, conductors, shapes, inputs = diagram_parts
+    slot_txt = "" if mod.slot is None else str(mod.slot)
+    db = load_module_db(mod.catalog)
+    wiring = db["_wiring_by_point"] if db else {}
+
+    # (module) BOM row for this half — same data build_folio records per card.
+    if bom_rows is not None:
+        bom_rows.append(module_bom_row(
+            order, catalog=mod.catalog,
+            vendor=(db.get("vendor") or "") if db else "",
+            description=(db.get("description") or "") if db else "",
+            rack=str(mod.rack),
+            slot="" if mod.slot is None else str(mod.slot)))
+
+    # single-column card box + header (this half is small, ≤16 channels). Header
+    # label is "-{mod.name}" so the IR's "[DO]"/"[DI]" stays visible per half.
+    pts_in_col = min(POINTS_PER_COL, mod.points)
+    y1 = ROW_Y0 - 20
+    y2 = ROW_Y0 + (max(pts_in_col, 1) - 1) * ROW_DY + 20
+    add_rect(shapes, x - BOX_LEFT, y1, x + BOX_RIGHT, y2)
+    add_text(inputs, x - BOX_LEFT, y1 - 24, f"-{mod.name}", FONT_TEXT)
+
+    for pt in points:
+        cp = pt.index + 1
+        row = (cp - 1) % POINTS_PER_COL
+        y = ROW_Y0 + row * ROW_DY
+        function = pt.description or l2e.humanize(pt.tag)
+        address = l2e.eplan_address(pt.module, pt.direction, pt.index, pt.analog)
+        w = wiring.get(pt.index, {})
+        pin = w.get("pin") or PIN_PLACEHOLDER
+        if pin.upper() == "TBD":
+            pin = PIN_PLACEHOLDER
+        point_name = w.get("name") or f"{'IN' if pt.direction == 'I' else 'OUT'}-{pt.index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {pin}", FONT_SMALL)
+        term_ids = add_terminal_element(elements, x, y, str(cp), function, ids)
+        add_text(inputs, x + 20, y - 8,
+                 f"{cp:>2}  {address:<7} {pt.tag}")
+        add_text(inputs, x + 20, y + 4, function)
+        strip_label = strip_terminal_label(pt.index)
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, function, ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
+        sym = None if pt.analog else match_symbol(symbols, pt.tag,
+                                                  pt.description, pt.direction)
+        if sym:
+            designation = next_designation(sym, designations, order) or pt.tag
+            pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
+                                               designation, ids)
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
+            add_conductor(conductors, strip_ids[2], pin_ids[west], "")
+            sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
+            if bom_rows is not None:
+                bom_rows.append(device_bom_row(
+                    order, designation=designation, type_id=sym["id"],
+                    description=sym.get("description") or "",
+                    tag=pt.tag, address=address))
+        else:
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
+            if bom_rows is not None:
+                bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
+
+    # spare / RESERVA loop — every unused channel in this half's capacity.
+    mapped = {pt.index for pt in points}
+    direction = "I" if mod.kind in ("DI", "AI") else "O"
+    analog = mod.kind in ("AI", "AO")
+    for index in sorted(set(range(mod.points)) - mapped):
+        cp = index + 1
+        row = (cp - 1) % POINTS_PER_COL
+        y = ROW_Y0 + row * ROW_DY
+        point_name = f"{'IN' if direction == 'I' else 'OUT'}-{index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {PIN_PLACEHOLDER}",
+                 FONT_SMALL)
+        term_ids = add_terminal_element(elements, x, y, str(cp), "RESERVA", ids)
+        add_text(inputs, x + 20, y, "RESERVA", FONT_SMALL)
+        strip_label = strip_terminal_label(index)
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, "RESERVA", ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
+        add_conductor(conductors, term_ids[2], strip_ids[0], "")
+        if spare_counter is not None:
+            spare_counter[mod.name] = spare_counter.get(mod.name, 0) + 1
+        if bom_rows is not None:
+            address = l2e.eplan_address(mod, direction, index, analog)
+            bom_rows.append(spare_bom_row(order, channel=index, address=address))
+
+
+def build_split_card_folio(project: ET.Element, order: int, left, left_pts,
+                           right, right_pts, symbols: list[dict],
+                           sym_counts: dict, designations: dict,
+                           wire_scheme: str = "address",
+                           wire_counters: dict | None = None,
+                           bom_rows: list | None = None,
+                           spare_counter: dict | None = None):
+    """Render BOTH halves of ONE physical I/O card on ONE folio, side-by-side:
+    the first half (`left`, e.g. the `[DO]` half) as the LEFT card box at
+    COL_X[0], the second half (`right`, e.g. `[DI]`) as the RIGHT card box at
+    COL_X[1]. Each half is small (≤16 channels) so each is a single column drawn
+    EXACTLY like build_folio's single-column card. A single `ids` counter is
+    shared across both halves so terminal ids stay diagram-unique. BOM rows for
+    both halves are appended left-then-right in point order. The two halves share
+    the same physical name / parent / slot / catalog (verified by the caller via
+    _is_split_sibling_pair); the title states it is one physical card with both
+    halves. NEVER invents: the title is derived from real data only."""
+    phys = _SPLIT_SUFFIX_RE.sub("", left.name).strip()
+    rack = left.rack
+    slot_txt = "" if left.slot is None else str(left.slot)
+    catalog = left.catalog
+    cat_txt = f" ({catalog})" if catalog else ""
+    # the half-kind marker is DERIVED from the two halves' real kinds (e.g.
+    # 'DO+DI', or 'AI+AO' for an analog split) — never a hard-coded label that
+    # could mislabel a non-DO/DI pair.
+    kinds = "+".join(k for k in (left.kind, right.kind) if k)
+    kind_txt = f" [{kinds}]" if kinds else ""
+    title = f"R{rack}.S{slot_txt} {phys}{cat_txt}{kind_txt}"
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": title,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": "660", "displaycols": "true", "displayrows": "true",
+        "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    if wire_counters is None:
+        wire_counters = {}
+    elements = ET.SubElement(diagram, "elements")
+    conductors = ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+    ids = itertools.count(1)  # ONE counter shared across both halves
+
+    # sheet header + sub-header for the merged physical card (top-left lane).
+    db = load_module_db(catalog)
+    header = (f"{phys}   |   {catalog}   |   Rack {rack}"
+              f"  Slot {slot_txt}   |   [DO+DI]")
+    add_text(inputs, 40, 20, header, FONT_HEADER)
+    if db:
+        sub = " — ".join(s for s in (db.get("vendor"), db.get("description"),
+                                     db.get("rtb")) if s)
+        add_text(inputs, 40, 32, sub, FONT_SMALL)
+
+    parts = (elements, conductors, shapes, inputs)
+    _draw_card_half(parts, COL_X[0], order, left, left_pts, symbols,
+                    sym_counts, designations, wire_scheme, wire_counters,
+                    ids, bom_rows, spare_counter)
+    _draw_card_half(parts, COL_X[1], order, right, right_pts, symbols,
+                    sym_counts, designations, wire_scheme, wire_counters,
+                    ids, bom_rows, spare_counter)
     return diagram
 
 
@@ -1605,8 +1833,9 @@ def build_bornero_folios(project: ET.Element, start_order: int,
     appended."""
     n = 0
     for mod, pts in cards or []:
-        if not pts:
-            continue
+        # CHAN: every drawn card gets a bornero — including all-spare cards (an
+        # empty `pts` still yields a full strip of RESERVA rows from the card's
+        # capacity), mirroring the drawing folios so the strip is complete.
         rows = _bornero_rows(mod, pts)
         pages = [rows[i:i + BORNERO_ROWS_PER_PAGE]
                  for i in range(0, len(rows), BORNERO_ROWS_PER_PAGE)] or [[]]
@@ -2185,6 +2414,423 @@ def build_topology_folio(project: ET.Element, start_order: int,
     return 1
 
 
+# ── PROFINET network/topology folio (NET — Siemens) ─────────────────────────
+# A whole-plant network-architecture overview drawn from the PROFINET nodes in
+# the CAx/AML (PlcProject.network_nodes). Unlike the Rockwell topology folio
+# (which classifies a single controller's comms tree), this draws the ENTIRE
+# subnet: a labelled bus with one node box per device (name + IP + type), laid
+# out as a grid so all 35 nodes fit inside the page frame. The controller this
+# drawing set documents (the Q100 CPU, ip .10) is highlighted distinctly. Like
+# every diagram folio it is VISUAL-only — text + shape primitives, EMPTY
+# <elements>/<conductors> — so it inherits the title block with zero floor
+# impact. DATA-DRIVEN and never-invent: only real nodes/IPs/names from the .aml;
+# a node missing a name/type renders what it has (blank, not fabricated).
+PROFINET_TITLE = "Red PROFINET"
+
+# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). A horizontal bus
+# bar near the top labelled with the subnet; node boxes in a fixed-column grid
+# below it, each box a name/IP/type stack. Sizes chosen so 5 columns x up to 8
+# rows (40 nodes) all stay inside the frame.
+PN_X_MARGIN = 20            # left/right page margin
+PN_PAGE_W = 1010           # page frame width
+PN_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+PN_COLS = 5                # node boxes per row
+PN_BOX_W = 190             # node box width
+PN_BOX_H = 60              # node box height
+PN_COL_GAP = 8             # horizontal gap between boxes
+PN_ROW_GAP = 16            # vertical gap between box rows
+PN_BUS_Y = 66              # network-bus bar y
+PN_BUS_H = 3               # bus bar thickness
+PN_GRID_Y = 96             # first node-box row top y (below the bus + its drop)
+PN_TEXT_X = 6              # text inset from a box's left edge
+PN_LEAD_W = 2             # drop-lead thickness
+
+
+def _node_field(node, i, default=None):
+    """Tolerant tuple accessor: PROFINET node tuples are
+    (ip, name, type_name, subnet_mask, is_controller) but older callers may pass
+    a 3-tuple (ip, name, type_name). Returns the i-th field or `default` when the
+    tuple is too short — never raises, never invents."""
+    return node[i] if len(node) > i else default
+
+
+def _subnet_label(nodes) -> str:
+    """Derive the subnet label from the REAL SubnetMask carried in the .aml, e.g.
+    'PROFINET — 192.168.10.0/24'.
+
+    The network address (shared host prefix) names the subnet; the mask gives the
+    prefix length. The label is emitted ONLY when a SINGLE uniform real mask is
+    present across the nodes AND the host prefix is uniform — both sourced from
+    the .aml, never reconstructed. When the mask is absent or non-uniform (or the
+    prefix is non-uniform) it falls back to the BARE title ('Red PROFINET'),
+    NEVER a fabricated '.0/24' from the host IPs and never the doubled
+    'PROFINET — Red PROFINET'."""
+    import tia_aml
+
+    prefixes = set()
+    prefix_lens = set()
+    for node in nodes:
+        ip = _node_field(node, 0, "") or ""
+        mask = _node_field(node, 3)  # real SubnetMask from the .aml (None if 3-tuple)
+        parts = ip.split(".")
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            prefixes.add(".".join(parts[:3]))
+        plen = tia_aml._mask_to_prefix(mask)
+        prefix_lens.add(plen)  # None when this node has no/odd mask
+    # require a single uniform host prefix AND a single uniform REAL mask
+    if (len(prefixes) == 1 and len(prefix_lens) == 1
+            and None not in prefix_lens):
+        net = next(iter(prefixes))
+        plen = next(iter(prefix_lens))
+        return f"PROFINET — {net}.0/{plen}"
+    return PROFINET_TITLE
+
+
+def _is_controller_node(node) -> bool:
+    """True for the node this drawing set documents: the station CPU.
+
+    Sourced from REAL provenance — the .aml `DeviceItemType=CPU` flag carried in
+    the node tuple's 5th field — NOT a hard-coded host IP. A 3-tuple (no flag)
+    degrades to False (never invented). Name/IP/type are display-only."""
+    return bool(_node_field(node, 4, False))
+
+
+def _fit_text(text: str, max_chars: int) -> str:
+    """Clip `text` to `max_chars` with a trailing ellipsis so a long label never
+    overruns its box. Layout-only — the FULL value still appears on the rack/IO/
+    BOM folios; this trims the on-sheet copy that would otherwise spill out of the
+    box width. Never pads; returns "" unchanged."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max(1, max_chars - 1)].rstrip() + "…"
+
+
+# Per-line character budgets for the node box (PN_BOX_W=190, PN_TEXT_X=6 inset).
+# Calibrated to the preview/QET widths so the longest real labels fit inside the
+# box instead of spilling into the neighbour (Q100's name + '(CONTROLADOR)' was
+# overrunning). The header uses FONT_TEXT (not the wider bold FONT_HEADER) so the
+# controller tag fits; the heavy border still marks the controller.
+PN_HEADER_CHARS = 30
+PN_LINE_CHARS = 32
+
+
+def _add_network_node_box(shapes, inputs, x, y, ip, name, type_name, controller):
+    """Draw one node box (name / IP / type stack) at (x, y). The controller box
+    is drawn with a heavier border + a '(CONTROLADOR)' tag so it reads distinctly
+    among the plant nodes. The three text lines are lifted UP inside the box (the
+    type line used to sit on the bottom border) and clipped to the box width (long
+    names used to spill into the next box); all data-driven, never invented."""
+    x2, y2 = x + PN_BOX_W, y + PN_BOX_H
+    add_rect(shapes, x, y, x2, y2, width="2" if controller else "1")
+    tx = x + PN_TEXT_X
+    # name (header) — controller flagged inline; falls back to the IP when blank.
+    # FONT_TEXT (not bold FONT_HEADER) so 'name  (CONTROLADOR)' fits the width.
+    header = name or ip
+    if controller:
+        header = f"{header}  (CONTROLADOR)"
+    add_text(inputs, tx, y + 6, _fit_text(header, PN_HEADER_CHARS), FONT_TEXT)
+    # IP line (always present — it is the node's defining datum)
+    add_text(inputs, tx, y + 24, _fit_text(f"IP {ip}", PN_LINE_CHARS), FONT_SMALL)
+    # type line — only when known (never invented); kept clear of the bottom edge
+    if type_name:
+        add_text(inputs, tx, y + 42, _fit_text(type_name, PN_LINE_CHARS),
+                 FONT_SMALL)
+
+
+def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
+    """Render the PROFINET network folio: a labelled bus bar with a grid of node
+    boxes below it (one per device), text + shape primitives only, EMPTY
+    <elements>/<conductors>. Each column drops a short lead from the bus to its
+    first row so the grid reads as hung off the subnet. The Q100 CPU node is
+    highlighted. Geometry stays inside the page frame for any node count."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": PROFINET_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    subnet = _subnet_label(nodes)
+    add_text(inputs, PN_X_MARGIN, 30, PROFINET_TITLE.upper(), FONT_HEADER)
+    add_text(inputs, PN_X_MARGIN, 48, subnet, FONT_SMALL)
+    if not nodes:
+        return diagram
+
+    # network bus: a horizontal bar spanning the page; the grid hangs below it.
+    bus_x1, bus_x2 = PN_X_MARGIN, PN_PAGE_W - PN_X_MARGIN
+    add_rect(shapes, bus_x1, PN_BUS_Y, bus_x2, PN_BUS_Y + PN_BUS_H)
+
+    # grid of node boxes. Each COLUMN hangs off the bus as a chain: a drop-lead
+    # from the bus to the top box, then a short inter-row lead in every row gap so
+    # rows 1..n are connected too (previously only row 0 was hung off the bus, so
+    # the lower rows read as floating/disconnected). The lead runs at the box
+    # centre, only through the empty PN_ROW_GAP between boxes — never over text.
+    col_pitch = PN_BOX_W + PN_COL_GAP
+    row_pitch = PN_BOX_H + PN_ROW_GAP
+    for i, node in enumerate(nodes):
+        ip = _node_field(node, 0, "")
+        name = _node_field(node, 1, "")
+        type_name = _node_field(node, 2, "")
+        col = i % PN_COLS
+        row = i // PN_COLS
+        x = PN_X_MARGIN + col * col_pitch
+        y = PN_GRID_Y + row * row_pitch
+        drop_x = x + PN_BOX_W // 2
+        if row == 0:
+            # drop lead from the bus down to this top-row box
+            add_rect(shapes, drop_x, PN_BUS_Y + PN_BUS_H, drop_x + PN_LEAD_W, y)
+        else:
+            # inter-row spine: connect this box up to the box above it (the gap
+            # between the previous box's bottom (y - PN_ROW_GAP) and this top y)
+            add_rect(shapes, drop_x, y - PN_ROW_GAP, drop_x + PN_LEAD_W, y)
+        controller = _is_controller_node(node)
+        _add_network_node_box(shapes, inputs, x, y, ip, name, type_name,
+                              controller)
+    return diagram
+
+
+def build_network_folio(project: ET.Element, start_order: int, nodes) -> int:
+    """Append the whole-plant PROFINET network folio at `start_order`. VISUAL-only
+    (text + shape primitives, empty <elements>/<conductors>), built from the IR's
+    network_nodes list (real .aml PROFINET addresses). Returns 1 when nodes exist,
+    else 0 (graceful — no nodes / no .aml => no folio, never invented)."""
+    if not nodes:
+        return 0
+    _add_network_diagram(project, start_order, nodes)
+    return 1
+
+
+# ── RACK: rack/chassis layout overview (Siemens, Story 2.3) ──────────────────
+# A horizontal rack strip: one box per module in SLOT order (slot #, name,
+# catalog/order#, kind+points). VISUAL-only (text + shape primitives, empty
+# <elements>/<conductors>); ISO 7200 title block inherited. Geometry stays
+# inside the page frame for the floor station (6 modules) and degrades to a
+# second row past RACK_COLS so the strip never overruns the frame.
+RACK_TITLE = "Disposición del rack"
+RACK_X_MARGIN = 20          # left/right page margin
+RACK_PAGE_W = 1010          # page frame width
+RACK_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+RACK_COLS = 8               # module boxes per rack row (8 modules + head fit)
+RACK_BOX_W = 120            # module box width
+RACK_BOX_H = 150            # module box height (tall, like a physical card)
+RACK_COL_GAP = 4            # horizontal gap between boxes (a tight rack)
+RACK_ROW_GAP = 30           # vertical gap between rack rows (when wrapped)
+RACK_RAIL_Y = 70            # mounting-rail bar y
+RACK_RAIL_H = 3             # rail bar thickness
+RACK_GRID_Y = 86            # first module-box row top y (below the rail)
+RACK_TEXT_X = 5             # text inset from a box's left edge
+
+
+def _rack_module_label(mod) -> tuple[str, str, str, str]:
+    """The four data lines for a rack box, all from real IR/.aml data — blank
+    (never invented) when unknown:
+        slot   : 'SLOT n'  (blank when slot is None — no .aml PositionNumber)
+        name   : the IR module name (the physical/split name)
+        cat    : the Siemens order number (mod.catalog; "" when no .aml match)
+        kind   : 'KIND x pts' (e.g. 'DI x16'); blank kind/points degrade out
+    """
+    slot = "" if mod.slot is None else f"SLOT {mod.slot}"
+    name = mod.name or ""
+    cat = mod.catalog or ""
+    kind = mod.kind or ""
+    pts = mod.points or 0
+    if kind and pts:
+        kindline = f"{kind} x{pts}"
+    elif kind:
+        kindline = kind
+    elif pts:
+        kindline = f"x{pts}"
+    else:
+        kindline = ""
+    return slot, name, cat, kindline
+
+
+def _rack_sort_key(mod):
+    """Order modules by SLOT when present, else keep IR order (None sorts last,
+    stably). Returns a key that puts known slots first in numeric order; modules
+    with no slot fall back to the IR order — NEVER fabricate a slot number."""
+    return (0, mod.slot) if mod.slot is not None else (1, 0)
+
+
+def _add_rack_box(shapes, inputs, x, y, mod):
+    """Draw one module box (slot / name / catalog / kind+points stack) at (x, y).
+    Text is lifted clear inside the box; all data-driven, blanks omitted."""
+    x2, y2 = x + RACK_BOX_W, y + RACK_BOX_H
+    add_rect(shapes, x, y, x2, y2)
+    slot, name, cat, kindline = _rack_module_label(mod)
+    tx = x + RACK_TEXT_X
+    # slot header band: a rule under the slot label so it reads as the box header
+    if slot:
+        add_text(inputs, tx, y + 16, slot, FONT_HEADER)
+    add_rect(shapes, x, y + 22, x2, y + 23)
+    # name / catalog / kind stack
+    add_text(inputs, tx, y + 40, name, FONT_TEXT)
+    if cat:
+        add_text(inputs, tx, y + 56, cat, FONT_SMALL)
+    if kindline:
+        add_text(inputs, tx, y + 72, kindline, FONT_SMALL)
+
+
+def build_rack_folio(project: ET.Element, start_order: int, modules) -> int:
+    """Append the rack/chassis layout overview at `start_order`. VISUAL-only
+    (text + shape primitives, empty <elements>/<conductors>), one box per module
+    drawn in SLOT order (slot #, name, catalog/order#, kind+points), all from the
+    IR/.aml. Returns 1 when modules exist, else 0 (graceful — no modules => no
+    folio, never invented). Modules with no slot fall back to IR order and show a
+    blank slot label."""
+    mods = list(modules)
+    if not mods:
+        return 0
+    ordered = sorted(mods, key=_rack_sort_key)  # stable: None-slot keep IR order
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": RACK_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(RACK_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, RACK_X_MARGIN, 30, RACK_TITLE.upper(), FONT_HEADER)
+
+    col_pitch = RACK_BOX_W + RACK_COL_GAP
+    row_pitch = RACK_BOX_H + RACK_ROW_GAP + 16  # +16 leaves room for the rail bar
+    for i, mod in enumerate(ordered):
+        col = i % RACK_COLS
+        row = i // RACK_COLS
+        x = RACK_X_MARGIN + col * col_pitch
+        rail_y = RACK_RAIL_Y + row * row_pitch
+        y = RACK_GRID_Y + row * row_pitch
+        if col == 0:
+            # mounting rail spanning this row's boxes
+            add_rect(shapes, RACK_X_MARGIN, rail_y, RACK_PAGE_W - RACK_X_MARGIN,
+                     rail_y + RACK_RAIL_H)
+        _add_rack_box(shapes, inputs, x, y, mod)
+    return 1
+
+
+# ── IDX: drawing index / table of contents (Siemens, Story 2.2) ──────────────
+# A table listing every folio in document order with its SECTION page number +
+# title. VISUAL-only (text + light rule lines, empty <elements>/<conductors>);
+# ISO 7200 title block inherited. Built LAST (after every other section exists)
+# so it can enumerate the real folios; it accounts for its OWN entry too.
+INDEX_TITLE = "Índice de planos"
+INDEX_X_MARGIN = 20         # left/right page margin
+INDEX_PAGE_W = 1010         # page frame width
+INDEX_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+INDEX_PAGE_COL_X = 30       # 'PÁG.' column x
+INDEX_TITLE_COL_X = 130     # folio-title column x
+INDEX_ROW_Y0 = 80          # first data-row baseline
+INDEX_ROW_DY = 18          # row pitch
+INDEX_HEAD_Y = 56          # column-header baseline
+INDEX_RULE_X2 = 990        # rule-line right end
+
+
+def _index_entries(project: ET.Element, self_order: int) -> list[tuple[int, str]]:
+    """Collect (section-page, title) for every diagram already on `project`, plus
+    the index's OWN entry at `self_order`, sorted by section page (document
+    order). The section page is each diagram's `order` attribute — the SAME value
+    the cajetín prints (DA.5b) — so the printed page numbers are correct
+    including the index's own page. The index's insertion does NOT renumber the
+    other folios: every section page is a fixed `order`, independent of document
+    POSITION, so listing the orders verbatim is exact. NEVER invents a folio."""
+    entries: list[tuple[int, str]] = []
+    seen: dict[int, str] = {}
+    for d in project.findall("diagram"):
+        title = d.get("title") or ""
+        try:
+            order = int(d.get("order"))
+        except (TypeError, ValueError):
+            continue  # a diagram with no integer order is not a numbered folio
+        if order in seen:
+            # two folios sharing a section page would print DUPLICATE page
+            # numbers silently; keep the FIRST and warn rather than emit a
+            # confusing double-numbered index. NEVER invents a new page number.
+            print(f"índice     : duplicate diagram order {order:03d} "
+                  f"({title!r} collides with {seen[order]!r}); skipping the "
+                  f"duplicate in the index", file=sys.stderr)
+            continue
+        seen[order] = title
+        entries.append((order, title))
+    if self_order not in seen:
+        entries.append((self_order, INDEX_TITLE))
+    else:
+        print(f"índice     : index self-order {self_order:03d} collides with "
+              f"{seen[self_order]!r}; index lists the existing folio at that "
+              f"page", file=sys.stderr)
+    entries.sort(key=lambda e: e[0])
+    return entries
+
+
+def build_index_folio(project: ET.Element, start_order: int) -> int:
+    """Append the drawing index / table-of-contents folio at `start_order`.
+    VISUAL-only (text + light rule lines, empty <elements>/<conductors>): one row
+    per folio in document order with its SECTION page (zero-padded to the 3-digit
+    page scheme) + title, INCLUDING the index's own entry. Returns 1 when any
+    folio exists to list, else 0 (graceful). Call this AFTER every other section
+    has been built so the enumeration is complete (its own page is computed from
+    `start_order`, which is fixed, so the numbering is correct)."""
+    entries = _index_entries(project, start_order)
+    if not entries:
+        return 0
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": INDEX_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(INDEX_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, INDEX_X_MARGIN, 30, INDEX_TITLE.upper(), FONT_HEADER)
+    # column headers + an underline rule
+    add_text(inputs, INDEX_PAGE_COL_X, INDEX_HEAD_Y, "PÁG.", FONT_SMALL)
+    add_text(inputs, INDEX_TITLE_COL_X, INDEX_HEAD_Y, "PLANO", FONT_SMALL)
+    add_rect(shapes, INDEX_X_MARGIN, INDEX_HEAD_Y + 4, INDEX_RULE_X2,
+             INDEX_HEAD_Y + 5)
+
+    # rows clamp to the frame: if there are more folios than fit, the row pitch
+    # is compressed so the last row still sits inside the page frame.
+    n = len(entries)
+    avail = INDEX_PAGE_H - 30 - INDEX_ROW_Y0   # keep a 30-px bottom margin
+    dy = INDEX_ROW_DY if (n - 1) * INDEX_ROW_DY <= avail else avail // max(n - 1, 1)
+    for i, (order, title) in enumerate(entries):
+        y = INDEX_ROW_Y0 + i * dy
+        add_text(inputs, INDEX_PAGE_COL_X, y, f"{order:03d}", FONT_SMALL)
+        add_text(inputs, INDEX_TITLE_COL_X, y, title, FONT_SMALL)
+        # a light rule under each row
+        add_rect(shapes, INDEX_X_MARGIN, y + 4, INDEX_RULE_X2, y + 5)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -2198,6 +2844,8 @@ def build_topology_folio(project: ET.Element, start_order: int,
 SECTION_PORTADA = 0        # cover sheet (DA.3)
 SECTION_SIMBOLOGIA = 1     # symbol legend (DA.4)
 SECTION_TOPOLOGY = 2       # network/communications topology overview (E2.1)
+SECTION_INDEX = 3          # drawing index / table of contents (Siemens, Story 2.2)
+SECTION_RACK = 4           # rack/chassis layout overview (Siemens, Story 2.3)
 SECTION_SUPPLY = 100       # 'Alimentación' rail folio
 SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
 SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
@@ -2320,12 +2968,39 @@ def main(argv=None):
 
     out_path = args.output or re.sub(r"\.l5x$", "", args.l5x, flags=re.I) + ".qet"
 
-    # Build the vendor-neutral PlcProject IR via the Rockwell builder, then read
-    # the data off the IR (instead of a loose tuple). A future Siemens builder
-    # mirrors this call and yields the same PlcProject shape; the rendering logic
-    # below is unchanged — only how it OBTAINS the data.
+    # Build the vendor-neutral PlcProject IR via the Rockwell builder, then hand
+    # it to the shared renderer. A future / sibling Siemens command (tia_to_qet)
+    # mirrors this: build a PlcProject, then call the SAME render_project — only
+    # the front-end that OBTAINS the IR differs.
     project_ir = plc_ir.build_rockwell_project(args.l5x,
                                                include_hmi=args.include_hmi)
+    return render_project(project_ir, out_path,
+                          no_symbols=args.no_symbols,
+                          wire_scheme=args.wire_scheme)
+
+
+def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
+                   wire_scheme="address", emit_vendor_folios=True):
+    """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
+    write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
+    and the Siemens command (tia_to_qet); the only difference between vendors is
+    which IR is passed in and `emit_vendor_folios`.
+
+    `emit_vendor_folios` gates the Rockwell-specific folios (topología, supply
+    'Alimentación', and chassis grounding). These classify ControlNet/EtherNet
+    comms, read AB-1756 grounding gauges, and group power off module_db — all
+    Rockwell-only data that would be INVENTED for a Siemens panel. The Siemens
+    command passes emit_vendor_folios=False; it is also auto-forced off for any
+    non-rockwell IR (belt and suspenders), so the Rockwell path is untouched.
+
+    Returns 0. `include_hmi` is accepted for signature symmetry with the front
+    ends (the IR is already built when this is called, so it has no effect here).
+    """
+    # Rockwell-only folios are emitted only when explicitly requested AND the IR
+    # actually came from the Rockwell front end — never invent comms/grounding/
+    # power topology for another vendor.
+    emit_vendor_folios = emit_vendor_folios and \
+        project_ir.source_vendor == "rockwell"
     controller = project_ir.name
     modules = project_ir.modules
     io_mods = project_ir.io_mods
@@ -2343,7 +3018,7 @@ def main(argv=None):
         seen.add(key)
         per_module.setdefault(pt.module.name, []).append(pt)
 
-    symbols = [] if args.no_symbols else load_symbol_db()
+    symbols = [] if no_symbols else load_symbol_db()
     sym_counts: dict[str, int] = {}
     # IEC 81346 counter keyed by (page, class letter) -> last sequential number,
     # so each folio numbers its own devices from 1; filled in the deterministic
@@ -2378,16 +3053,45 @@ def main(argv=None):
     # also the designation/wire-number prefix (-K101.x …), per the gated
     # decision that designations follow the printed page (DA.5).
     page = SECTION_DRAWINGS
-    for mod in io_mods:
-        pts = per_module.get(mod.name)
-        if not pts:
+    # EYE-3: a physical I/O card that carries BOTH outputs and inputs (e.g. the
+    # Siemens F-DQ1500) is SPLIT in the IR into two consecutive Module objects
+    # ("… [DO]" / "… [DI]") sharing physical name / parent / slot / catalog. Draw
+    # such a sibling PAIR as ONE folio (left=first half at COL_X[0], right=second
+    # at COL_X[1]) via build_split_card_folio, advancing page/folios by ONE.
+    # NON-paired modules keep calling build_folio EXACTLY as before — so Rockwell
+    # (which never has split siblings) is byte-identical. Both halves are still
+    # appended to drawn_cards so the per-half bornero folios are unchanged.
+    i = 0
+    while i < len(io_mods):
+        mod = io_mods[i]
+        sib = io_mods[i + 1] if i + 1 < len(io_mods) else None
+        if sib is not None and _is_split_sibling_pair(mod, sib):
+            left_pts = per_module.get(mod.name) or []
+            right_pts = per_module.get(sib.name) or []
+            build_split_card_folio(project, page, mod, left_pts, sib, right_pts,
+                                   symbols, sym_counts, designations,
+                                   wire_scheme, wire_counters,
+                                   bom_rows=bom_rows, spare_counter=spare_counter)
+            drawn_cards.append((mod, left_pts))
+            drawn_cards.append((sib, right_pts))
+            page += 1
+            folios += 1
+            i += 2
             continue
+        # CHAN: every I/O card emits a folio so ALL its channels are represented
+        # as box I/O points — including all-spare cards/halves (e.g. the Siemens
+        # F-DQ1500 [DI] half, or a Rockwell card with no mapped tags). An empty
+        # mapped list still draws the full-capacity box with every channel as a
+        # RESERVA stub; the matched/mapped floor is unaffected (spares are never
+        # matched and never counted as points drawn).
+        pts = per_module.get(mod.name) or []
         build_folio(project, page, mod, pts, symbols, sym_counts, designations,
-                    args.wire_scheme, wire_counters, bom_rows=bom_rows,
+                    wire_scheme, wire_counters, bom_rows=bom_rows,
                     spare_counter=spare_counter)
         drawn_cards.append((mod, pts))
         page += 1
         folios += 1
+        i += 1
     # The remaining sections are built in DEPENDENCY order (the data they need is
     # ready only after the drawing loop) but each is stamped with its own SECTION
     # base page; reorder_diagrams_by_position re-sorts the <diagram> children into
@@ -2403,27 +3107,55 @@ def main(argv=None):
     # Simbología (symbol legend) — one row per used symbol type (glyph + name);
     # sorts right after the cover (section page 1).
     symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)
-    # Network / communications topology overview (E2.1) — the "page 1 of any real
-    # set": controller → comms bridges → remote adapters / HMI → I/O drops, drawn
-    # from the FULL module tree. Front matter, section page 2 (the 2..99 band is
-    # free, so this does NOT disturb Alimentación/grounding/drawings). Visual-only.
-    topology_folios = build_topology_folio(project, SECTION_TOPOLOGY,
-                                           controller, modules)
-    # Power+grounding block FLOATS just below the card drawings band (T3.4): one
-    # grounding folio per chassis (= distinct rack), so the supply order is
-    # COMPUTED as 100 - n_grounding. Alimentación sits first, then the grounding
-    # folios at supply_order+1 .. 100. Backward-compatible: n_grounding=0 ⇒
-    # supply_order = 100 (unchanged). The card drawings stay fixed at 101..110.
-    n_grounding = len(group_chassis(io_mods))
+    # Vendor-specific folios (Rockwell only — gated by emit_vendor_folios):
+    #   * topología: classifies ControlNet/EtherNet comms off the AB module tree
+    #   * supply 'Alimentación': power rails grouped via module_db
+    #   * grounding 'Puesta a tierra': AB-1756 chassis grounding gauges
+    # For a Siemens panel none of these data exist, so the Siemens command gates
+    # them off rather than INVENT Rockwell topology/power/grounding. When off,
+    # the folios are simply not built; supply_order stays at its baseline so the
+    # stderr summary still reports cleanly (counts are 0).
+    n_grounding = len(group_chassis(io_mods)) if emit_vendor_folios else 0
     supply_order = SECTION_SUPPLY - n_grounding
-    # supply-rail folio ('Alimentación') — draws the rails the cards' power
-    # blocks reference; sits before the card drawings in the final order.
-    supply_folios = build_supply_folios(project, supply_order, io_mods)
-    # chassis grounding folios ('Puesta a tierra') — one per chassis, at
-    # supply_order+1 .. 100, just below the drawings band. Gauges come from the
-    # loaded project_template's grounding block (documented manual defaults).
-    grounding_folios = build_grounding_folios(
-        project, supply_order + 1, io_mods, tmpl.get("grounding"))
+    if emit_vendor_folios:
+        # Network / communications topology overview (E2.1) — the "page 1 of any
+        # real set": controller → comms bridges → remote adapters / HMI → I/O
+        # drops, drawn from the FULL module tree. Front matter, section page 2
+        # (the 2..99 band is free, so this does NOT disturb Alimentación /
+        # grounding / drawings). Visual-only.
+        topology_folios = build_topology_folio(project, SECTION_TOPOLOGY,
+                                               controller, modules)
+        # supply-rail folio ('Alimentación') — draws the rails the cards' power
+        # blocks reference; sits before the card drawings in the final order.
+        supply_folios = build_supply_folios(project, supply_order, io_mods)
+        # chassis grounding folios ('Puesta a tierra') — one per chassis, at
+        # supply_order+1 .. 100, just below the drawings band. Gauges come from
+        # the loaded project_template's grounding block (documented defaults).
+        grounding_folios = build_grounding_folios(
+            project, supply_order + 1, io_mods, tmpl.get("grounding"))
+    else:
+        topology_folios = supply_folios = grounding_folios = 0
+    # NET (Siemens): whole-plant PROFINET network/topology folio, drawn from the
+    # IR's network_nodes (real .aml PROFINET addresses). Independent of the
+    # Rockwell vendor-folio gate — it is enabled whenever network nodes exist
+    # (Siemens with an --aml) and GRACEFULLY OMITTED otherwise (no .aml / no
+    # nodes => never invented). Shares the SECTION_TOPOLOGY page (2): the Siemens
+    # set has no Rockwell topology folio, so the two never collide.
+    network_nodes = getattr(project_ir, "network_nodes", None) or []
+    network_folios = build_network_folio(project, SECTION_TOPOLOGY, network_nodes)
+    # RACK (Siemens, Story 2.3): rack/chassis layout overview, one box per module
+    # in slot order (slot #, name, order#, kind+points). Siemens-only and gated on
+    # the IR having actual slot/.aml data (any module carrying a slot from the
+    # .aml PositionNumber) so the Rockwell set is untouched; Rockwell never
+    # reaches this branch (source_vendor != "siemens"). When on but no slot data,
+    # it would still draw in IR order with blank slots — but the gate keeps it
+    # off unless real slot data exists, never inventing a rack we can't source.
+    is_siemens = project_ir.source_vendor == "siemens"
+    has_slots = any(getattr(m, "slot", None) is not None for m in io_mods)
+    if is_siemens and io_mods and has_slots:
+        rack_folios = build_rack_folio(project, SECTION_RACK, io_mods)
+    else:
+        rack_folios = 0
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -2433,6 +3165,16 @@ def main(argv=None):
     # carries a traceability sheet.
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = build_changelog_folios(project, SECTION_CHANGELOG, revisions)
+    # IDX (Siemens, Story 2.2): drawing index / table of contents. Built LAST so
+    # it enumerates EVERY folio already on the project (including its own entry at
+    # SECTION_INDEX). Siemens-only — the Rockwell path never reaches here. The
+    # section page printed for each row is the folio's fixed `order`, so the
+    # index's insertion does NOT renumber the folios after it (orders are
+    # position-independent), and its own page is SECTION_INDEX itself.
+    if is_siemens:
+        index_folios = build_index_folio(project, SECTION_INDEX)
+    else:
+        index_folios = 0
     # DA.5c: prev/next continuation refs on the multi-sheet sections (drawings,
     # borneros, BOM). Added while <project> still holds only <diagram> children,
     # before the reorder; pure annotation, so the folio/element counts are
@@ -2471,7 +3213,8 @@ def main(argv=None):
 
     err = sys.stderr
     print(f"controller : {controller}", file=err)
-    print(f"folios     : {folios} (one per I/O card with mapped tags)", file=err)
+    print(f"folios     : {folios} (one per I/O card, all channels drawn)",
+          file=err)
     n_points = sum(len(v) for v in per_module.values())
     print(f"points     : {n_points} drawn, {len(skipped)} skipped", file=err)
     if symbols:
@@ -2495,17 +3238,33 @@ def main(argv=None):
           f"folio(s)", file=err)
     print(f"changelog  : {len(revisions)} revision(s) over "
           f"{changelog_folios} folio(s)", file=err)
-    print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s) "
-          f"(order {supply_order})", file=err)
-    print(f"grounding  : {grounding_folios} '{GROUNDING_TITLE_PREFIX}' chassis "
-          f"folio(s) (orders {supply_order + 1}..{SECTION_SUPPLY})", file=err)
+    # Rockwell-only summary lines — omitted for vendors that don't emit them so
+    # the Siemens summary never advertises supply/grounding/topology it skipped.
+    if emit_vendor_folios:
+        print(f"supply     : {supply_folios} '{SUPPLY_FOLIO_TITLE}' rail folio(s) "
+              f"(order {supply_order})", file=err)
+        print(f"grounding  : {grounding_folios} '{GROUNDING_TITLE_PREFIX}' chassis "
+              f"folio(s) (orders {supply_order + 1}..{SECTION_SUPPLY})", file=err)
     print(f"bornero    : {bornero_folios} terminal-strip ({STRIP_DESIGNATION}) "
           f"folio(s), mapped + RESERVA in channel order", file=err)
     print(f"portada    : {portada_folios} cover folio(s)", file=err)
     print(f"simbología : {symbology_folios} legend folio(s), "
           f"{len(used)} symbol type(s)", file=err)
-    print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
-          f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree", file=err)
+    if emit_vendor_folios:
+        print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
+              f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree",
+              file=err)
+    if network_folios:
+        print(f"red PN     : {network_folios} '{PROFINET_TITLE}' folio(s) "
+              f"(order {SECTION_TOPOLOGY}), {len(network_nodes)} PROFINET node(s)",
+              file=err)
+    if rack_folios:
+        print(f"rack       : {rack_folios} '{RACK_TITLE}' folio(s) "
+              f"(order {SECTION_RACK}), {len(io_mods)} module(s) in slot order",
+              file=err)
+    if index_folios:
+        print(f"índice     : {index_folios} '{INDEX_TITLE}' folio(s) "
+              f"(order {SECTION_INDEX})", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

@@ -8,9 +8,18 @@ inputDocuments:
   - ProductPlanEnhancement.md
 title: PLC → mini-EPLAN — Phase 2 — Epic Breakdown
 created: 2026-06-14
-updated: 2026-06-14
-status: draft
+updated: 2026-06-16
+status: in-execution
 ---
+
+> **Execution note (2026-06-16):** E1 (IR) + the Rockwell quick-win folios shipped to
+> `main`; **E4 (Siemens TIA S7-1200/1500) is feature-complete on `feat/e4-tia-1200`**
+> (pending Abel's desktop eyeball + merge gate). The **WADDING_1 floor was re-baselined
+> at CHAN to 11/106/75/0, 78 RESERVA, 35 folios** — `matched=75` and `FP=0` remain the
+> never-move invariants; `drawn=106` (mapped only) holds. Per-story status + the E4
+> architecture/scope decisions are in `docs/planning/.decision-log.md` (2026-06-16) and
+> `docs/TIA-tracker.md`. Where this file still cites the old `10/106/75/0`, the
+> re-baselined floor in NFR-6 governs.
 
 # PLC → mini-EPLAN — Phase 2 — Epic Breakdown
 
@@ -54,8 +63,13 @@ folios) is independent and can run in parallel with E1/E2.
   `*.L5X`/`*.qet`/`*_bom.csv`/`*.pdf`/Siemens export (`*.asc`/`*.seq`/`*.sdf`/TIA).
 - **NFR-5** One tested builder per folio; positional tests assert the FULL symbol
   extent vs the real frame (not a hotspot); floor numbers parsed from stderr (not a proxy).
-- **NFR-6** The **WADDING_1 floor (10 drawing folios / 106 points / 75 matched / 0
-  false positives)** never regresses.
+- **NFR-6** The **WADDING_1 floor never regresses.** **Re-baselined 2026-06-16 (CHAN):
+  11 drawing folios / 106 points drawn / 75 matched / 0 false positives, 78 RESERVA,
+  35 folios total** (was 10/106/75/0, 62 RESERVA, 33 folios before CHAN drew all
+  channels incl. all-spare cards). `matched=75` and `false-positives=0` are the
+  never-move invariants; `drawn=106` (mapped only) also holds. The floor is asserted
+  from the stderr summary, and (NFR-5) the per-TYPE match breakdown is asserted too, so
+  a wrong-type-but-right-count false positive turns the test red.
 - **NFR-7** Demand-driven — build a vendor/diagram only when a real project needs it;
   spikes precede speculative parsers.
 
@@ -165,7 +179,12 @@ data only (no invented names)
 block, and leaks no raw `%{token}`
 **And** the WADDING_1 floor holds 10 / 106 / 75 / 0.
 
-### Story 2.2: Drawing index / table-of-contents folio
+### Story 2.2: Drawing index / table-of-contents folio  *(shipped SIEMENS-FIRST 2026-06-16)*
+> **Status:** delivered for Siemens (`build_index_folio`, gated `source_vendor=="siemens"`,
+> additive — Rockwell output untouched). The plan framed this as vendor-independent;
+> extending it to Rockwell is **pending** (revisit at the merge gate — see decision log
+> 2026-06-16 + issue #2).
+
 As a **controls engineer**, I want a drawing index folio, so that the set reads as a
 finished document without hand-listing every sheet.
 
@@ -176,7 +195,11 @@ finished document without hand-listing every sheet.
 **And** it updates automatically as folios are added/removed
 **And** geometry stays inside the frame; floor holds.
 
-### Story 2.3: Rack / chassis layout overview folio
+### Story 2.3: Rack / chassis layout overview folio  *(shipped SIEMENS-FIRST 2026-06-16)*
+> **Status:** delivered for Siemens (`build_rack_folio`, real slot from `.aml`
+> `PositionNumber`, gated `source_vendor=="siemens"`, additive). Same vendor-independence
+> caveat as Story 2.2 (Rockwell extension pending — decision log 2026-06-16 + issue #2).
+
 As a **controls engineer**, I want a rack layout folio, so that the physical chassis
 population is documented automatically.
 
@@ -254,7 +277,13 @@ committed.
 viable GUI-export path and a real 1200/1500 fixture exists. **Out of MVP until those
 gates clear** (PRD §6.2).
 
-### Story 4.1: Siemens module map (1200/1500 catalogs)  *(gated)*
+### Story 4.1: Siemens module map (1200/1500 catalogs)  *(DONE 2026-06-16 — `.aml`-direct)*
+> **Status / deviation:** the CAx/AML GUI export already carries the real order numbers,
+> so they are read **directly** per module (`tia_aml.parse_aml`, joined by physical name)
+> rather than hand-curating a Siemens `module_db` JSON. Curation is unnecessary when the
+> GUI export is authoritative; never-invent preserved (no match → catalog ''/addr None,
+> pins `TBD`). See decision log 2026-06-16.
+
 As a **maintainer**, I want curated TIA module data, so that 1200/1500 hardware resolves
 via catalog data.
 
@@ -264,7 +293,13 @@ via catalog data.
 **Then** each follows the `module_db` schema (pins `"TBD"`; graceful unknowns; nothing
 invented).
 
-### Story 4.2: S7-1200/1500 front-end parser → IR  *(gated on 3.1 go/no-go + TIA fixture)*
+### Story 4.2: S7-1200/1500 front-end parser → IR  *(DONE 2026-06-16 — `feat/e4-tia-1200`)*
+> **Status:** delivered. `plc_ir.build_tia_project(io_channels_xml, tags_xlsx, aml_path)`
+> + `src/tia_front_end.py` produce the IR from GUI exports only (no Openness); the IMV1
+> 1200 station renders 23 folios (IR floor 88 ch / 48 drawn / 40 RESERVA). Rockwell floor
+> held + byte-equivalent; fixture floor asserted from stderr (incl. the per-type
+> breakdown, NFR-5). Pending Abel's desktop eyeball + merge gate.
+
 As a **controls engineer**, I want TIA projects to generate a drawing set, so that
 current Siemens jobs get the automation too.
 
@@ -331,10 +366,11 @@ once, in a dev cycle)
 - **Sample-gated (do not start before the fixture lands in `Fixtures/`):** E3 (3.1 spike,
   then 3.2/3.3), E4 (4.1/4.2 — also gated on 3.1's go/no-go).
 - **Hard dependency:** E3/E4 parsers require E1's IR. E2 folios are best after Story 1.1.
-- **Per-story DoD (all):** WADDING_1 floor 10/106/75/0 from stderr; full suite green;
-  positional tests assert full extent vs the real frame; stdlib only; never invent;
-  public-repo hygiene; one focused commit; feature branch → human merge gate;
-  orchestrator verifies from ground truth.
+- **Per-story DoD (all):** WADDING_1 floor from stderr (re-baselined 11/106/75/0,
+  78 RESERVA, 35 folios — see NFR-6; `matched=75`/`FP=0` invariant, plus the per-type
+  breakdown); full suite green; positional tests assert full extent vs the real frame;
+  stdlib only; never invent; public-repo hygiene; one focused commit; feature branch →
+  human merge gate; orchestrator verifies from ground truth.
 
 ---
 *Source: `docs/planning/prd.md`. Decisions: `docs/planning/.decision-log.md`.

@@ -1,195 +1,211 @@
-# Handoff — Phase 2 (network addresses + IR refactor DONE → next: TIA S7-1200/1500 parser)
+# Handoff — Phase 2 (Siemens TIA path feature-complete on a branch → pending desktop eyeball + merge gate)
 
-> Self-contained handoff so a **fresh agent in a new session** can continue with no prior
-> context. Updated 2026-06-16 (supersedes the 2026-06-15 version). The product MVP (Phase 1)
-> is shipped; this is **Phase 2** (multi-vendor + LLM-aided diagrams), driven by
-> `docs/planning/{brief,prd,epics}.md`.
+> Self-contained handoff so a **fresh agent in a new session** can resume with no prior context.
+> Updated 2026-06-16 (supersedes the earlier "next: eyeball gate, TIA-3, S7-1500" version).
+> Phase 1 (Rockwell) shipped & merged to `main`; this is **Phase 2** (multi-vendor + LLM-aided
+> diagrams), driven by `docs/planning/{brief,prd,epics}.md`. **Live source of truth for the open
+> work = `docs/TIA-tracker.md` + GitHub issue #2** (read both).
 
 ## TL;DR — read this first
-
 - Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
-  Generator = `src/logix_to_qet.py`; parser/domain-model = `src/logix_to_eplan_csv.py`
-  (`l2e`); tests = `src/test_logix_to_qet.py` (**247 tests**, stdlib unittest).
-- **Phase 1 (Rockwell L5X → 32-folio set) is COMPLETE and merged.** Docs: `README.md` §3 +
-  `docs/logix-to-qet-guide.md`.
-- **Phase 2 plan is captured as a BMAD chain:** `docs/planning/brief.md` → `prd.md`
-  (FR-1…FR-14) → `epics.md` (E1–E5) + `.decision-log.md`. **Read these** — they hold the
-  whole business case (Siemens multi-vendor, LLM config-driven folios, quick-win folios).
-- **DONE this session:** **E2.1 network/communications topology folio** ("Red de
-  comunicaciones", section page 2) — chassis-grouped layout, merged to `main` @ `18519cc`,
-  pushed. Floor held; now **33 folios** (was 32). The **S7-300 Siemens spike** ran on a real
-  sample → **strong GO** (see memory `siemens-import-findings`).
-- **`main` @ `18519cc` == `origin/main`.** Branch `feat/e2-network-topology` is ff-merged
-  (safe to delete).
-- **DONE 2026-06-16 (both MERGED to `main` @ `ab51e04`, pushed):**
-  1. **Network addresses on the topology folio** — inline `Nodo N` from the L5X non-ICP port
-     `Address` (ControlNet node #); never-invent (blank for Ethernet/I-O cards); Abel
-     eyeball-approved. `0c6f80c`.
-  2. **Epic 1 — vendor-neutral PlcProject IR** (`src/plc_ir.py`): `PlcProject` dataclass +
-     `build_rockwell_project()` seam; `logix_to_qet.main()` consumes the IR. Rockwell output
-     **proven byte-equivalent** (UUID-normalized diff vs on-main baseline empty). `ab51e04`.
-- Floor unchanged throughout: **10 folios / 106 / 75 / 0**, 62 RESERVA, 33 folios. Suite now
-  **259 tests** (was 247).
-- **TIA fixtures LANDED 2026-06-16** (`Fixtures/Siemens/TiaPortal/`, project IMV1_QRO001):
-  `.aml` CAx hardware + `IO_Channels.xml` (pre-joined addr↔tag) + `PLCTags*.xlsx` + 63MB PDF.
-  Characterized — see memory `tia-import-findings`. **Decision: TIA is the FIRST Siemens target**
-  (cleaner than S7-300).
-- **NEXT, in order:** (1) **TIA S7-1200/1500 parser** — build a `build_tia_project()` Siemens
-  front-end mirroring `build_rockwell_project` (same `PlcProject` shape; the renderer needs no
-  vendor branch). Sources per memory `tia-import-findings`. (2) **S7-300 parser** (spike GO).
-  ⚠️ **OPEN QUESTION for the TIA cycle (Abel to resolve):** the CAx `.aml` contains ONLY the
-  **S7-1200** (CPU 1214C + 8×ET200SP); the **S7-1500 hardware export is absent** — its I/O lives
-  in `IO_Channels.xml` + `PLCTagsS71500.xlsx` (e.g. `%I10.0 → fctr_ir2coolpdt` appears in both
-  the IO map and the 1500 tag table) but no AML for its racks. Abel paused the TIA cycle (may
-  re-export the 1500 CAx). Build the 1200 path first or wait for the 1500 export — confirm.
+  - Rockwell: `src/logix_to_qet.py` (renderer + Rockwell folio builders) + `src/logix_to_eplan_csv.py`
+    (L5X parser). CLI: `logix_to_qet.py PROJECT.L5X -o out.qet`.
+  - Vendor-neutral IR: `src/plc_ir.py` — `PlcProject` (`build_rockwell_project` / `build_tia_project`
+    return the same shape). The renderer `logix_to_qet.render_project(ir, out, *, …)` is shared.
+  - **Siemens TIA: `src/tia_to_qet.py` (separate CLI) + `src/tia_front_end.py` + `src/tia_aml.py`.**
+    CLI: `tia_to_qet.py …_IO_Channels.xml --aml …_V15.aml -o out.qet` (the `--aml` is auto-discovered
+    from a sibling `*.aml` if omitted).
+  - Tests: `src/test_logix_to_qet.py` + `src/test_tia_front_end.py` + `src/test_tia_to_qet.py` +
+    `src/test_tia_aml.py` = **372 tests** (stdlib unittest, 1 pre-existing skip).
+- **State: the Siemens TIA S7-1200/1500 drawing-set path is FEATURE-COMPLETE on branch
+  `feat/e4-tia-1200` @ `cdbc1de` (pushed? verify), NOT merged to `main`.** `main` still @ `b403f85`.
+- **Everything that remains is tracked in two places — keep them in sync:**
+  - `docs/TIA-tracker.md` — the durable batch tracker (decisions + per-item status + findings).
+  - **GitHub issue #2** (https://github.com/hebelmx/PdfEplanToDxF/issues/2) — sanitized, public-repo;
+    holds the open visual decisions, queued fixes, docs sync, and ALIM. **NEVER put plant data in it.**
 
-## ⚠️ Fixtures were REORGANIZED by vendor (2026-06-14) — paths changed
+## Commits this session (branch `feat/e4-tia-1200`, on top of `57c024d`)
+1. `ed474f7` **TIA-3** — `src/tia_aml.py` parses the CAx/AML for module order# (`6ES7…`) + PROFINET;
+   `tia_front_end` joins onto IR `Module.catalog`/`network_address` by physical name. `--aml` flag.
+2. `b2fe954` **CHAN** — every card channel drawn as a box I/O point (mapped + RESERVA stubs), **both
+   vendors**; all-spare cards now emit folios. **RE-BASELINED the WADDING_1 floor** (see below).
+3. `3eb3e35` **NET** — whole-plant PROFINET network folio (Siemens). `build_network_folio`.
+4. `62294ca` **RACK+IDX** — rack-layout (`build_rack_folio`) + drawing-index (`build_index_folio`)
+   folios (Siemens); fills `Module.slot` from `.aml` `PositionNumber` (fixed "Slot None" in titles).
+5. `2ae095f` **TIA-FIX-1** — fixes from the phase-boundary review (see "Reviews" below).
+6. `cdbc1de` **docs** — tracker + audit findings → issue #2.
 
-- `Fixtures/Rockwell/` — `WADDING_1.{L5X,ACD,AML,L5K,RDF,qet,pdf,...}` + an `abel-backup`.
-  **The fixture is now `Fixtures/Rockwell/WADDING_1.L5X`.** **Abel's WORKING file is
-  `Fixtures/Rockwell/WADDING_1.qet` — NEVER `-o` over it** (memory `never-overwrite-working-qet`).
-- `Fixtures/Siemens/S7300/` — the first Siemens sample: `brpl2twin.txt.asc` (symbol table)
-  + `brpl2twin.txt.cfg` (HW config). More Siemens samples (1200/1500 CAx + PDF) coming.
-- The test suite was fixed for the move: `_wadding_fixture()` in the test file resolves
-  `Fixtures/Rockwell/WADDING_1.L5X` (fallback to the old flat path). **Before that fix the
-  move made the floor tests SILENTLY SKIP** — if you ever see `skipped` jump, the fixture
-  path is wrong, not the floor passing.
-- `Fixtures/` is **gitignored plant data** — never commit anything under it (now also
-  Siemens `*.asc`/`*.cfg`/`*.aml`/`*.pdf`).
+## Floors (RE-DERIVED from ground truth — do not trust a summary)
+- **Rockwell WADDING_1 (re-baselined @ CHAN, Abel-eyeballed):** **11 drawing folios / 106 drawn /
+  75 matched / 0 false positives / 78 RESERVA / 35 folios total.** Was 10/106/75/0/62/33 pre-CHAN.
+  **matched=75 and FP=0 are the never-move invariants; drawn=106 (mapped only) also holds.** Rockwell
+  output is **byte-equivalent** across CHAN/NET/RACK+IDX/TIA-FIX-1 (UUID+filename-normalized diff EMPTY).
+- **Siemens IMV1 1200 station:** **23 folios** (portada, símbología, Red PROFINET, índice, rack,
+  7 I/O cards, 6 bornero, 3 BOM, changelog). IR floor 88 ch / 48 drawn / 40 RESERVA. ISO 7200 title
+  block on all, 0 token leaks, 0 unresolved conductors.
+- **Suite: 372 tests green** (1 pre-existing skip).
 
-## Hard gate (run after every change)
+## Key ground-truth CORRECTIONS established this session (memory `tia-import-findings` updated)
+- The `.aml` is the **FULL plant (91 station/module entries)**, NOT "1214C + 8×ET200SP". It contains
+  **TWO CPUs**: `CPU 1512SP F-1 PN` (`6ES7 512-1SK01-0AB0`, the Q100 floor station, an **S7-1500-class
+  F-CPU**) AND `CPU 1214C` (`6ES7 214-1BG40-0XB0`, host .95). So "the 1500 hardware isn't in the .aml"
+  was wrong — the 1500-class CPU IS present. The plant PROFINET subnet has **35 nodes** on 192.168.10.x
+  (CPUs, IM 155-6 heads per station, SK TU3-PNT drives, EX260 valve terminals, BIS M-4008 RFID, printer).
 
+## Reviews run this session (both surfaced REAL issues — verify findings yourself, don't trust verdicts)
+- **TIA phase-boundary review** (5-lens Workflow vs `docs/planning/*` + tracker) → fixed in TIA-FIX-1:
+  - subnet `/24` was synthesized from host IPs → now read the **real `SubnetMask`** from the `.aml`.
+  - controller highlighted by hard-coded `.10` host → now from the parsed **`DeviceItemType=CPU`**
+    (this surfaced the hidden 2nd CPU — both are now tagged `(CONTROLADOR)`; a pending visual call).
+  - `hardware_for_station` merged all stations on a name mismatch → now returns `{}` (no contamination).
+  - test holes: `_discover_aml` untested; the "no --aml" tests silently auto-discovered the fixture
+    `.aml` so NET-omission was never asserted at render level; IDX duplicate-order guard. All fixed.
+- **Rockwell-pipeline audit** (Abel-requested, 3-lens Workflow) → confirmed analogues, **NOT yet fixed**
+  (they change validated Rockwell output → await Abel desktop eyeball). Tracked in issue #2:
+  - (MAJOR) `SUPPLY_DEFAULT_RAILS` seeds a **`24V` rail no WADDING card references** (logix_to_qet.py
+    :1298/:1305) + a test that locks it in.
+  - (MAJOR) topology **HMI classifier 2-letter `PV` substring** (false-pos + misses real `2711P-*`, :1894).
+  - (MINOR) comms-bridge list misses DNB/DHRIO/5094-AENTR (:1843).
+  - (MAJOR) **`0 false positives` asserted by PROXY** (generic-terminal count) not a real counter — BOTH
+    pipelines; a semantic mis-match (right count, wrong type) ships green. Fix = assert the per-type
+    match breakdown from stderr.
+  - (nits) magic `256` analog-word base; EPLAN `A/KF` class letters.
+
+## ⚠️ OPEN / PENDING — all tracked in GitHub issue #2 (resolve in this order next cycle)
+0. ~~**Desktop RE-confirm + merge gate**~~ ✅ **DONE 2026-06-17.** Abel re-confirmed both fresh eyeball
+   sets in QET-desktop → "look good." Decisions locked: **NET = tag ALL real CPUs** (both 1512SP @ .10
+   + 1214C @ .95, no code change); **merge now, output-changing fixes after**. Ground truth re-derived
+   (385 green; Rockwell 11/106/75/0/78/35; Siemens 22 folios/35 nodes). `feat/e4-tia-1200` (17 commits)
+   **MERGED `--no-ff` → `main`.** símbología (1 type) + split-card per-half bornero accepted as-is.
+   **NEXT CYCLE = output-changing fixes on a fresh branch (TIA-FIX-2 cover (L5X) leak; Rockwell 24V
+   rail + supply test; PV HMI classifier; comms-bridge families) — each re-eyeballed + re-baselined;
+   then ALIM when Abel sends panel power data.**
+1. ~~**Abel's DESKTOP eyeball**~~ ✅ **DONE 2026-06-17 → 4 visual fixes shipped** (branch
+   `feat/e4-tia-1200`, all verified from ground truth: suite 385 green; Rockwell BYTE-EQUIV +
+   floor 11/106/75/0/78/35; Siemens render checked; folios read from PDF). **Now pending Abel's
+   desktop RE-confirm of these fixes before the merge gate** (fresh `_eyeball_tia.qet` /
+   `_eyeball_wadding.qet` sent via SendUserFile — open in real QET; the matplotlib previewer
+   can't draw the box shapes, so QET-desktop is the true eyeball):
+   - ✅ **EYE-1+EYE-2** @ `bc06b57` (Red PROFINET): node-box 3rd line lifted off the bottom border
+     + controller header un-bolded + long-name ellipsis clip; every row now hangs off the bus
+     (per-column drop + inter-row spine) — rows 1-6 no longer float.
+   - ✅ **EYE-4** @ `13a0698` (I/O folios, both vendors): row-text lane widened +70 so long AB tags
+     clear the bornera (X1:n) + symbol (Abel chose "widen" over truncate).
+   - ✅ **EYE-3** @ `7811cff` (Siemens): split safety card F-DQ1500 [DO]+[DI] now side-by-side on ONE
+     folio (Siemens 23→22 folios; build_folio untouched → Rockwell byte-equiv). Spare points: OK.
+   - **Open Q for the re-confirm:** NET controller highlight still tags BOTH CPUs (Q100 1512SP @ .10
+     AND PLC_1 1214C @ .95) — mark only the in-scope station's CPU, or all? símbología (1 symbol
+     type); bornero merge for the split card (kept per-half for now); overall sign-off.
+2. ~~**No-output-change items**~~ ✅ **DONE 2026-06-16** (both shipped & pushed to `feat/e4-tia-1200`):
+   - ✅ **FP=0 real counter** @ `2d2de39` — `_parse_match_breakdown` + `test_floor_match_breakdown_by_type`
+     in BOTH floor tests assert the EXACT per-type dict (Rockwell 11-type=75 + 31 generic; Siemens
+     push_button 2 + 46 generic). Verified the guard BITES (a 27/16 swap that keeps total=75 fails it).
+     Suite 372→374; floor unchanged 11/106/75/0/78/35; no production code touched.
+   - ✅ **Docs sync** @ `eb6dae0` — `.decision-log.md` 2026-06-16 E4 entry (floor re-baseline; 1200-first
+     + 1512SP correction; FR-8=YES no-Openness; `.aml`-direct catalog; Siemens-first 2.2/2.3; resolves
+     the 4 prd §11 open questions, power-config #3 still open) + `epics.md` reconciled (NFR-6, DoD,
+     Stories 2.2/2.3/4.1/4.2).
+3. **AFTER Abel's desktop go** (these CHANGE validated output → re-eyeball + re-baseline):
+   - **TIA-FIX-2**: Siemens cover shows `CONTROLADOR (L5X)` (Rockwell format tag) — make vendor-aware
+     (`logix_to_qet.py:1707`; Rockwell keeps it → byte-equiv).
+   - Rockwell `24V` rail; supply-rail test; `PV` HMI classifier; comms-bridge families.
+   - Epic-2 scope: rack/index shipped Siemens-only vs the plan's "vendor-independent" — decision pending
+     (Abel leaned "check if the errors exist on Rockwell" rather than force it; revisit).
+4. **ALIM** — Siemens power one-line (Epic 5, config-driven). **BLOCKED on Abel's panel power data**
+   (main breaker/disconnect, feeder breakers + ratings, supply voltages 480/240/120 VAC + 24 VDC PSU,
+   transformer/UPS). Build the config schema (Story 5.1) + folio (5.2); never invent.
+5. **THEN propose the human merge gate** `feat/e4-tia-1200` → `main`.
+6. Later: **S7-1500 path** (already mostly present — its I/O is in IO_Channels + PLCTagsS71500.xlsx
+   which HAS rich English comments; its CPU is in the .aml) → then **S7-300** (memory
+   `siemens-import-findings`, fixture `Fixtures/Siemens/S7300/`).
+
+## Fixtures (GITIGNORED plant data — NEVER `git add` under `Fixtures/`)
+- `Fixtures/Rockwell/WADDING_1.L5X` — Rockwell hard-gate fixture. ⚠️ **`Fixtures/Rockwell/WADDING_1.qet`
+  is Abel's hand-edited WORKING file — NEVER `-o` over it** (memory `never-overwrite-working-qet`).
+- `Fixtures/Siemens/TiaPortal/` — real machine IMV1_QRO001 (the 1200/Q100 target):
+  `IMV1_QRO001_08AGO21_V15.aml` (CAx hardware, full plant) + `…_IO_Channels.xml` (THE point source) +
+  `PLCTagsS71200.xlsx` + `PLCTagsS71500.xlsx` + a 63MB PDF. Schema in memory `tia-import-findings`.
+  Scratch eyeball files `_eyeball_tia.{qet,pdf}` / `_eyeball_wadding.{qet,pdf}` live here (gitignored).
+
+## Gate commands (run from `src/`, re-derive every number; don't trust a summary)
 ```
+# Full suite (372 tests, ~15-150s; VM can be slow):
+cd src && python -m unittest discover -p "test_*.py"
+
+# Rockwell WADDING_1 hard gate (floor must hold 11/106/75/0, 78 RESERVA, 35 folios):
 cd src && python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_gen_check.qet
+#   then delete ../Fixtures/Rockwell/_gen_check.qet + _gen_check_bom.csv
+
+# Rockwell BYTE-EQUIVALENCE (when refactoring shared code) — diff must be EMPTY:
+cd src && git show HEAD:src/logix_to_qet.py > _old_lq.py
+python _old_lq.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_b.qet
+python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_a.qet
+norm(){ sed -E 's/uuid="\{[0-9a-fA-F-]+\}"/uuid="{X}"/g; s/filename="[^"]*"/filename="{F}"/g' "$1"; }
+diff <(norm ../Fixtures/Rockwell/_a.qet) <(norm ../Fixtures/Rockwell/_b.qet)   # empty = byte-equivalent
+rm -f _old_lq.py ../Fixtures/Rockwell/_a.qet ../Fixtures/Rockwell/_b.qet ../Fixtures/Rockwell/_*_bom.csv
+
+# Siemens render + structural check (23 folios; render to scratch, then delete):
+cd src && python tia_to_qet.py ../Fixtures/Siemens/TiaPortal/IMV1_QRO001_08AGO21_V15_IO_Channels.xml \
+  --aml ../Fixtures/Siemens/TiaPortal/IMV1_QRO001_08AGO21_V15.aml -o ../Fixtures/Siemens/TiaPortal/_chk.qet
+#   assert: 23 folios; ISO title block on all; subnet from REAL SubnetMask; 2 CPUs flagged controller;
+#   0 token leaks; without --aml (isolated dir) NET+RACK omitted.
 ```
-Floor that must NOT regress (from `main()`'s stderr): **10 drawing folios / 106 points /
-75 matched / 0 false positives**, 62 RESERVA spares, **33 total folios** (now incl. the
-topology folio at order 2). On the `.qet`: terminal ids unique; conductors resolve; every
-element `type` has an embedded `<definition>`; ISO 7200 title block on every folio; no raw
-`%{token}` in folio **properties** (the `%{...}` inside the embedded `<titleblocktemplate>`
-are native QET vars — expected, not a leak). Then run `python -m unittest test_logix_to_qet`
-from `src/` (**247 tests**) and **delete the scratch `_gen_check.qet`/`_bom.csv`/`.pdf`**.
-(Note: the VM has been very slow — the suite takes ~60-90 s; that's environmental.)
 
-## THE NEXT TASKS (in order)
-
-### 1. Add network addresses to the topology folio  ← do this first
-Abel reviewed the topology folio in QET and it "looks much better"; the one thing missing is
-**the network address of each node** (ControlNet node number / EtherNet IP / device address).
-- **First confirm the data exists** in the L5X — likely on each `<Module>`'s `Ports/Port`
-  (`Address`/`NodeAddress`) or the comms/connection elements. `l2e` may not parse it today;
-  you may need to extend the parse (and the `Module`/IR to carry an optional `address`).
-  **NEVER invent an address** — if absent, show nothing for that node (blank), like every
-  other never-invent fallback.
-- Render the address as an extra line in each node's row (topology folio is at
-  `build_topology_folio` / `_add_topology_diagram`, chassis-grouped). Keep it inside the box,
-  no strike-through, floor unchanged.
-- It is a **visual folio** — Abel iterates visually. Verify floor + positional tests, then
-  **render to a scratch `.qet` and launch QET** for his eyeball (workflow below).
-
-### 2. Epic 1 — vendor-neutral IR refactor  (PRD FR-1/2/3; epics E1)
-Promote `l2e`'s implicit, Rockwell-named domain model into an explicit `PlcProject` IR the
-renderer consumes. **Pure enabling refactor — Rockwell output must stay byte-equivalent;
-floor holds.** This is the prerequisite for the S7-300 parser. Abel explicitly chose
-**IR-first** over building the parser against the current model.
-
-### 3. S7-300 parser  (PRD FR-9/FR-10; epics E3) — spike is GO, fixture in hand
-Build a Siemens S7-300 front-end producing the IR, against `Fixtures/Siemens/S7300/`.
-**Full spike findings are in memory `siemens-import-findings`** — summary:
-- `.asc` symbol table: fixed-width `symbol · operand(I/Q/M/…) · address · datatype · comment`.
-  Use `I`/`Q` rows for physical I/O; filter `M`/`FC`/`FB`/`DB`/`T`/`C`.
-- `.cfg` HW config (CFG text, `FILEVERSION "3.2"`): `RACK n, SLOT m, "<6ES7 order#>", "<type>"`
-  lines where the **type string encodes kind + point count** (`DI32xDC24V`, `DO32xDC24V/0.5A`,
-  `AI8x12Bit`), each followed by `LOCAL_IN/OUT_ADDRESSES` (byte range). PROFIBUS-DP slaves are
-  `DPSUBSYSTEM … SLOT … "<x output bytes, y input bytes>"`. **Join `.asc`↔`.cfg` on the byte
-  address.** Masked `?` digits in order numbers are **version-independent wildcards — keep
-  as-is, never fill them.** Symbol-optional: tags from `.asc` when present, else address-only.
-
-### 4. (later) E4 — TIA S7-1200/1500  (PRD FR-11; epics E4) — sample-gated
-Tag-table XML is the clean tag source. Hardware via **CAx/AML export** — which needs Abel's
-user in the Windows "Siemens TIA Openness" group (he's granting it; this is a permission on
-*his* manual export, NOT a runtime dep — our parser just reads the `.aml` with stdlib). If
-CAx works, 1200/1500 hardware is clean like the `.cfg`; else a print-report PDF is the
-human-read reference for a curated Siemens `module_db`. **Samples LANDED 2026-06-16 and the
-CAx `.aml` parses cleanly (stdlib xml.etree) — see memory `tia-import-findings`; this is now
-the FIRST Siemens target, ahead of S7-300.**
-
-## QET eyeball workflow (how Abel reviews visual folios)
-1. Render to a SCRATCH path: `python logix_to_qet.py ../Fixtures/Rockwell/WADDING_1.L5X -o ../Fixtures/Rockwell/_eyeball.qet`
-2. Launch QET: `"/c/Program Files/QElectroTech/bin/qelectrotech.exe" "E:\Dynamic\PdfEplanToDxF\Fixtures\Rockwell\_eyeball.qet" &` (background).
-3. Abel prints to PDF and tells you the page; **`Read` that PDF page** to see the render
-   (`Read` supports PDFs via the `pages` param). Page N = the Nth folio in document order
-   (Portada 0, Simbología 1, **topología 2**, …). QET has **no headless PDF export** CLI.
-
-## Topology folio code map (current)
-`build_topology_folio(project, start_order, controller, modules)` (returns 1) called in
-`main()` right after `build_symbology_folio`; `SECTION_TOPOLOGY = 2`. Helpers:
-`build_topology_tree` (classified graph), `classify_node` (controller/bridge/hmi/io/generic by
-kind+catalog pattern), `topology_root` (self-parented root), `topology_protocol`
-(CNB/CN2→ControlNet, EN..→EtherNet/IP), `build_topology_chassis` (groups the full tree into
-physical chassis), `_add_chassis_box`/`_add_hmi_box`/`_add_topology_drop`/`_add_topology_diagram`.
-**Layout:** one enclosing box PER CHASSIS with plain-text module rows (no per-module boxes),
-a full-width network bus, drops at box edges. Uses the FULL `modules` dict (not `io_mods`) so
-it includes the controller, comms bridges and HMI. Mirrors `build_grounding_folios` (text +
-shape primitives only, empty `<elements>`/`<conductors>`).
+## Remote eyeball workflow (Abel reviews from a phone via remote-control)
+QET has **no CLI/headless PDF export** (confirmed; GUI-only single binary). Use the dev previewer
+`tools/qet_preview.py <in.qet> <out.pdf>` (matplotlib — UNTRACKED, non-stdlib, do NOT `git add`; it
+renders the diagram primitives, skips the title-block SVG) → then deliver with the **SendUserFile**
+tool (NOT git — the renders are plant data; pushing them to the public repo violates hygiene).
+Verify the PDF yourself (Read supports PDFs) before sending. Folio order: portada 0, símbología 1,
+Red PROFINET 2, índice 3, rack 4, I/O 101+, bornero 200+, BOM 300+, changelog 900.
 
 ## ⚠️ HARD RULES (carry forward — these bit us)
-1. **NEVER `-o Fixtures/Rockwell/WADDING_1.qet`** (Abel's working file). Verify to a scratch
-   path; delete it after.
-2. **Don't trust a subagent's summary/`shipReady`.** Re-derive every number from ground truth
-   (run the generator → stderr; run the tests; parse the `.qet`). Verified twice this session.
-3. **Never invent.** Unmatched → generic; uncertain → graceful fallback; pins `TBD`→`__`;
-   Siemens catalogs keep masked `?`; missing network address → blank. Multilingual DBs stay
-   language-agnostic. Python 3.10+, **stdlib only**.
-4. **Public-repo hygiene:** never `git add` under `Fixtures/` or any
-   `*.L5X`/`*.qet`/`*_bom.csv`/`*.pdf`/`*.asc`/`*.cfg`/`*.aml`/personal file. The `assets/*.png/.bmp/.ai`
-   logo exports are intentionally untracked (`??`) — leave them.
-5. **QET caches title-block templates at startup** — restart QET to see `.titleblock` edits.
-6. **Verify from ground truth; one focused commit per item; feature branch → human merge gate.**
-   Footer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+1. **NEVER `-o` over `Fixtures/Rockwell/WADDING_1.qet`** (Abel's working file).
+2. **Don't trust a subagent/workflow summary or `shipReady`.** Re-derive every number from ground truth
+   (generator stderr; the 372 tests; parse the `.qet`; byte-equiv diff). Read individual review-lens
+   findings yourself — both review passes this session found REAL issues behind clean-looking work.
+3. **Never invent.** Real Siemens addresses used directly; empty `<Tag>` = spare/RESERVA; missing
+   description → ""; missing catalog/PROFINET/slot/mask → blank/None; masked `?` kept; pins `TBD`→`__`.
+   The reviews specifically caught synthesized values (subnet /24, `24V` rail, `.10` controller) —
+   prefer reading the real source datum or leaving blank. stdlib only; multilingual DBs language-agnostic.
+4. **Public-repo hygiene:** never `git add` under `Fixtures/` or any `*.L5X`/`*.qet`/`*.xlsx`/`*.xml`/
+   `*.aml`/`*.pdf`/`*_bom.csv`/`*.asc`/`*.cfg`/personal file. **Issue #2 and any GitHub content must be
+   SANITIZED** (no project name, IPs, station/device names). `assets/*` logos + `tools/` are untracked.
+5. **One focused commit per item; feature branch → human merge gate.** Footer:
+   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
 
-## Deferred housekeeping (small, do when convenient)
-- `docs/logix-to-qet-guide.md` §9 and a couple of planning-doc gate commands still cite the
-  old `Fixtures/WADDING_1.L5X`/`.qet` path — repoint to `Fixtures/Rockwell/`.
-- Fold the Siemens spike specifics (now in memory `siemens-import-findings`) into
-  `docs/planning/{brief,prd,epics}` when next on a clean main.
-
-## Git state / how to resume
-- **`main` @ `ab51e04` == `origin/main`** — Phase-1 + planning chain + E2.1 topology +
-  network addresses (`0c6f80c`) + Epic-1 IR (`ab51e04`), all pushed. Merged branches
-  `feat/e2-network-addresses` + `feat/e1-plc-ir` are ff-merged (deletable).
-- IR seam: `src/plc_ir.py` `PlcProject` + `build_rockwell_project()`. A Siemens front-end adds
-  `build_tia_project()` returning the SAME `PlcProject` shape — the renderer needs no change.
-- Refactor gate (reuse for any future "no output change" work): generate the `.qet`, run
-  `sed -E 's/uuid="\{[0-9a-fA-F-]+\}"/uuid="{X}"/g'` on it, diff vs a baseline captured the
-  same way from `main` — must be empty (UUIDs are the only nondeterminism).
-- Memory to read: `tia-import-findings`, `siemens-import-findings`, `never-overwrite-working-qet`,
-  `qet-generator-status`, `bmad-orchestration`. Plan: `docs/planning/`.
+## Architecture seam (so the next agent gets it fast)
+`plc_ir.PlcProject` is the vendor-neutral IR; `build_rockwell_project(l5x)` and
+`build_tia_project(io_channels_xml, tags_xlsx=None, aml_path=None)` both return the same shape. The
+renderer `logix_to_qet.render_project(project_ir, out, *, include_hmi, no_symbols, wire_scheme,
+emit_vendor_folios)` is shared. Siemens-specific folios are gated by **IR content**, not just
+`emit_vendor_folios`: the NET folio renders when `PlcProject.network_nodes` is non-empty (Rockwell IR
+leaves it empty); rack/index render when `source_vendor=="siemens"`. `network_nodes` tuples are
+`(ip, name, type, subnet_mask, is_controller)` (tolerant accessor handles legacy 3-tuples).
+`tia_aml.py` provides `parse_aml` (catalog/slot/PROFINET per module, joined by physical name; split
+`[DI]/[DO]` halves share the physical module) + `profinet_nodes` (the 35-node subnet list). The
+Rockwell-specific topology/grounding/supply folios stay OFF for Siemens.
 
 ## Kickoff prompt — paste into the new session
 ```
-Continue the PLC → mini-EPLAN product (src/logix_to_qet.py), Phase 2. main @ ab51e04 ==
-origin/main; 259 tests; floor 10 drawing folios/106/75/0; WADDING_1 emits 33 folios incl.
-the "Red de comunicaciones" topology folio (order 2, now with node addresses). Phase-1 done;
-the vendor-neutral PlcProject IR (src/plc_ir.py) is in — a Siemens front-end just adds a
-build_tia_project() returning the same PlcProject shape.
+Continue the PLC → mini-EPLAN product, Phase 2. Branch feat/e4-tia-1200 @ cdbc1de holds the
+FEATURE-COMPLETE Siemens TIA path (TIA-1/2/3 + CHAN + NET + RACK+IDX + TIA-FIX-1). 372 tests green;
+Rockwell WADDING_1 floor 11/106/75/0, 78 RESERVA, 35 folios, byte-equivalent; Siemens render 23 folios.
+main @ b403f85 (TIA work NOT merged).
 
-READ FIRST: docs/HANDOFF-next-cycle.md (this file — fixture layout, gate command, code map,
-HARD RULES), docs/planning/* , and memory tia-import-findings + siemens-import-findings +
-never-overwrite-working-qet.
+READ FIRST: docs/TIA-tracker.md + GitHub issue #2 (the live open-items list), docs/HANDOFF-next-cycle.md
+(this file), docs/planning/*, memory tia-import-findings + siemens-import-findings + never-overwrite-working-qet.
 
-NEXT: build the TIA S7-1200/1500 front-end (build_tia_project → PlcProject) against
-Fixtures/Siemens/TiaPortal/ (.aml CAx hardware + IO_Channels.xml pre-joined addr↔tag +
-PLCTags*.xlsx; schema in memory tia-import-findings). ⚠️ FIRST confirm with Abel the
-S7-1500 hardware: the .aml has only the S7-1200 + 8×ET200SP — the 1500's racks aren't in the
-CAx export (its I/O is in IO_Channels.xml + PLCTagsS71500.xlsx). Then S7-300 (spike GO).
-Never invent; stdlib only; never git add Fixtures/; one commit per item, feature branch →
-human merge gate.
+DO NEXT (issue #2 order): (1) the NO-OUTPUT-CHANGE items now — FP=0 real per-type counter (both
+pipelines) + docs sync (.decision-log.md + epics.md). (2) Get Abel's DESKTOP eyeball on the Siemens
+visual calls (two-CPU highlight, NET layout, símbología). (3) AFTER his go, the output-changing fixes
+(TIA-FIX-2 cover (L5X) leak; Rockwell 24V rail + PV classifier + comms-bridge) — each re-eyeballed +
+re-baselined. (4) Propose the merge gate feat/e4-tia-1200 → main. (5) ALIM when Abel sends power data.
 
-HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet (use a scratch path); never invent;
-stdlib only; never git add Fixtures/ (incl. Siemens *.asc/*.cfg/*.aml/*.pdf); verify every
-result from ground truth (stderr floor + 247 tests + parse the .qet); restart QET for
-template edits; one commit per item, feature branch → human merge gate.
+HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet; never invent (read the real datum or blank);
+stdlib only; never git add Fixtures/; SANITIZE all GitHub content; re-derive every number from ground
+truth (stderr floors + 372 tests + parse the .qet + byte-equiv diff); read review-lens findings yourself;
+one commit per item, feature branch → human merge gate. Remote eyeball = tools/qet_preview.py + SendUserFile.
 ```
 ---
-*Overwrite this file for the cycle after the network-address + IR work.*
+*Overwrite this file at the next milestone (after the merge gate, or once ALIM + the issue-#2 fixes land).*
