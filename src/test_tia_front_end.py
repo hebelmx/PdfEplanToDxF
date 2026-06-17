@@ -120,6 +120,31 @@ class KindAndSpareTest(unittest.TestCase):
         self.assertFalse(tia.is_spare("fcuv_door1a"))
 
 
+class NonDeviceSignalTest(unittest.TestCase):
+    """_is_nondevice_signal suppresses a device symbol for supply-monitor and
+    permit channels ONLY (Abel 2026-06-17) — never a real field device."""
+
+    def test_supply_monitor_by_tag_prefix(self):
+        self.assertTrue(tia._is_nondevice_signal("VS_buv_ema", "Vsupply Emergency Stop"))
+
+    def test_supply_monitor_by_description(self):
+        self.assertTrue(tia._is_nondevice_signal("anything", "Vsupply UV Door 1 Open"))
+
+    def test_permit_signal(self):
+        self.assertTrue(tia._is_nondevice_signal("buv_p2open", "Permission to Open UV Door"))
+
+    def test_real_device_kept(self):
+        # a genuine door limit switch / e-stop / light is NOT suppressed
+        self.assertFalse(tia._is_nondevice_signal("fcuv_door1a", "UV Door 1 Open"))
+        self.assertFalse(tia._is_nondevice_signal("buv_ema", "Emergency Stop"))
+
+    def test_permission_word_midphrase_is_kept(self):
+        # the critical non-suppression: a real pilot light whose description
+        # merely CONTAINS 'permission' (not at the start) must keep its symbol
+        self.assertFalse(
+            tia._is_nondevice_signal("uv_slpermission", "Light Signal Permission Door"))
+
+
 # --------------------------------------------------------------------------
 # Pure-helper tests: xlsx shared-string resolution (synthetic, no fixture)
 # --------------------------------------------------------------------------

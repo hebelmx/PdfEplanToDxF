@@ -192,6 +192,9 @@ class IoPoint:
     description: str = ""
     logix_address: str = ""
     scope: str = ""           # controller or program name
+    no_symbol: bool = False   # force a generic terminal (never a device symbol):
+                              # set for non-device signals (e.g. a TIA supply
+                              # monitor / permit) so the matcher can't mis-assign
 
 
 # AliasFor forms handled:

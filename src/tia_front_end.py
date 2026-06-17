@@ -104,6 +104,29 @@ def is_spare(tag_text: str | None) -> bool:
     return not (tag_text or "").strip()
 
 
+def _is_nondevice_signal(tag: str, description: str) -> bool:
+    """True when a TIA channel is NOT a field device itself and so must stay a
+    generic terminal — never get a matched device symbol (Abel, 2026-06-17).
+
+    Two confirmed non-device classes in the TIA tag descriptions:
+      * supply-voltage MONITORING of a device — tag prefix ``VS_`` /
+        description starting ``Vsupply …`` (e.g. ``VS_buv_ema`` "Vsupply
+        Emergency Stop"); it monitors the device's supply, it is not the device.
+      * a PERMIT / interlock signal — description starting ``Permission to …``
+        (e.g. ``buv_p2open`` "Permission to Open UV Door"); a logic permit, not
+        a physical switch.
+
+    Deliberately narrow (matches the START of the description) so a genuine
+    device whose description merely CONTAINS the word — e.g. ``uv_slpermission``
+    "Light Signal Permission Door" (a real pilot light) — is NOT suppressed.
+    Suppression only ever DROPS a symbol (→ generic), so it can never invent."""
+    t = (tag or "").strip().lower()
+    d = (description or "").strip().lower()
+    return (t.startswith("vs_")
+            or d.startswith("vsupply")
+            or d.startswith("permission to"))
+
+
 # --------------------------------------------------------------------------
 # xlsx tag table (stdlib only: zipfile + xml.etree)
 # --------------------------------------------------------------------------
@@ -355,6 +378,7 @@ def build_modules_and_points(
                     description=description,
                     logix_address=raw,  # raw real address for cross-check
                     scope=station_name,
+                    no_symbol=_is_nondevice_signal(tag, description),
                 )
             )
 

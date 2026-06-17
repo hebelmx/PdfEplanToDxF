@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import plc_ir
@@ -32,20 +33,59 @@ import logix_to_qet
 import power_config as power_config_mod
 
 
-def _discover_tags(io_channels_path: str) -> str | None:
-    """Auto-discover a sibling PLCTags*.xlsx next to the IO_Channels.xml.
+def _station_tags(io_channels_path: str) -> set[str]:
+    """Read the set of non-empty <Tag> values from THIS station's IO_Channels.xml.
 
-    Prefers an S7-1200 table (`*S71200*`) when several are present, else the
-    first PLCTags*.xlsx in the same directory. Returns None when none exists —
-    descriptions then stay "" (NEVER invent). Deterministic (sorted).
+    These are the tag names the chosen PLCTags*.xlsx must cover (the join is
+    Tag == xlsx.Name). Blank/whitespace tags (spares) are excluded. Returns an
+    empty set on any parse problem — never invents."""
+    try:
+        root = ET.parse(io_channels_path).getroot()
+    except (OSError, ET.ParseError):
+        return set()
+    tags: set[str] = set()
+    for tag_el in root.iter("Tag"):
+        t = (tag_el.text or "").strip()
+        if t:
+            tags.add(t)
+    return tags
+
+
+def _discover_tags(io_channels_path: str) -> str | None:
+    """Auto-discover the sibling PLCTags*.xlsx that best covers THIS station.
+
+    Domain rule: tag names are unique within a PLC, so the correct tag table is
+    the one whose `Name` column covers the station's I/O `<Tag>` values. We
+    gather ALL sibling `PLCTags*.xlsx`, read the station's non-empty tags from
+    the IO_Channels.xml, and pick the candidate with the MOST Name∩Tag matches
+    (tie-break alphabetically by filename for determinism). Returns None only
+    when there are no candidates — descriptions then stay "" (NEVER invent).
+
+    A one-line stderr note records the choice and its coverage so the selection
+    is auditable, e.g.:  ``tags : selected PLCTagsS71500.xlsx (47/48 tags matched)``
     """
+    import tia_front_end as tia
+
     folder = Path(io_channels_path).resolve().parent
     candidates = sorted(folder.glob("PLCTags*.xlsx"))
     if not candidates:
         return None
-    preferred = [p for p in candidates if "S71200" in p.name]
-    chosen = preferred[0] if preferred else candidates[0]
-    return str(chosen)
+
+    station_tags = _station_tags(io_channels_path)
+    n_station = len(station_tags)
+
+    best = None  # (matches, name) of the winner; candidates already alphabetical
+    best_matches = -1
+    for cand in candidates:
+        names = set(tia.load_tag_table(str(cand)).keys())
+        matches = len(names & station_tags)
+        if matches > best_matches:   # strict '>' keeps the alphabetically-first tie
+            best_matches = matches
+            best = cand
+
+    print(f"tags : selected {best.name} "
+          f"({best_matches}/{n_station} tags matched)", file=sys.stderr)
+    return str(best)
 
 
 def _discover_aml(io_channels_path: str) -> str | None:

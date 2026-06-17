@@ -46,6 +46,13 @@ class PlcProject:
                       empty unless a front-end populates it (Siemens fills it
                       from the CAx/AML — subnet_mask + is_controller are REAL
                       .aml provenance, never invented).
+      controller_cpu  str|None — the CPU TYPE that owns this station (e.g.
+                      "CPU 1512SP F-1 PN"), derived from the real .aml PROFINET
+                      controller node whose IP matches the station's modules'
+                      network_address. DATA-ONLY seam for a later by-PLC
+                      labelling cycle (no rendering uses it yet). None when no
+                      .aml / no matching controller / no station address — and
+                      always None for Rockwell. NEVER invented.
     """
 
     name: str
@@ -57,6 +64,7 @@ class PlcProject:
     controller_tags: dict = field(default_factory=dict)
     program_tags: dict = field(default_factory=dict)
     network_nodes: list = field(default_factory=list)
+    controller_cpu: str | None = None
 
     # convenience alias: the renderer/old tuple called this `controller`
     @property
@@ -115,9 +123,11 @@ def build_tia_project(
     # CAx/AML is supplied (the IO_Channels.xml carries no addresses); empty
     # otherwise so the folio is gracefully omitted — NEVER invented.
     network_nodes: list = []
+    controller_cpu: str | None = None
     if aml_path:
         import tia_aml
         network_nodes = tia_aml.profinet_nodes(aml_path)
+        controller_cpu = _owning_controller_cpu(network_nodes, io_mods)
     return PlcProject(
         name=station_name,
         source_vendor="siemens",
@@ -128,4 +138,32 @@ def build_tia_project(
         controller_tags={},
         program_tags={},
         network_nodes=network_nodes,
+        controller_cpu=controller_cpu,
     )
+
+
+def _owning_controller_cpu(network_nodes: list, io_mods: list) -> str | None:
+    """Identify the CPU TYPE that owns this station from REAL .aml data.
+
+    The station's owning CPU is the PROFINET node that IS a controller
+    (`is_controller==True`) AND whose IP equals the station IP — the
+    `network_address` shared by the station's I/O modules. Returns that node's
+    `type` (the CPU type string, e.g. "CPU 1512SP F-1 PN"), or None when there
+    is no station address, or no controller node matches it — NEVER invented.
+
+    network_nodes tuples are (ip, name, type, subnet_mask, is_controller).
+    """
+    # the station IP is the network_address the station's modules carry (filled
+    # from the .aml by the front-end). Take the first non-empty one.
+    station_ip = None
+    for mod in io_mods:
+        addr = getattr(mod, "network_address", None)
+        if addr:
+            station_ip = addr
+            break
+    if not station_ip:
+        return None
+    for ip, _name, type_name, _mask, is_controller in network_nodes:
+        if is_controller and ip == station_ip:
+            return type_name or None
+    return None
