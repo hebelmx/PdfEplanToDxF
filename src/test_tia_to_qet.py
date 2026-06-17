@@ -244,18 +244,20 @@ class SiemensStructuralTest(SiemensRenderTestBase):
                         "no BOM folio on the Siemens set")
         self.assertTrue(any(t.startswith("Historial") for t in titles),
                         "no changelog folio on the Siemens set")
-        # CHAN: every I/O card now renders, including the all-spare F-DQ1500 [DI]
-        # half. This filter catches the F-D* card titles (drawing AND bornero):
-        # 4 drawing (F-DI150, F-DI156, F-DQ1500 [DO], F-DQ1500 [DI]) + 4 matching
-        # borneros = 8 (was 6 when the 0-mapped F-DQ1500 [DI] was skipped).
+        # EYE-3: the F-DQ1500 split halves now share ONE drawing folio. This
+        # filter catches the F-D* card titles (drawing AND bornero): 3 drawing
+        # (F-DI150, F-DI156, the merged F-DQ1500 [DO+DI]) + 4 matching borneros
+        # (the per-half borneros are NOT merged) = 7 (was 8 with two F-DQ1500
+        # drawing folios).
         io_folios = [t for t in titles
                      if "F-DI" in t or "F-DQ" in t or t.startswith("DI")
                      or t.startswith("DQ")]
-        self.assertEqual(len(io_folios), 8, f"I/O folios: {io_folios}")
-        # the all-spare F-DQ1500 [DI] half now renders a drawing folio
-        self.assertTrue(any(t.startswith("R0") and "F-DQ1500 [DI]" in t
-                            for t in titles),
-                        "F-DQ1500 [DI] all-spare half did not render")
+        self.assertEqual(len(io_folios), 7, f"I/O folios: {io_folios}")
+        # the merged drawing folio carries BOTH halves on one page ([DO+DI]); the
+        # all-spare F-DQ1500 [DI] half is the RIGHT card of that single folio.
+        self.assertTrue(any(t.startswith("R0") and "F-DQ1500" in t
+                            and "[DO+DI]" in t for t in titles),
+                        "F-DQ1500 split halves did not merge onto one folio")
 
 
 class SiemensStderrFloorTest(SiemensRenderTestBase):
@@ -276,11 +278,12 @@ class SiemensStderrFloorTest(SiemensRenderTestBase):
         self.assertEqual(reserva, 40)             # 40 RESERVA channels
         self.assertEqual(mapped + reserva, 88)    # 88 channels total
 
-    def test_seven_drawing_folios_and_drawn_spares(self):
+    def test_six_drawing_folios_and_drawn_spares(self):
         _, err = self._run()
-        # CHAN: 7 drawing folios — every I/O card drawn, incl. the all-spare
-        # F-DQ1500 [DI] half (was 6 when that 0-mapped half was skipped).
-        self.assertRegex(err, r"folios\s*:\s*7\b")
+        # EYE-3: 6 drawing folios — the two F-DQ1500 split halves now SHARE one
+        # folio (was 7 when each half drew its own). Every channel is still drawn
+        # (the merged folio carries both halves side-by-side).
+        self.assertRegex(err, r"folios\s*:\s*6\b")
         # the SEPARATE drawn-spare counter now reads the full 40: every unused
         # channel is drawn, so the drawn reserves match the IR-level RESERVA.
         m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
@@ -353,8 +356,9 @@ class SiemensRackIndexTest(unittest.TestCase):
         self.assertIn(q.PROFINET_TITLE, titles)
         self.assertIn(q.RACK_TITLE, titles)
         self.assertIn(q.INDEX_TITLE, titles)
-        # was 21 (NET) -> 23 with RACK + IDX added
-        self.assertEqual(len(root.findall("diagram")), 23)
+        # was 21 (NET) -> 23 with RACK + IDX added -> 22 once the F-DQ1500 split
+        # halves (EYE-3) merge onto ONE drawing folio (7 drawing folios -> 6).
+        self.assertEqual(len(root.findall("diagram")), 22)
 
     def test_network_folio_present_with_35_nodes_by_title(self):
         # T2: a POSITIVE NET assertion BY TITLE, with the real 35 PROFINET nodes
@@ -410,7 +414,7 @@ class SiemensRackIndexTest(unittest.TestCase):
         self.assertEqual(sorted(pages),
                          sorted(int(d.get("order")) for d in diagrams))
         self.assertIn(q.SECTION_INDEX, pages)
-        self.assertEqual(len(pages), len(diagrams))   # 23 == 23 (self-counted)
+        self.assertEqual(len(pages), len(diagrams))   # 22 == 22 (self-counted)
         # the index lists its own title + the rack title
         self.assertIn(q.INDEX_TITLE, texts)
         self.assertIn(q.RACK_TITLE, texts)
@@ -515,6 +519,115 @@ class AmlDiscoveryTest(unittest.TestCase):
             xml = Path(d) / "x_IO_Channels.xml"
             xml.write_text("<Stations/>", encoding="utf-8")
             self.assertIsNone(tia_to_qet._discover_aml(str(xml)))
+
+
+class SplitSiblingPredicateTest(unittest.TestCase):
+    """EYE-3 unit test for the sibling-detection predicate: two `[DO]`/`[DI]`
+    modules sharing physical name + parent + slot + catalog are a pair; two
+    unrelated modules are not. No fixture needed (pure predicate)."""
+
+    @staticmethod
+    def _mod(name, parent="Rack0", slot=4, catalog="6ES7 136-6DB00-0CA0"):
+        return q.l2e.Module(name=name, catalog=catalog, parent=parent,
+                            slot=slot, kind="DO", points=4, rack=0)
+
+    def test_split_halves_are_paired(self):
+        do = self._mod("F-DQ1500 [DO]")
+        di = self._mod("F-DQ1500 [DI]")
+        self.assertTrue(q._is_split_sibling_pair(do, di))
+
+    def test_unrelated_modules_not_paired(self):
+        a = self._mod("F-DQ1500 [DO]", slot=4)
+        b = self._mod("F-DI150 [DI]", slot=2, catalog="6ES7 136-6BA00-0CA0")
+        self.assertFalse(q._is_split_sibling_pair(a, b))
+
+    def test_same_phys_but_different_slot_not_paired(self):
+        # same physical name + catalog but DIFFERENT slot => not one card
+        a = self._mod("F-DQ1500 [DO]", slot=4)
+        b = self._mod("F-DQ1500 [DI]", slot=5)
+        self.assertFalse(q._is_split_sibling_pair(a, b))
+
+    def test_plain_modules_without_suffix_not_paired(self):
+        # two plain (un-suffixed) modules sharing parent/slot/catalog are NOT a
+        # split pair — the predicate requires the [KIND] suffix on both names.
+        a = self._mod("M1")
+        b = self._mod("M1")
+        self.assertFalse(q._is_split_sibling_pair(a, b))
+
+
+class SiemensSplitCardFolioTest(unittest.TestCase):
+    """EYE-3 end-to-end: the F-DQ1500 split halves render on ONE folio (not two),
+    side-by-side, with BOTH `[DO]` and `[DI]` headers, two card boxes at COL_X[0]
+    and COL_X[1], all inside the page frame; and the Siemens total folio floor
+    drops to 22 (was 23) while the bornero count stays 7 (per-half borneros are
+    unchanged). Gated on BOTH the IMV1 IO_Channels.xml and .aml."""
+
+    IO = _imv1_io_channels()
+    AML = _imv1_aml()
+
+    def setUp(self):
+        if not (self.IO.is_file() and self.AML.is_file()):
+            self.skipTest("IMV1 IO_Channels.xml or .aml fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "tia.qet"
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main([str(self.IO), "--aml", str(self.AML),
+                                      "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def test_split_card_on_one_folio_with_both_headers_and_two_boxes(self):
+        root, _ = self._run()
+        # exactly ONE folio merges the F-DQ1500 halves (title carries [DO+DI])
+        merged = [d for d in root.findall("diagram")
+                  if "[DO+DI]" in (d.get("title") or "")]
+        self.assertEqual(len(merged), 1)
+        folio = merged[0]
+        # and the un-merged per-half drawing folios are GONE: no drawing folio
+        # title is bare "F-DQ1500 [DO]"/"[DI]" any more.
+        all_titles = [d.get("title") or "" for d in root.findall("diagram")]
+        self.assertFalse(any(t.endswith("[DO])") or t.endswith("[DI])")
+                             for t in all_titles))
+        # BOTH half headers present inside the merged folio
+        texts = [i.get("text") or "" for i in folio.find("inputs").findall("input")]
+        self.assertIn("-F-DQ1500 [DO]", texts)
+        self.assertIn("-F-DQ1500 [DI]", texts)
+        # two card boxes, left at COL_X[0]-BOX_LEFT and right at COL_X[1]-BOX_LEFT
+        rects = [s for s in folio.find("shapes").findall("shape")
+                 if s.get("type") == "Rectangle"]
+        left_edges = sorted({float(r.get("x1")) for r in rects})
+        self.assertEqual(left_edges,
+                         sorted({float(q.COL_X[0] - q.BOX_LEFT),
+                                 float(q.COL_X[1] - q.BOX_LEFT)}))
+        # full drawn extent inside the page frame (x<=1010, y<=660) over
+        # shapes + inputs + elements
+        xs, ys = [], []
+        for i in folio.find("inputs").findall("input"):
+            xs.append(float(i.get("x"))); ys.append(float(i.get("y")))
+        for e in folio.find("elements").findall("element"):
+            xs.append(float(e.get("x"))); ys.append(float(e.get("y")))
+        for r in rects:
+            xs.append(float(r.get("x2"))); ys.append(float(r.get("y2")))
+        self.assertLessEqual(max(xs), 1010)
+        self.assertLessEqual(max(ys), 660)
+
+    def test_total_folio_floor_22_bornero_still_7(self):
+        root, err = self._run()
+        self.assertEqual(len(root.findall("diagram")), 22)
+        self.assertRegex(err, r"bornero\s*:\s*7\b")
+
+    def test_both_halves_contribute_bom_module_rows(self):
+        # both halves still emit their own (module) BOM row — the merged folio
+        # indexes every drawn point. The summary's "bom : N rows (M module, ...)"
+        # must count BOTH F-DQ1500 halves (7 module rows total across 7 cards).
+        _, err = self._run()
+        m = re.search(r"bom\s*:\s*\d+\s+rows\s*\((\d+)\s+module", err)
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1)), 7)
 
 
 if __name__ == "__main__":

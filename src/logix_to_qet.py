@@ -343,6 +343,14 @@ PIN_PLACEHOLDER = "__"
 STRIP_X_OFF = 305
 STRIP_DESIGNATION = "-X1"
 
+# Split-card sibling suffix: a physical I/O module carrying BOTH outputs and
+# inputs is split in the IR into two `Module`s whose names carry a trailing
+# ` [KIND]` suffix ("F-DQ1500 [DO]" / "F-DQ1500 [DI]"). Stripping it recovers the
+# shared physical name (mirrors tia_front_end._physical_name's grammar). Used by
+# build_split_card_folio / _is_split_sibling_pair to merge the two halves onto
+# one folio.
+_SPLIT_SUFFIX_RE = re.compile(r"\s*\[(?:DI|DO|AI|AO)\]\s*$")
+
 # Per-card power table (DA.8 review fix): the card's supply/common potentials are
 # listed as a compact boxed table in the clear TOP-RIGHT corner of the sheet,
 # right-aligned to the page frame and ABOVE the I/O rows (which start at ROW_Y0).
@@ -1088,6 +1096,201 @@ def build_folio(project: ET.Element, order: int, mod, points,
             address = l2e.eplan_address(mod, direction, index, analog)
             bom_rows.append(spare_bom_row(order, channel=index, address=address))
 
+    return diagram
+
+
+def _is_split_sibling_pair(a, b) -> bool:
+    """True iff modules `a` and `b` are the two halves of ONE physical I/O card
+    that the IR split into a `[DO]`/`[DI]` (etc.) pair.
+
+    A split physical module (e.g. a Siemens F-DQ1500 carrying both outputs and
+    inputs) is split in the IR into two `Module` objects whose names share the
+    SAME physical name once the trailing ` [KIND]` suffix is stripped, and which
+    share the SAME `parent` (rack), `slot`, and `catalog`. Two unrelated modules
+    (different physical name / parent / slot / catalog) are NOT a pair. The suffix
+    stripper is shared with the IR (tia_front_end._physical_name) via the same
+    `[KIND]` grammar; here we strip inline so logix_to_qet stays import-free of
+    the front end. NEVER invents: if either name has no split suffix, or any of
+    physical-name / parent / slot / catalog differ, the pair is rejected."""
+    name_a = _SPLIT_SUFFIX_RE.sub("", a.name).strip()
+    name_b = _SPLIT_SUFFIX_RE.sub("", b.name).strip()
+    # both names must actually carry a split-kind suffix (so the stripped name is
+    # SHORTER than the raw name) — a plain module that merely happens to share a
+    # parent/slot is not a split half.
+    if name_a == a.name or name_b == b.name:
+        return False
+    return (name_a == name_b
+            and a.parent == b.parent
+            and a.slot == b.slot
+            and a.catalog == b.catalog)
+
+
+def _draw_card_half(diagram_parts, x: int, order: int, mod, points,
+                    symbols, sym_counts, designations, wire_scheme,
+                    wire_counters, ids, bom_rows, spare_counter):
+    """Draw ONE single-column I/O card half at column-x `x`, mirroring
+    build_folio's single-column geometry VERBATIM (card box, header, sub-header,
+    per-point card terminal / texts / inline strip terminal / device-or-generic
+    conductor, and the spare/RESERVA loop). Shares one `ids` terminal counter and
+    one set of diagram sub-elements with the other half, so terminal ids stay
+    unique per merged diagram. Appends this half's BOM rows (module + per drawn
+    point + spares) to `bom_rows`. NEVER invents (pin TBD->'__', blank address ->
+    no wire number, unmatched/analog point -> generic terminal, spares counted
+    separately)."""
+    elements, conductors, shapes, inputs = diagram_parts
+    slot_txt = "" if mod.slot is None else str(mod.slot)
+    db = load_module_db(mod.catalog)
+    wiring = db["_wiring_by_point"] if db else {}
+
+    # (module) BOM row for this half — same data build_folio records per card.
+    if bom_rows is not None:
+        bom_rows.append(module_bom_row(
+            order, catalog=mod.catalog,
+            vendor=(db.get("vendor") or "") if db else "",
+            description=(db.get("description") or "") if db else "",
+            rack=str(mod.rack),
+            slot="" if mod.slot is None else str(mod.slot)))
+
+    # single-column card box + header (this half is small, ≤16 channels). Header
+    # label is "-{mod.name}" so the IR's "[DO]"/"[DI]" stays visible per half.
+    pts_in_col = min(POINTS_PER_COL, mod.points)
+    y1 = ROW_Y0 - 20
+    y2 = ROW_Y0 + (max(pts_in_col, 1) - 1) * ROW_DY + 20
+    add_rect(shapes, x - BOX_LEFT, y1, x + BOX_RIGHT, y2)
+    add_text(inputs, x - BOX_LEFT, y1 - 24, f"-{mod.name}", FONT_TEXT)
+
+    for pt in points:
+        cp = pt.index + 1
+        row = (cp - 1) % POINTS_PER_COL
+        y = ROW_Y0 + row * ROW_DY
+        function = pt.description or l2e.humanize(pt.tag)
+        address = l2e.eplan_address(pt.module, pt.direction, pt.index, pt.analog)
+        w = wiring.get(pt.index, {})
+        pin = w.get("pin") or PIN_PLACEHOLDER
+        if pin.upper() == "TBD":
+            pin = PIN_PLACEHOLDER
+        point_name = w.get("name") or f"{'IN' if pt.direction == 'I' else 'OUT'}-{pt.index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {pin}", FONT_SMALL)
+        term_ids = add_terminal_element(elements, x, y, str(cp), function, ids)
+        add_text(inputs, x + 20, y - 8,
+                 f"{cp:>2}  {address:<7} {pt.tag}")
+        add_text(inputs, x + 20, y + 4, function)
+        strip_label = strip_terminal_label(pt.index)
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, function, ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
+        sym = None if pt.analog else match_symbol(symbols, pt.tag,
+                                                  pt.description, pt.direction)
+        if sym:
+            designation = next_designation(sym, designations, order) or pt.tag
+            pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,
+                                               designation, ids)
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
+            add_conductor(conductors, strip_ids[2], pin_ids[west], "")
+            sym_counts[sym["id"]] = sym_counts.get(sym["id"], 0) + 1
+            if bom_rows is not None:
+                bom_rows.append(device_bom_row(
+                    order, designation=designation, type_id=sym["id"],
+                    description=sym.get("description") or "",
+                    tag=pt.tag, address=address))
+        else:
+            num = wire_number(address, order, wire_scheme, wire_counters) or ""
+            add_conductor(conductors, term_ids[2], strip_ids[0], num)
+            if bom_rows is not None:
+                bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
+
+    # spare / RESERVA loop — every unused channel in this half's capacity.
+    mapped = {pt.index for pt in points}
+    direction = "I" if mod.kind in ("DI", "AI") else "O"
+    analog = mod.kind in ("AI", "AO")
+    for index in sorted(set(range(mod.points)) - mapped):
+        cp = index + 1
+        row = (cp - 1) % POINTS_PER_COL
+        y = ROW_Y0 + row * ROW_DY
+        point_name = f"{'IN' if direction == 'I' else 'OUT'}-{index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {PIN_PLACEHOLDER}",
+                 FONT_SMALL)
+        term_ids = add_terminal_element(elements, x, y, str(cp), "RESERVA", ids)
+        add_text(inputs, x + 20, y, "RESERVA", FONT_SMALL)
+        strip_label = strip_terminal_label(index)
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, "RESERVA", ids)
+        add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
+        add_conductor(conductors, term_ids[2], strip_ids[0], "")
+        if spare_counter is not None:
+            spare_counter[mod.name] = spare_counter.get(mod.name, 0) + 1
+        if bom_rows is not None:
+            address = l2e.eplan_address(mod, direction, index, analog)
+            bom_rows.append(spare_bom_row(order, channel=index, address=address))
+
+
+def build_split_card_folio(project: ET.Element, order: int, left, left_pts,
+                           right, right_pts, symbols: list[dict],
+                           sym_counts: dict, designations: dict,
+                           wire_scheme: str = "address",
+                           wire_counters: dict | None = None,
+                           bom_rows: list | None = None,
+                           spare_counter: dict | None = None):
+    """Render BOTH halves of ONE physical I/O card on ONE folio, side-by-side:
+    the first half (`left`, e.g. the `[DO]` half) as the LEFT card box at
+    COL_X[0], the second half (`right`, e.g. `[DI]`) as the RIGHT card box at
+    COL_X[1]. Each half is small (≤16 channels) so each is a single column drawn
+    EXACTLY like build_folio's single-column card. A single `ids` counter is
+    shared across both halves so terminal ids stay diagram-unique. BOM rows for
+    both halves are appended left-then-right in point order. The two halves share
+    the same physical name / parent / slot / catalog (verified by the caller via
+    _is_split_sibling_pair); the title states it is one physical card with both
+    halves. NEVER invents: the title is derived from real data only."""
+    phys = _SPLIT_SUFFIX_RE.sub("", left.name).strip()
+    rack = left.rack
+    slot_txt = "" if left.slot is None else str(left.slot)
+    catalog = left.catalog
+    cat_txt = f" ({catalog})" if catalog else ""
+    # the half-kind marker is DERIVED from the two halves' real kinds (e.g.
+    # 'DO+DI', or 'AI+AO' for an analog split) — never a hard-coded label that
+    # could mislabel a non-DO/DI pair.
+    kinds = "+".join(k for k in (left.kind, right.kind) if k)
+    kind_txt = f" [{kinds}]" if kinds else ""
+    title = f"R{rack}.S{slot_txt} {phys}{cat_txt}{kind_txt}"
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": title,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": "660", "displaycols": "true", "displayrows": "true",
+        "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    if wire_counters is None:
+        wire_counters = {}
+    elements = ET.SubElement(diagram, "elements")
+    conductors = ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+    ids = itertools.count(1)  # ONE counter shared across both halves
+
+    # sheet header + sub-header for the merged physical card (top-left lane).
+    db = load_module_db(catalog)
+    header = (f"{phys}   |   {catalog}   |   Rack {rack}"
+              f"  Slot {slot_txt}   |   [DO+DI]")
+    add_text(inputs, 40, 20, header, FONT_HEADER)
+    if db:
+        sub = " — ".join(s for s in (db.get("vendor"), db.get("description"),
+                                     db.get("rtb")) if s)
+        add_text(inputs, 40, 32, sub, FONT_SMALL)
+
+    parts = (elements, conductors, shapes, inputs)
+    _draw_card_half(parts, COL_X[0], order, left, left_pts, symbols,
+                    sym_counts, designations, wire_scheme, wire_counters,
+                    ids, bom_rows, spare_counter)
+    _draw_card_half(parts, COL_X[1], order, right, right_pts, symbols,
+                    sym_counts, designations, wire_scheme, wire_counters,
+                    ids, bom_rows, spare_counter)
     return diagram
 
 
@@ -2850,7 +3053,31 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # also the designation/wire-number prefix (-K101.x …), per the gated
     # decision that designations follow the printed page (DA.5).
     page = SECTION_DRAWINGS
-    for mod in io_mods:
+    # EYE-3: a physical I/O card that carries BOTH outputs and inputs (e.g. the
+    # Siemens F-DQ1500) is SPLIT in the IR into two consecutive Module objects
+    # ("… [DO]" / "… [DI]") sharing physical name / parent / slot / catalog. Draw
+    # such a sibling PAIR as ONE folio (left=first half at COL_X[0], right=second
+    # at COL_X[1]) via build_split_card_folio, advancing page/folios by ONE.
+    # NON-paired modules keep calling build_folio EXACTLY as before — so Rockwell
+    # (which never has split siblings) is byte-identical. Both halves are still
+    # appended to drawn_cards so the per-half bornero folios are unchanged.
+    i = 0
+    while i < len(io_mods):
+        mod = io_mods[i]
+        sib = io_mods[i + 1] if i + 1 < len(io_mods) else None
+        if sib is not None and _is_split_sibling_pair(mod, sib):
+            left_pts = per_module.get(mod.name) or []
+            right_pts = per_module.get(sib.name) or []
+            build_split_card_folio(project, page, mod, left_pts, sib, right_pts,
+                                   symbols, sym_counts, designations,
+                                   wire_scheme, wire_counters,
+                                   bom_rows=bom_rows, spare_counter=spare_counter)
+            drawn_cards.append((mod, left_pts))
+            drawn_cards.append((sib, right_pts))
+            page += 1
+            folios += 1
+            i += 2
+            continue
         # CHAN: every I/O card emits a folio so ALL its channels are represented
         # as box I/O points — including all-spare cards/halves (e.g. the Siemens
         # F-DQ1500 [DI] half, or a Rockwell card with no mapped tags). An empty
@@ -2864,6 +3091,7 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
         drawn_cards.append((mod, pts))
         page += 1
         folios += 1
+        i += 1
     # The remaining sections are built in DEPENDENCY order (the data they need is
     # ready only after the drawing loop) but each is stamped with its own SECTION
     # base page; reorder_diagrams_by_position re-sorts the <diagram> children into
