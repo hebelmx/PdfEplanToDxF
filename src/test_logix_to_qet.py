@@ -23,6 +23,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import logix_to_qet as q
 
 
+def _parse_match_breakdown(err):
+    """Parse the generator's stderr 'symbols' line into a per-type breakdown.
+
+    Format: ``symbols    : N matched (type N, type N, ...), M generic terminal``.
+    Returns ``(breakdown, generic)`` where ``breakdown`` is ``{type: count}`` and
+    ``generic`` is the unmatched count (or ``(None, None)`` if the line is absent).
+
+    This is the REAL false-positive guard: asserting only the matched TOTAL lets a
+    semantic mis-classification (right count, wrong type — a true false positive)
+    ship green. Asserting the exact per-type dict catches that."""
+    m = re.search(
+        r"symbols\s*:\s*\d+\s+matched\s*\(([^)]*)\)\s*,\s*(\d+)\s+generic", err)
+    if not m:
+        return None, None
+    breakdown = {}
+    for part in m.group(1).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, cnt = part.rpartition(" ")
+        breakdown[name.strip()] = int(cnt)
+    return breakdown, int(m.group(2))
+
+
 def _wadding_fixture() -> Path:
     """Resolve the WADDING_1 reference L5X. The Fixtures tree is organized by
     vendor (Fixtures/Rockwell/, Fixtures/Siemens/); fall back to the old flat
@@ -2809,6 +2833,24 @@ class WaddingRegressionTest(unittest.TestCase):
         # the new supply folio is present alongside the drawing folios
         titles = [d.get("title") for d in diagrams]
         self.assertIn("Alimentación", titles)
+
+    def test_floor_match_breakdown_by_type(self):
+        """The REAL false-positive guard: assert the EXACT per-type match
+        breakdown, not just the matched TOTAL. A semantic mis-classification (e.g.
+        a limit_switch counted as a solenoid_valve) keeps the total at 75 and
+        would ship green against `test_floor_folio_and_point_counts`; this catches
+        it. The 31 generic terminals are the unmatched remainder (106 - 75)."""
+        _, _, err = self._run()
+        breakdown, generic = _parse_match_breakdown(err)
+        self.assertIsNotNone(breakdown, f"no per-type breakdown in summary:\n{err}")
+        self.assertEqual(breakdown, {
+            "solenoid_valve": 26, "limit_switch": 17, "push_button": 8,
+            "contact_feedback": 6, "level_switch": 4, "pilot_light": 4,
+            "relay_coil": 4, "push_button_nc": 2, "selector_switch": 2,
+            "emergency_stop": 1, "proximity_sensor": 1,
+        })
+        self.assertEqual(sum(breakdown.values()), 75)  # cross-check the total
+        self.assertEqual(generic, 31)                  # 0 false positives
 
     def test_supply_folio_present_and_clean(self):
         root, _, _ = self._run()

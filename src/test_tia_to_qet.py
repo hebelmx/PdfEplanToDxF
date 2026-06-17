@@ -32,6 +32,27 @@ import plc_ir
 import logix_to_qet as q
 
 
+def _parse_match_breakdown(err):
+    """Parse the generator's stderr 'symbols' line into a per-type breakdown
+    ``({type: count}, generic)`` — the REAL false-positive guard (a semantic
+    mis-classification keeps the matched total but changes the per-type dict).
+    Returns ``(None, None)`` if the line is absent (an empty IR uses no symbols).
+    Mirrors the same helper in test_logix_to_qet (kept local so the test modules
+    stay independent, like the per-file fixture resolvers)."""
+    m = re.search(
+        r"symbols\s*:\s*\d+\s+matched\s*\(([^)]*)\)\s*,\s*(\d+)\s+generic", err)
+    if not m:
+        return None, None
+    breakdown = {}
+    for part in m.group(1).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, cnt = part.rpartition(" ")
+        breakdown[name.strip()] = int(cnt)
+    return breakdown, int(m.group(2))
+
+
 def _imv1_io_channels() -> Path:
     root = Path(__file__).resolve().parent.parent / "Fixtures" / "Siemens" / "TiaPortal"
     return root / "IMV1_QRO001_08AGO21_V15_IO_Channels.xml"
@@ -265,6 +286,20 @@ class SiemensStderrFloorTest(SiemensRenderTestBase):
         m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
         self.assertIsNotNone(m, f"no spare line:\n{err}")
         self.assertEqual(int(m.group(1)), 40)
+
+    def test_floor_match_breakdown_by_type(self):
+        """The REAL false-positive guard for the Siemens pipeline: assert the
+        EXACT per-type match breakdown, not just the matched total. The IMV1
+        vocabulary matches only `push_button` today (never-invent: the other tags
+        have no confident symbol) → 2 matched, 46 generic (48 drawn - 2). A future
+        change that mis-classifies a Siemens tag onto a Rockwell symbol turns this
+        red rather than shipping a wrong-type match silently."""
+        _, err = self._run()
+        breakdown, generic = _parse_match_breakdown(err)
+        self.assertIsNotNone(breakdown, f"no per-type breakdown in summary:\n{err}")
+        self.assertEqual(breakdown, {"push_button": 2})
+        self.assertEqual(sum(breakdown.values()), 2)
+        self.assertEqual(generic, 46)   # 48 drawn - 2 matched, 0 false positives
 
     def test_rockwell_summary_lines_omitted(self):
         _, err = self._run()
