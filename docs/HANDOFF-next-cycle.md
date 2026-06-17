@@ -1,4 +1,4 @@
-# Handoff — Phase 2 (Siemens TIA path + output fixes + ALIM MERGED to `main` → next: S7-1500, then S7-300)
+# Handoff — Phase 2 (TIA + fixes + ALIM on `main`; ⚠️ BIG REFRAME: draw ALL distributed I/O → next: data-layer build)
 
 > Self-contained handoff so a **fresh agent in a new session** can resume with no prior context.
 > Updated 2026-06-17 (supersedes the "feature-complete on a branch, pending eyeball + merge gate"
@@ -17,12 +17,20 @@
     from a sibling `*.aml` if omitted).
   - Tests: `src/test_logix_to_qet.py` + `src/test_tia_front_end.py` + `src/test_tia_to_qet.py` +
     `src/test_tia_aml.py` = **397 tests** (stdlib unittest, 1 pre-existing skip).
-- **State: Epic 4 (Siemens TIA path), the E5 output-fixes cycle, AND ALIM (Siemens power one-line)
-  are ALL MERGED to `main` @ `56c6de3` (== `origin/main`, pushed).** No open feature branch; working
-  tree clean (only untracked `assets/` logos + `tools/`). Suite **397 green**; Rockwell floor
-  11/106/75/0/78/35 byte-equivalent; Siemens render **23 folios** (with `--power-config`).
-- **The remaining work is all sequenced and tracked in `docs/TIA-tracker.md`.** ALIM is DONE; the
-  next real feature is the **S7-1500 path** — see PENDING below.
+- **State of `main` @ `5b7ebdb`** (== `origin/main`): Epic 4 (Siemens TIA path) + E5 output fixes +
+  ALIM (Siemens power one-line) + the issue-#2 close are ALL merged. Suite **397 green**; Rockwell
+  floor 11/106/75/0/78/35 byte-equivalent; Siemens render **23 folios** (with `--power-config`).
+- **⚠️ OPEN BRANCH `feat/e6-s71500-descriptions` @ `137b5b1`** (pushed, **NOT merged**): the S7-1500
+  FOUNDATION (`bc0e5b0`, suite 397→**409**) + the distributed-I/O epic plan (3 doc commits). Holds:
+  per-station tag-table coverage selection (→ real descriptions, 47/48 on Q100), symbol match +
+  non-device suppression (VS_/'Vsupply'/'Permission to' → generic; 19 confident matches),
+  `PlcProject.controller_cpu` seam. **Merge deferred** — see the reframe.
+- **⚠️ THE BIG REFRAME (Abel, 2026-06-17) — read memory `siemens-distributed-io-reframe` FIRST.**
+  The TIA path was drawing only ONE station (`Q100`, ~14% of the I/O). A modern S7-1500 has local I/O
+  at the CPU + many DISTRIBUTED drops. The `.aml` actually holds the WHOLE plant: **9 stations / 75
+  I/O modules / 636 channels** (Q100 1512SP-local @ .10 + Q200–Q800 IM155-6 ET200SP drops @ .20–.80 +
+  the 1214C @ .95). **All data is in hand** (`.aml` modules+addresses + per-PLC tag tables); the full
+  set is reconstructable — the next build draws it all. See PENDING + `docs/TIA-tracker.md` (EPIC E6).
 
 ## How we got to `56c6de3` (three merges landed 2026-06-17)
 - **`56c6de3` — Merge `feat/e5-alim`** (3 commits): config-driven Siemens power one-line
@@ -79,10 +87,23 @@
    To extend later: it's config-driven, so real ratings / a transformer / a UPS are just JSON fields in
    the per-project `--power-config` (or `docs/examples/power_config.example.json`) — `build_power_folio`
    already renders optional transformer/ups rows when present; **never invent** values not supplied.
-**1. S7-1500 path** — mostly present already: its I/O is in `IO_Channels.xml` + `PLCTagsS71500.xlsx`
-   (which HAS rich English comments — a real description source, unlike the empty 1200 table), and its
-   CPU (1512SP F-1) is in the `.aml`. Stand up a 1500 fixture/target and confirm the existing TIA path
-   covers it; the descriptions from the 1500 tag table are the new lever (1200 had none).
+**1. ⭐ DISTRIBUTED-I/O BUILD (EPIC E6) — the next real work. Branch `feat/e6-s71500-descriptions`.**
+   Draw ALL 9 stations (local + distributed), each its OWN section, sourced from the full `.aml` +
+   per-PLC tag tables. **Design is LOCKED + data-validated** (memory `siemens-distributed-io-reframe`,
+   tracker EPIC E6):
+   - **Section block per station**; **heaviest PLC first** (1512SP's 8 stations: Q100-local then
+     Q200–Q800 drops; THEN the 1214C's station). **Ownership is DATA-DRIVEN** (a station's `%`addresses
+     resolve in exactly one PLC's tag table — Q100–Q800 → S71500, .95 → S71200; zero overlap, verified)
+     — never guess; ask the user if a station ever splits across both tables. General + extendable.
+   - **Build chunks:** (a) extend `tia_aml.parse_aml` to carry per-module address ranges
+     (`StartAddress`/`Length`/`IoType` — already in the `.aml`). (b) Build the multi-station IR (all 9
+     stations; ownership via tag-table coverage; **join by ADDRESS RANGE** — take the tag-table
+     `%`addresses that fall inside each module's `.aml` range → real mapped channels, the rest of the
+     capacity = RESERVA; this **sidesteps F-module PROFIsafe per-channel addressing**, which is NOT a
+     clean byte.bit). data only, fully tested, no rendering. (c) Renderer: section-block-per-station
+     folios — the section/numbering scheme + a **desktop eyeball gate** (Abel iterates visually).
+   - The E6 foundation (tag-coverage selection + descriptions + symbol suppression + `controller_cpu`)
+     is the reusable per-station join this builds on.
 **2. S7-300 path** — spike was GO; fixture `Fixtures/Siemens/S7300/` in hand. Schema (`.asc` symbol
    table + `.cfg` HW config, join on byte address; masked `?` order-# digits are wildcards — keep) is
    in memory `siemens-import-findings`. Build a `build_s7300_project()` front-end → same IR shape.
@@ -177,25 +198,33 @@ keyword `source_format` (`"L5X"` Rockwell / `"TIA"` Siemens) for the cover contr
 
 ## Kickoff prompt — paste into the new session
 ```
-Continue the PLC → mini-EPLAN product, Phase 2. main @ 56c6de3 (== origin) holds the MERGED Siemens TIA path (Epic 4) + E5 output fixes + ALIM
-(Siemens power one-line). 397 tests green (1 skip); Rockwell WADDING_1 floor 11/106/75/0, 78 RESERVA,
-35 folios, byte-equivalent to pre-TIA main; Siemens render 23 folios (with --power-config) / 35
-PROFINET nodes, cover "CONTROLADOR (TIA)". No open feature branch.
+Continue the PLC → mini-EPLAN product, Phase 2. main @ 5b7ebdb (== origin) holds the MERGED Siemens
+TIA path (Epic 4) + E5 output fixes + ALIM + issue-#2 close. 397 tests green (1 skip); Rockwell
+WADDING_1 floor 11/106/75/0, 78 RESERVA, 35 folios, byte-equivalent; Siemens render 23 folios (with
+--power-config). OPEN BRANCH feat/e6-s71500-descriptions @ 137b5b1 (pushed, NOT merged): the S7-1500
+FOUNDATION (suite 409) + the distributed-I/O epic plan.
 
-READ FIRST: docs/HANDOFF-next-cycle.md (this file), docs/TIA-tracker.md (current), docs/planning/*,
-memory tia-import-findings + siemens-import-findings + never-overwrite-working-qet + qet-preview-fidelity.
-(GitHub issue #2 is CLOSED; low-pri nits live in issue #3.)
+⚠️ BIG REFRAME (Abel) — the TIA path drew only ONE station (~14%). The next work is the DISTRIBUTED-I/O
+build: draw all 9 stations / 75 modules / 636 channels from the FULL .aml, each its own section.
 
-DO NEXT (priority order): (1) S7-1500 path (I/O in IO_Channels + PLCTagsS71500.xlsx rich English
-comments; CPU 1512SP in .aml) -> same IR shape. (2) S7-300 path (fixture Fixtures/Siemens/S7300/,
-schema in memory siemens-import-findings). (3) Optionally pick up the low-pri nits in issue #3. ALIM is DONE
-(config-driven; extend via --power-config JSON, never invent).
+READ FIRST: memory siemens-distributed-io-reframe (THE reframe + locked design), then
+docs/HANDOFF-next-cycle.md (this file) + docs/TIA-tracker.md EPIC E6 (current), docs/planning/*,
+memory tia-import-findings + alim-test-power-config + never-overwrite-working-qet + qet-preview-fidelity.
+(GitHub issue #2 CLOSED; low-pri nits in issue #3.)
+
+DO NEXT (on branch feat/e6-s71500-descriptions): the DISTRIBUTED-I/O build — (a) extend
+tia_aml.parse_aml for per-module address ranges; (b) build the multi-station IR (all 9 stations;
+ownership by tag-table coverage [Q100-Q800→S71500, .95→S71200, never guess/ask if ambiguous]; join by
+ADDRESS RANGE — tag-table %addresses inside each module's .aml range = mapped, rest = RESERVA; this
+avoids F-module PROFIsafe per-channel addressing; order heaviest-PLC-first); data-only + tested. THEN
+(c) render section-block-per-station with a desktop eyeball gate. THEN S7-300; issue-#3 nits.
 
 HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet; never invent (read the real datum or blank);
 stdlib only; never git add Fixtures/; SANITIZE all GitHub content; re-derive every number from ground
-truth (stderr floors + 397 tests + parse the .qet + byte-equiv diff); read review-lens findings yourself;
-one commit per item, feature branch → Abel's merge gate. Eyeball = regen _eyeball_*.qet + launch QET
-on the local file (matplotlib previewer can't draw box shapes).
+truth (stderr floors + the full suite + parse the .qet + byte-equiv diff); don't trust a subagent's
+"it's real" — re-verify (the S7-1500 symbol-match false positives were caught this way); one commit per
+item, feature branch → Abel's merge gate. Eyeball = regen _eyeball_*.qet + launch QET via
+"C:\Program Files\QElectroTech\bin\qelectrotech.exe" (matplotlib previewer can't draw box shapes).
 ```
 ---
 *Overwrite this file at the next milestone (after ALIM lands, or when the S7-1500/300 path ships).*
