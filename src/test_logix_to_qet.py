@@ -1195,9 +1195,10 @@ class BuildFolioPowerRenderTest(unittest.TestCase):
         rows = [t for t in self._texts(d)
                 if t and (t.startswith("L1") or t.startswith("N"))]
         self.assertEqual(len(set(rows)), len(rows))     # all distinct
-        # the power table draws NO conductor; the only conductor on this single-
-        # generic-point card is the inline strip segment (the bornero feature).
-        self.assertEqual(len(d.find("conductors").findall("conductor")), 1)
+        # the power table draws NO conductor; the conductors on this 16-ch card
+        # are the one generic point's card->strip segment plus, per CHAN, the 15
+        # spare stubs' card->strip segments = 16.
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 1 + 15)
 
     def test_single_group_card_has_no_group_suffix(self):
         # IA16 is a single L1/N group -> no (G1) suffix (suffix only when >1)
@@ -1773,8 +1774,9 @@ class TopologyFolioTest(unittest.TestCase):
 
 class TopologyWaddingRegressionTest(unittest.TestCase):
     """E2.1 end-to-end: the topology folio is added at order 2 from the real
-    fixture WITHOUT moving the floor (10 drawings / 106 drawn / 75 matched),
-    bringing the total folio count to 33; the drawings stay at 101."""
+    fixture WITHOUT moving the matched floor (106 drawn / 75 matched); CHAN
+    brings the drawings to 11 (all-spare MOD_ENT_3 now drawn) and the total folio
+    count to 35; the drawings stay at 101."""
 
     FIXTURE = _wadding_fixture()
 
@@ -1807,8 +1809,9 @@ class TopologyWaddingRegressionTest(unittest.TestCase):
         self.assertEqual(t.get("titleblocktemplate"), "exxerpro")
         for prop in t.find("properties").findall("property"):
             self.assertNotIn("%{", prop.text or "")
-        # total folio count bumped to 33 (was 32 before E2.1)
-        self.assertEqual(len(diagrams), 33)
+        # total folio count is 35 (CHAN: the all-spare MOD_ENT_3 now adds its own
+        # drawing folio AND a bornero folio; was 33 before CHAN).
+        self.assertEqual(len(diagrams), 35)
 
     def test_floor_held_and_drawings_still_101(self):
         root, _, err = self._run()
@@ -1818,10 +1821,10 @@ class TopologyWaddingRegressionTest(unittest.TestCase):
         self.assertEqual(int(re.search(r"symbols\s*:\s*(\d+)\s+matched",
                                        err).group(1)), 75)
         self.assertRegex(err, r"31\s+generic terminal")     # 0 false positives
-        # 10 drawing folios, first at order 101 (unchanged)
+        # CHAN: 11 drawing folios (all-spare MOD_ENT_3 now drawn), first at 101.
         drawing = [d for d in root.findall("diagram")
                    if re.match(r"^R\d", d.get("title") or "")]
-        self.assertEqual(len(drawing), 10)
+        self.assertEqual(len(drawing), 11)
         self.assertEqual(sorted(int(d.get("order")) for d in drawing)[0], 101)
 
     def test_topology_full_extent_inside_frame_on_real_fixture(self):
@@ -2347,11 +2350,12 @@ class ReorderDiagramsByPositionTest(unittest.TestCase):
 
 
 class WaddingRegressionTest(unittest.TestCase):
-    """End-to-end floor: the WADDING_1 fixture must still produce 10 drawing
-    folios / 106 points / 75 matched / 0 false positives, with the summary +
-    changelog + NEW supply folio present, the title block on every folio, no raw
-    %{token} leaks, and the supply folio touching no element/conductor. Skipped
-    if the fixture is absent (public-repo hygiene: it is never committed)."""
+    """End-to-end floor: the WADDING_1 fixture produces 11 drawing folios (CHAN:
+    every I/O card drawn, incl. the all-spare MOD_ENT_3) / 106 points / 75 matched
+    / 0 false positives, with the summary + changelog + NEW supply folio present,
+    the title block on every folio, no raw %{token} leaks, and the supply folio
+    touching no element/conductor. Skipped if the fixture is absent (public-repo
+    hygiene: it is never committed)."""
 
     FIXTURE = _wadding_fixture()
 
@@ -2372,12 +2376,12 @@ class WaddingRegressionTest(unittest.TestCase):
     def test_floor_folio_and_point_counts(self):
         root, _, err = self._run()
         diagrams = root.findall("diagram")
-        # 10 drawing folios (one per I/O card with mapped tags). Match the rack
-        # digit ("R1"..) so the new topology folio ("Red de comunicaciones") is
-        # NOT counted as a drawing.
+        # CHAN: 11 drawing folios (every I/O card drawn, incl. all-spare
+        # MOD_ENT_3). Match the rack digit ("R1"..) so the topology folio
+        # ("Red de comunicaciones") is NOT counted as a drawing.
         drawing = [d for d in diagrams
                    if re.match(r"^R\d", d.get("title", ""))]
-        self.assertEqual(len(drawing), 10)
+        self.assertEqual(len(drawing), 11)
         # Mechanically enforce the WADDING_1 floor from main()'s own summary so a
         # future change that drops symbol matches (or adds a false positive) turns
         # this test red. Exact equality on the match count guards BOTH directions:
@@ -2557,9 +2561,11 @@ class WaddingRegressionTest(unittest.TestCase):
         root, _, _ = self._run()
         drawing = [d for d in root.findall("diagram")
                    if re.match(r"^R\d", d.get("title") or "")]
-        self.assertEqual(len(drawing), 10)
+        # CHAN: every I/O card now emits a folio (incl. the all-spare MOD_ENT_3),
+        # so the drawing band is 11 cards on pages 101..111.
+        self.assertEqual(len(drawing), 11)
         pages = sorted(int(d.get("order")) for d in drawing)
-        self.assertEqual(pages, list(range(101, 111)))   # 101..110
+        self.assertEqual(pages, list(range(101, 112)))   # 101..111
         seen_prefixes = set()
         for d in drawing:
             page = d.get("order")
@@ -2570,7 +2576,7 @@ class WaddingRegressionTest(unittest.TestCase):
                 seen_prefixes.add(prefix)
         # at least some page-prefixed designations actually exist (sanity)
         self.assertTrue(seen_prefixes)
-        self.assertTrue(seen_prefixes.issubset({str(p) for p in range(101, 111)}))
+        self.assertTrue(seen_prefixes.issubset({str(p) for p in range(101, 112)}))
 
     def test_structural_invariants_hold(self):
         root, _, _ = self._run()
@@ -2641,9 +2647,11 @@ class BuildFolioStripInlineTest(unittest.TestCase):
                                  description="", analog=False)
         d = self._diagram([mod_pt])
         self.assertIn("-X1:0", self._texts(d))
-        # matched point -> field conductor BROKEN into two segments
+        # matched point -> field conductor BROKEN into two segments. CHAN: the
+        # 15 unused channels of this 16-ch card now each draw a spare stub with
+        # ONE card->strip conductor, so the diagram total is 2 + 15 = 17.
         conds = d.find("conductors").findall("conductor")
-        self.assertEqual(len(conds), 2)
+        self.assertEqual(len(conds), 2 + 15)
 
     def test_generic_point_gets_strip_label_and_single_conductor(self):
         # an unmatched tag stays generic: strip terminal -X1:0 + ONE conductor
@@ -2652,8 +2660,9 @@ class BuildFolioStripInlineTest(unittest.TestCase):
                              direction="I", description="", analog=False)
         d = self._diagram([pt])
         self.assertIn("-X1:0", self._texts(d))
+        # CHAN: 1 (this generic point's card->strip) + 15 (spare stubs) = 16.
         conds = d.find("conductors").findall("conductor")
-        self.assertEqual(len(conds), 1)
+        self.assertEqual(len(conds), 1 + 15)
 
     def test_channel_label_tracks_point_index_for_both_kinds(self):
         pts = [
@@ -2686,11 +2695,12 @@ class BuildFolioStripInlineTest(unittest.TestCase):
         d = self._diagram([pt])
         types = [el.get("type")
                  for el in d.find("elements").findall("element")]
-        # the I/O terminal + the strip terminal + every SPARE reserve terminal
-        # are all borne_2 (T3.2 introduces NO new element type). One mapped point
-        # on a 16-channel card -> card(1) + strip(1) + spares(15) = 17 borne_2,
-        # and NO other element type (the generic point places no device symbol).
-        self.assertEqual(types.count(q.TERMINAL_TYPE), 17)
+        # the I/O terminal + the strip terminal + every SPARE stub are all
+        # borne_2 (CHAN introduces NO new element type). One mapped generic point
+        # on a 16-channel card -> card(1) + strip(1); each of the 15 spares now
+        # also draws card(1) + strip(1) = 30; total 2 + 30 = 32 borne_2, and NO
+        # other element type (the generic point places no device symbol).
+        self.assertEqual(types.count(q.TERMINAL_TYPE), 32)
         self.assertEqual(set(types), {q.TERMINAL_TYPE})
 
     def test_sequential_scheme_numbers_generic_points_too(self):
@@ -2819,10 +2829,19 @@ class BorneroFolioTest(unittest.TestCase):
         self.assertEqual(q.build_bornero_folios(project, 1, []), 0)
         self.assertEqual(len(project.findall("diagram")), 0)
 
-    def test_card_with_no_points_is_skipped(self):
+    def test_all_spare_card_still_gets_a_bornero(self):
+        # CHAN: an all-spare card (no mapped points) now emits a bornero too — a
+        # full strip of RESERVA rows from its capacity — mirroring its drawing
+        # folio so the physical strip is represented for the panel builder.
         project = ET.Element("project")
         n = q.build_bornero_folios(project, 1, [self._card("A", [])])
-        self.assertEqual(n, 0)
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        # all 16 channels present as RESERVA rows + their -X1:<ch> labels
+        self.assertEqual(texts.count("RESERVA"), 16)
+        for ch in range(16):
+            self.assertIn(f"-X1:{ch}", texts)
 
     def test_bornero_folio_gets_titleblock_no_raw_tokens(self):
         project = ET.Element("project")
@@ -2841,7 +2860,8 @@ class BorneroFolioTest(unittest.TestCase):
 class WaddingBorneroFloorTest(unittest.TestCase):
     """Floor: the bornero feature must NOT regress the WADDING_1 numbers. Parses
     main()'s own stderr summary and asserts the literal floor (106 points / 75
-    matched) plus the new bornero folio line and 10 untouched drawing folios."""
+    matched) plus the bornero folio line and the CHAN drawing folios (11: every
+    I/O card drawn, incl. the all-spare MOD_ENT_3)."""
 
     FIXTURE = _wadding_fixture()
 
@@ -2864,21 +2884,22 @@ class WaddingBorneroFloorTest(unittest.TestCase):
         # literal floor from the summary
         self.assertRegex(err, r"points\s*:\s*106\s+drawn")
         self.assertRegex(err, r"symbols\s*:\s*75\s+matched")
-        # exactly 10 drawing folios (one per I/O card with mapped tags); match
-        # the rack digit so the topology folio is not swept in.
+        # CHAN: 11 drawing folios (every I/O card drawn, incl. all-spare
+        # MOD_ENT_3); match the rack digit so the topology folio is not swept in.
         drawing = [d for d in root.findall("diagram")
                    if re.match(r"^R\d", d.get("title", ""))]
-        self.assertEqual(len(drawing), 10)
-        # the bornero summary line is honest about what it drew. T3.2: borneros
-        # now list mapped + RESERVA terminals in channel order, so a wide card
-        # paginates — REM_IN_1 (32-channel) needs a second sheet -> 11 folios for
-        # the 10 cards (NOT 10). The floor (106/75) above is what must not move.
+        self.assertEqual(len(drawing), 11)
+        # the bornero summary line is honest about what it drew. Borneros list
+        # mapped + RESERVA terminals in channel order, so a wide card paginates —
+        # REM_IN_1 (32-channel) needs a second sheet, and CHAN adds the all-spare
+        # MOD_ENT_3's bornero -> 12 folios for the 11 cards. The floor (106/75)
+        # above is what must not move.
         m = re.search(r"bornero\s*:\s*(\d+)\s+terminal-strip", err)
         self.assertIsNotNone(m, f"no bornero line in summary:\n{err}")
-        self.assertEqual(int(m.group(1)), 11)
+        self.assertEqual(int(m.group(1)), 12)
         borneros = [d for d in root.findall("diagram")
                     if (d.get("title") or "").startswith("Bornero")]
-        self.assertEqual(len(borneros), 11)
+        self.assertEqual(len(borneros), 12)
         # exactly one card paginated (its sheets carry an (n/total) suffix)
         paged = [d for d in borneros if "(2/" in (d.get("title") or "")]
         self.assertEqual(len(paged), 1)
@@ -3123,8 +3144,8 @@ class SparePointRenderingTest(unittest.TestCase):
         return [i.get("text") for i in d.find("inputs").findall("input")]
 
     def test_spare_terminal_drawn_for_each_empty_channel(self):
-        # one mapped point on a 16-channel card -> 15 spare reserve terminals,
-        # each labelled -X1:<channel> with a RESERVA word, NO device symbol.
+        # one mapped point on a 16-channel card -> 15 spare RESERVA stubs, each
+        # labelled -X1:<channel> with a RESERVA word, NO device symbol.
         pt = SimpleNamespace(module=None, index=0, tag="ZZZ_NOMATCH",
                              direction="I", description="", analog=False)
         d, bom_rows, spare_counter, _ = self._build([pt])
@@ -3132,10 +3153,12 @@ class SparePointRenderingTest(unittest.TestCase):
         texts = self._texts(d)
         for ch in range(1, 16):
             self.assertIn(f"-X1:{ch}", texts)
+        # CHAN: each spare now draws a full box I/O point (RESERVA marker in both
+        # the row text and the strip function) plus a generic IN-n point name.
         self.assertEqual(texts.count("RESERVA"), 15)
-        # spares add terminals but NO conductors (a spare carries no field wire):
-        # only the one mapped generic point's single card->strip conductor.
-        self.assertEqual(len(d.find("conductors").findall("conductor")), 1)
+        # CHAN: each spare now carries a card->strip conductor too, mirroring the
+        # mapped point: 1 (mapped generic) + 15 (spares) = 16.
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 16)
 
     def test_spares_never_inflate_the_floor(self):
         # spare_counter is its OWN counter — sym_counts and the points list are
@@ -3158,33 +3181,56 @@ class SparePointRenderingTest(unittest.TestCase):
         self.assertEqual(spare_counter["CARD"], 15)
 
     def test_spare_full_extent_inside_card_box_vertical_band(self):
-        # POSITIONAL: a spare reserve terminal's FULL pin extent (the borne_2
-        # pins span x..x+10, y±10 about the slot hotspot) must stay inside the
-        # card box's VERTICAL band — the box is sized to FULL capacity, so even
-        # the LAST channel's spare sits within it. Asserted on the real pin
-        # extent (not just the hotspot) against the real box rectangle, for the
-        # tightest case: a fully-empty 16-channel card (box spans all rows).
+        # POSITIONAL: CHAN draws each spare as a FULL box I/O point — a card-side
+        # I/O terminal at the column x AND a strip terminal at x+STRIP_X_OFF, each
+        # joined by a card->strip conductor (mirroring a mapped point). Assert the
+        # FULL pin extent (borne_2 pins span x..x+10, y±10 about the slot hotspot)
+        # of EVERY spare element stays inside the page frame: vertically inside the
+        # full-capacity card box's y band, and horizontally inside the sheet
+        # (0..frame width). Tightest case: a fully-empty 16-channel card.
         d, _, spare_counter, mod = self._build([])  # no mapped points -> 16 spares
         self.assertEqual(spare_counter["CARD"], 16)
-        # the card box rectangle (single column, full capacity)
         x = q.COL_X[0]
         y1 = q.ROW_Y0 - 20
         y2 = q.ROW_Y0 + (mod.points - 1) * q.ROW_DY + 20
-        # locate the spare terminal elements and check every pin's absolute y
+        frame_w = q.POWER_TABLE_RIGHT      # page-frame-aligned right edge (1010)
         terms = d.find("elements").findall("element")
-        self.assertEqual(len(terms), 16)            # 16 spares, nothing else
+        # 16 spares x (card terminal + strip terminal) = 32 elements, all borne_2
+        self.assertEqual(len(terms), 32)
+        self.assertEqual({el.get("type") for el in terms}, {q.TERMINAL_TYPE})
+        card_xs, strip_xs = set(), set()
         for el in terms:
             ex, ey = int(el.get("x")), int(el.get("y"))
             for term in el.findall("terminals/terminal"):
                 py = ey + int(term.get("y"))
+                px = ex + int(term.get("x"))
                 self.assertGreaterEqual(py, y1,
                     f"spare pin y={py} escapes box top {y1}")
                 self.assertLessEqual(py, y2,
                     f"spare pin y={py} escapes box bottom {y2}")
-            # and the spare sits in the SAME strip lane as the mapped strip
-            # terminals (to the RIGHT of the card box, never overlapping it).
-            self.assertEqual(ex, x + q.STRIP_X_OFF)
-            self.assertGreater(ex, x + q.BOX_RIGHT)
+                # full horizontal extent stays on-sheet, inside the frame
+                self.assertGreaterEqual(px, 0, f"spare pin x={px} off-sheet")
+                self.assertLessEqual(px, frame_w,
+                    f"spare pin x={px} escapes frame {frame_w}")
+            if ex == x:
+                card_xs.add(ex)            # card-side I/O stub at the column x
+            else:
+                strip_xs.add(ex)
+        # exactly the two lanes: the card I/O stub at x, the strip at x+STRIP_X_OFF
+        self.assertEqual(card_xs, {x})
+        self.assertEqual(strip_xs, {x + q.STRIP_X_OFF})
+        # and 16 of each
+        card = [el for el in terms if int(el.get("x")) == x]
+        strip = [el for el in terms if int(el.get("x")) == x + q.STRIP_X_OFF]
+        self.assertEqual(len(card), 16)
+        self.assertEqual(len(strip), 16)
+        # every spare's card->strip conductor resolves to terminals on the diagram
+        ids = {t.get("id") for t in d.find("elements").iter("terminal")}
+        conds = d.find("conductors").findall("conductor")
+        self.assertEqual(len(conds), 16)   # one per spare, no field wire beyond
+        for c in conds:
+            self.assertIn(c.get("terminal1"), ids)
+            self.assertIn(c.get("terminal2"), ids)
 
     def test_spare_bom_rows_have_no_invented_identity(self):
         # GUARDRAIL: every spare BOM row is category 'spare' with designation AND
@@ -3232,10 +3278,11 @@ class SparePointRenderingTest(unittest.TestCase):
 
 
 class WaddingSpareFloorTest(unittest.TestCase):
-    """T3.2 floor + spare totals end-to-end on the WADDING_1 fixture: the real
-    matched/mapped floor (106 drawn / 75 matched / 0 FP / 10 drawing folios)
-    must NOT move, and the SEPARATE spare counter must read 62 (capacity-mapped
-    summed over the 10 cards), with REM_AN_IN_1 contributing 14."""
+    """CHAN floor + spare totals end-to-end on the WADDING_1 fixture: the real
+    matched/mapped floor (106 drawn / 75 matched / 0 FP) must NOT move; CHAN now
+    draws EVERY I/O card (incl. the all-spare MOD_ENT_3) so there are 11 drawing
+    folios and the SEPARATE spare counter reads 78 (capacity-mapped summed over
+    all 11 cards: the old 62 + MOD_ENT_3's 16), with REM_AN_IN_1 contributing 14."""
 
     FIXTURE = _wadding_fixture()
 
@@ -3261,15 +3308,17 @@ class WaddingSpareFloorTest(unittest.TestCase):
         self.assertRegex(err, r"31\s+generic terminal")   # 0 false positives
         drawing = [d for d in root.findall("diagram")
                    if re.match(r"^R\d", d.get("title") or "")]
-        self.assertEqual(len(drawing), 10)                 # 10 drawing folios
-        # the SEPARATE spare counter: 62 reserves over 10 cards
+        self.assertEqual(len(drawing), 11)                 # CHAN: 11 drawing folios
+        # the SEPARATE spare counter: 78 reserves over 11 cards (CHAN)
         m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
         self.assertIsNotNone(m, f"no spare line in summary:\n{err}")
-        self.assertEqual(int(m.group(1)), 62)
+        self.assertEqual(int(m.group(1)), 78)
 
     def test_spare_count_matches_capacity_minus_mapped(self):
         # compute the expected spare total straight from the I/O map and assert
-        # the per-card REM_AN_IN_1 = 14 plus the project total = 62.
+        # the per-card REM_AN_IN_1 = 14 plus the project total = 78. CHAN: ALL
+        # cards are now drawn (no skip of all-spare cards), so the all-spare
+        # MOD_ENT_3 (16 channels) contributes its full capacity to the total.
         import logix_to_eplan_csv as l2e
         controller, modules, ctrl_tags, program_tags = l2e.load_l5x(
             str(self.FIXTURE))
@@ -3285,20 +3334,18 @@ class WaddingSpareFloorTest(unittest.TestCase):
             per.setdefault(pt.module.name, []).append(pt)
         total, an_in_1 = 0, None
         for m in io_mods:
-            pts = per.get(m.name)
-            if not pts:
-                continue
+            pts = per.get(m.name) or []   # CHAN: all-spare cards are drawn too
             spare = m.points - len({p.index for p in pts})
             total += spare
             if m.name == "REM_AN_IN_1":
                 an_in_1 = spare
         self.assertEqual(an_in_1, 14)
-        self.assertEqual(total, 62)
+        self.assertEqual(total, 78)
 
     def test_spare_rows_present_in_bom_and_summary(self):
         root, err = self._run()
         # the BOM breakdown line counts spares as their own category
-        self.assertRegex(err, r"bom\s*:\s*\d+\s+rows.*\b62 spare\b")
+        self.assertRegex(err, r"bom\s*:\s*\d+\s+rows.*\b78 spare\b")
         # a spare row reaches the summary (BOM / device index) folios as a
         # RESERVA line — confirm RESERVA text appears on a BOM folio.
         bom_folios = [d for d in root.findall("diagram")

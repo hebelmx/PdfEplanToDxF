@@ -12,11 +12,17 @@
 - **CLI = a SEPARATE command:** new `src/tia_to_qet.py` for the Siemens path, sharing the
   renderer + the `plc_ir.PlcProject` seam. (`logix_to_qet.py` stays Rockwell/`.L5X`.)
 - **F-DQ1500 [DI] all-spare half → DRAW a RESERVA-only folio** (Abel, 2026-06-16, post-eyeball
-  gate). All 88 channels must be represented → 40 RESERVA drawn (not 36); the 4 unused safety-
-  input spares get a RESERVA-only I/O folio. Matches the Tier-3 "spares are counted &
-  represented" philosophy. New work item **TIA-2b** below. (Overrides the Rockwell "folio only
-  for cards with mapped tags" rule FOR all-spare halves of split direction-cards on the Siemens
-  path.)
+  gate). All 88 channels must be represented. **SUBSUMED by the CHAN decision below.**
+- **CHAN: draw ALL channels as card-box I/O points — BOTH vendors** (Abel, 2026-06-16, post-PDF
+  eyeball). Today the card box draws a left-side I/O stub only for MAPPED channels; spares appear
+  only as strip terminals (`X1:n RESERVA`) on the right. Abel wants every channel of a DI16/DQ16
+  drawn as a box I/O point, unused ones as RESERVA stubs, so the module shows its full capacity.
+  Applies to **Rockwell too** → **RE-BASELINES the WADDING_1 floor** (drawn/RESERVA/folio counts
+  rise; **matched MUST stay 75, false positives MUST stay 0** — spares are never matched). Re-eyeball
+  of the Rockwell set required before locking the new floor. Subsumes the F-DQ1500 [DI] item.
+- **Roadmap = recommended sequence** (Abel, 2026-06-16): CHAN fix → Network/topology folio
+  (PROFINET from `.aml`) → Rack layout + drawing index → Alimentación/power (config-driven; Abel
+  supplies panel power data when we reach it). Eyeball gate after each.
 
 ## Ground-truth fixture floor (IMV1 1200 station — verified by orchestrator from IO_Channels.xml)
 Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 spare**:
@@ -30,7 +36,10 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 | DQ10_11   | 16 | 8      | 8     | %Q10.x / %Q11.x   | DQ |
 
 ## Non-negotiable guardrails (every item)
-- **Rockwell WADDING_1 floor must NOT regress: 10 folios / 106 / 75 / 0**, 62 RESERVA, 33 folios.
+- **Rockwell WADDING_1 floor (RE-BASELINED @ CHAN, 2026-06-16, Abel-eyeballed): 11 drawing folios
+  / 106 drawn / 75 matched / 0 false positives, 78 RESERVA, 35 folios total.** (Was 10/106/75/0,
+  62 RESERVA, 33 folios before CHAN drew all channels incl. all-spare cards.) matched=75 + FP=0 are
+  the invariants that must NEVER move; drawn=106 (mapped only) also holds.
 - Real absolute Siemens addresses used directly — **never synthesize/invent** an address.
 - Empty `<Tag>` = spare (RESERVA), mirroring the Rockwell spare semantics.
 - stdlib only (zipfile+xml.etree for xlsx); never `git add` under `Fixtures/`.
@@ -66,11 +75,29 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       an S7-1500-class F-CPU** — both `CPU 1214C` and the 1512SP F-1 exist in the file. So our
       "1200 floor machine" is really a 1500-class ET200SP system. Handoff line "1500 hardware not
       in the .aml" is wrong for this station.
-- [ ] **TIA-2b** — RESERVA-only folio for all-spare halves of split direction-cards (Abel
-      decision above). Emit an I/O folio for the F-DQ1500 `[DI]` all-spare half so all 88 channels
-      are represented → **40 RESERVA** drawn (was 36). New Siemens floor: all-spare card folios
-      emitted; folio count grows by the all-spare folio(s) — derive exact count from ground truth.
-      Queued BEHIND TIA-3 (overlaps `render_project`/`tia_to_qet.py`; don't run concurrently).
+- [x] **CHAN** — draw ALL channels as card-box I/O points, BOTH vendors (decision above).
+      Spare loop (`logix_to_qet.py` build_folio) now draws each unused channel as a FULL box I/O
+      point: card-side I/O terminal at the column x (generic name IN-n/OUT-n per card direction,
+      pin `__`, no addr/desc, NO device symbol — borne_2 generic terminal) + a card->strip conductor
+      (no wire number, no address — never invented) + the RESERVA strip terminal. The drawing-folio
+      gate in `render_project` no longer skips cards with no mapped points, so ALL-SPARE cards/halves
+      emit a folio (and a bornero); this subsumes the F-DQ1500 [DI] item. **WADDING_1 floor
+      RE-BASELINED from ground truth** (matched=75 + FP=0 HELD):
+      OLD→NEW: drawing folios 10→11; points drawn 106→106; points skipped 80→80; matched 75→75;
+      false positives 0→0 (31 generic→31 generic); RESERVA 62→78; total folios 33→35.
+      Siemens render OLD→NEW: folios 6→7 (F-DQ1500 [DI] now renders); points drawn 48→48;
+      skipped 40→40; RESERVA 36→40 (all 88 channels represented). ISO title block on all folios,
+      0 token leaks, 0 unresolved conductors on both sets. Suite green (320 tests, 1 pre-existing
+      skip). DONE 2026-06-16 (pending Abel re-eyeball gate before lock).
+- [ ] **NET** — Network/topology folio for Siemens (PROFINET `NetworkAddress` from `.aml`), the
+      vendor-neutral topology builder pattern. Derivable now (TIA-3 populated `network_address`).
+- [ ] **RACK+IDX** — Rack/chassis layout overview (Story 2.3) + drawing index/TOC (Story 2.2) for
+      Siemens; derivable from the IR + `.aml`.
+- [ ] **ALIM** — Alimentación/power one-line for Siemens (Epic 5, config-driven). Needs Abel's
+      panel power data (breakers/feeders/voltages) — never-invent. Build config schema + folio.
+- [ ] **Símbología vocabulary (future, low pri)** — only `push_button` matches the Siemens tag
+      vocabulary today (correct never-invent). Could add a Siemens symbol dictionary (fcuv/VS_/etc.)
+      with CONFIDENT mappings only. Not a bug.
 - [ ] **Adversarial review** at the phase boundary (3-lens + general) vs `docs/planning/*` before
       proposing the merge gate.
 

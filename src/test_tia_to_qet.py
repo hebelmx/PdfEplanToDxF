@@ -218,20 +218,26 @@ class SiemensStructuralTest(SiemensRenderTestBase):
                         "no BOM folio on the Siemens set")
         self.assertTrue(any(t.startswith("Historial") for t in titles),
                         "no changelog folio on the Siemens set")
-        # per-card I/O folios: 6 cards with mapped tags (F-DQ1500 [DI] is 0-mapped
-        # → skipped by the 'one folio per card WITH mapped tags' rule).
+        # CHAN: every I/O card now renders, including the all-spare F-DQ1500 [DI]
+        # half. This filter catches the F-D* card titles (drawing AND bornero):
+        # 4 drawing (F-DI150, F-DI156, F-DQ1500 [DO], F-DQ1500 [DI]) + 4 matching
+        # borneros = 8 (was 6 when the 0-mapped F-DQ1500 [DI] was skipped).
         io_folios = [t for t in titles
                      if "F-DI" in t or "F-DQ" in t or t.startswith("DI")
                      or t.startswith("DQ")]
-        self.assertEqual(len(io_folios), 6, f"I/O folios: {io_folios}")
+        self.assertEqual(len(io_folios), 8, f"I/O folios: {io_folios}")
+        # the all-spare F-DQ1500 [DI] half now renders a drawing folio
+        self.assertTrue(any(t.startswith("R0") and "F-DQ1500 [DI]" in t
+                            for t in titles),
+                        "F-DQ1500 [DI] all-spare half did not render")
 
 
 class SiemensStderrFloorTest(SiemensRenderTestBase):
     """The Siemens stderr floor: 48 mapped points, 40 RESERVA channels, 88
-    channels total — derived from the summary. 'spare' (drawn reserves) reads 36
-    because the 0-mapped F-DQ1500 [DI] card is skipped (Rockwell rule), so its 4
-    spare channels are not DRAWN; the 4 still appear in the 40 IR-level RESERVA
-    (the '40 skipped' on the points line)."""
+    channels total — derived from the summary. CHAN: every I/O card now renders
+    (including the all-spare F-DQ1500 [DI] half), so 'spare' (drawn reserves)
+    reads the full 40 — all 88 channels are represented and the drawn-spare count
+    matches the IR-level RESERVA (the '40 skipped' on the points line)."""
 
     def test_mapped_reserva_and_channel_floor(self):
         _, err = self._run()
@@ -244,15 +250,16 @@ class SiemensStderrFloorTest(SiemensRenderTestBase):
         self.assertEqual(reserva, 40)             # 40 RESERVA channels
         self.assertEqual(mapped + reserva, 88)    # 88 channels total
 
-    def test_six_drawing_folios_and_drawn_spares(self):
+    def test_seven_drawing_folios_and_drawn_spares(self):
         _, err = self._run()
-        # 6 drawing folios (0-mapped card skipped per the Rockwell rule)
-        self.assertRegex(err, r"folios\s*:\s*6\b")
-        # the SEPARATE drawn-spare counter: 36 reserves over 5 cards (the 0-mapped
-        # card contributes neither a folio nor a drawn reserve).
+        # CHAN: 7 drawing folios — every I/O card drawn, incl. the all-spare
+        # F-DQ1500 [DI] half (was 6 when that 0-mapped half was skipped).
+        self.assertRegex(err, r"folios\s*:\s*7\b")
+        # the SEPARATE drawn-spare counter now reads the full 40: every unused
+        # channel is drawn, so the drawn reserves match the IR-level RESERVA.
         m = re.search(r"spare\s*:\s*(\d+)\s+reserve terminal", err)
         self.assertIsNotNone(m, f"no spare line:\n{err}")
-        self.assertEqual(int(m.group(1)), 36)
+        self.assertEqual(int(m.group(1)), 40)
 
     def test_rockwell_summary_lines_omitted(self):
         _, err = self._run()

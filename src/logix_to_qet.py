@@ -1027,16 +1027,19 @@ def build_folio(project: ET.Element, order: int, mod, points,
             if bom_rows is not None:
                 bom_rows.append(generic_bom_row(order, tag=pt.tag, address=address))
 
-    # T3.2 — SPARE / RESERVA terminals: every empty channel slot in the card's
+    # CHAN — SPARE / RESERVA channels: every empty channel slot in the card's
     # full-capacity box (a channel in range(mod.points) with no mapped point) is
-    # drawn as a plain reserve terminal so the physical strip is complete for the
-    # panel builder. A spare is NEVER a device or a tag: it adds one borne_2
-    # terminal (reused via add_terminal_element) in the SAME strip slot geometry
-    # as the inline strip terminal above, the Spanish word RESERVA + the channel
-    # number, and a (spare) BOM row — but NO point/pin texts, NO device symbol,
-    # and NO conductor (a terminal with no conductor is valid; spares carry no
-    # field wire). Spares are counted SEPARATELY from the matched/mapped floor:
-    # they are never added to per_module / the points lists / sym_counts.
+    # drawn as a FULL box I/O point (a left-side I/O stub) so a DI16/DQ16 shows
+    # ALL its channels, the unused ones as RESERVA stubs. Mirrors the mapped
+    # generic-point path above — card terminal inside the box, a point name +
+    # placeholder pin, the inline strip terminal, and a conductor from the card
+    # terminal to the strip — but with NO invented identity: pin '__', blank
+    # address, blank description, a GENERIC terminal (never a device symbol),
+    # function 'RESERVA'. The point name is the card-direction generic stub
+    # (IN-n / OUT-n), the same default the mapped path uses when module_db has no
+    # name. No address means the card->strip conductor carries no wire number
+    # (never invented). Spares are counted SEPARATELY from the matched/mapped
+    # floor: they are never added to per_module / the points lists / sym_counts.
     mapped = {pt.index for pt in points}
     direction = "I" if mod.kind in ("DI", "AI") else "O"
     analog = mod.kind in ("AI", "AO")
@@ -1046,14 +1049,28 @@ def build_folio(project: ET.Element, order: int, mod, points,
         row = (cp - 1) % POINTS_PER_COL
         x = COL_X[min(col, len(COL_X) - 1)]
         y = ROW_Y0 + row * ROW_DY
+        # left-side I/O stub inside the card box: generic point name per the
+        # card direction (IN-n / OUT-n) + placeholder pin '__'. No address and no
+        # description (never invented) — only the RESERVA marker in the row text.
+        point_name = f"{'IN' if direction == 'I' else 'OUT'}-{index}"
+        add_text(inputs, x - BOX_LEFT + 4, y - 8, point_name, FONT_SMALL)
+        add_text(inputs, x - BOX_LEFT + 4, y + 3, f"pin {PIN_PLACEHOLDER}",
+                 FONT_SMALL)
+        # card-side I/O terminal (the box I/O point), reuses borne_2 (no new
+        # element type); east pin (index 2) = field side. ids stay diagram-unique
+        # via the shared `ids` counter.
+        term_ids = add_terminal_element(elements, x, y, str(cp), "RESERVA", ids)
+        add_text(inputs, x + 20, y, "RESERVA", FONT_SMALL)
         strip_label = strip_terminal_label(index)
-        # the reserve terminal occupies the SAME strip slot as a mapped point's
-        # inline strip terminal; reuses borne_2 (no new element type); ids stay
-        # diagram-unique via the shared `ids` counter. function = 'RESERVA'.
-        add_terminal_element(elements, x + STRIP_X_OFF, y, strip_label, "RESERVA",
-                             ids)
+        # the reserve strip terminal occupies the SAME strip slot as a mapped
+        # point's inline strip terminal; reuses borne_2; function = 'RESERVA'.
+        strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
+                                         strip_label, "RESERVA", ids)
         add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
-        add_text(inputs, x + STRIP_X_OFF + 14, y, "RESERVA", FONT_SMALL)
+        # field conductor: card terminal east pin -> strip north pin, mirroring
+        # the generic mapped path. A spare has no address, so no wire number is
+        # carried (never invented). Both pin ids resolve to terminals just added.
+        add_conductor(conductors, term_ids[2], strip_ids[0], "")
         if spare_counter is not None:
             spare_counter[mod.name] = spare_counter.get(mod.name, 0) + 1
         if bom_rows is not None:
@@ -1605,8 +1622,9 @@ def build_bornero_folios(project: ET.Element, start_order: int,
     appended."""
     n = 0
     for mod, pts in cards or []:
-        if not pts:
-            continue
+        # CHAN: every drawn card gets a bornero — including all-spare cards (an
+        # empty `pts` still yields a full strip of RESERVA rows from the card's
+        # capacity), mirroring the drawing folios so the strip is complete.
         rows = _bornero_rows(mod, pts)
         pages = [rows[i:i + BORNERO_ROWS_PER_PAGE]
                  for i in range(0, len(rows), BORNERO_ROWS_PER_PAGE)] or [[]]
@@ -2406,9 +2424,13 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # decision that designations follow the printed page (DA.5).
     page = SECTION_DRAWINGS
     for mod in io_mods:
-        pts = per_module.get(mod.name)
-        if not pts:
-            continue
+        # CHAN: every I/O card emits a folio so ALL its channels are represented
+        # as box I/O points — including all-spare cards/halves (e.g. the Siemens
+        # F-DQ1500 [DI] half, or a Rockwell card with no mapped tags). An empty
+        # mapped list still draws the full-capacity box with every channel as a
+        # RESERVA stub; the matched/mapped floor is unaffected (spares are never
+        # matched and never counted as points drawn).
+        pts = per_module.get(mod.name) or []
         build_folio(project, page, mod, pts, symbols, sym_counts, designations,
                     wire_scheme, wire_counters, bom_rows=bom_rows,
                     spare_counter=spare_counter)
@@ -2505,7 +2527,8 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
 
     err = sys.stderr
     print(f"controller : {controller}", file=err)
-    print(f"folios     : {folios} (one per I/O card with mapped tags)", file=err)
+    print(f"folios     : {folios} (one per I/O card, all channels drawn)",
+          file=err)
     n_points = sum(len(v) for v in per_module.values())
     print(f"points     : {n_points} drawn, {len(skipped)} skipped", file=err)
     if symbols:
