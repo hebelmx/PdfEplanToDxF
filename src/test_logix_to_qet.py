@@ -2775,6 +2775,24 @@ class PortadaFolioTest(unittest.TestCase):
         # the project name appears upper-cased as the heading
         self.assertIn("ENVASADORA", texts)
 
+    def test_controller_tag_defaults_to_l5x(self):
+        # default source_format keeps the Rockwell cover byte-equivalent
+        _, diags = self._build({"project": "P"})
+        labels = [i.get("text") for i in diags[0].find("inputs").findall("input")]
+        self.assertIn("CONTROLADOR (L5X)", labels)
+        self.assertNotIn("CONTROLADOR (TIA)", labels)
+
+    def test_controller_tag_is_source_format_aware(self):
+        # Siemens passes source_format='TIA' → the cover row reflects the real
+        # export format, never the Rockwell '(L5X)' tag (TIA-FIX-2 vendor leak)
+        project = ET.Element("project")
+        q.build_portada_folio(project, 0, {"project": "P"}, "Q100",
+                              source_format="TIA")
+        labels = [i.get("text")
+                  for i in project.find("diagram").find("inputs").findall("input")]
+        self.assertIn("CONTROLADOR (TIA)", labels)
+        self.assertNotIn("CONTROLADOR (L5X)", labels)
+
     def test_blank_fields_are_not_invented(self):
         # only project given; drawing_number/revision/etc. unset → their VALUE
         # cells are absent (labels still render, values blank — never fabricated)
