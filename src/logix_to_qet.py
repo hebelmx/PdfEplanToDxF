@@ -2759,17 +2759,26 @@ POWER_TEXT_X = 6                    # text inset from a box's left edge
 
 def _power_box(shapes, inputs, cx, top_y, label: str, rating: str) -> int:
     """Draw one centered device box at vertical position `top_y` with a label
-    line and (when present) a rating line under it. Returns the box's bottom y so
-    the caller can hang the next lead line off it. Blanks are omitted."""
+    line and (when present) a rating line under it. The label/rating block is
+    VERTICALLY CENTERED on the box midline (QET text anchors at the top of the
+    text frame, so a fixed top offset reads as 'floating high' — center the block
+    instead). Returns the box's bottom y so the caller can hang the next lead line
+    off it. Blanks are omitted."""
     x1 = cx - POWER_BOX_W // 2
     x2 = cx + POWER_BOX_W // 2
     y2 = top_y + POWER_BOX_H
     add_rect(shapes, x1, top_y, x2, y2)
     tx = x1 + POWER_TEXT_X
-    if label:
+    # QET anchors text at the baseline (drawn UPWARD), so a SMALLER y sits HIGHER
+    # in the box. The label/rating block reads best in the upper-middle of the box
+    # (Abel's call — slightly above centre for these short tags).
+    if label and rating:
+        add_text(inputs, tx, top_y + 12, label, FONT_HEADER)
+        add_text(inputs, tx, top_y + 28, rating, FONT_TEXT)
+    elif label:
         add_text(inputs, tx, top_y + 18, label, FONT_HEADER)
-    if rating:
-        add_text(inputs, tx, top_y + 36, rating, FONT_TEXT)
+    elif rating:
+        add_text(inputs, tx, top_y + 18, rating, FONT_TEXT)
     return y2
 
 
