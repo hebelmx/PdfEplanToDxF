@@ -163,6 +163,13 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 
 ## Status log
+- 2026-06-16: **FP-FIX DONE & committed @ `2d2de39`, pushed.** No-output-change item
+  from issue #2 (B): the floor tests asserted only the matched TOTAL → a semantic
+  mis-classification (right count, wrong type) shipped green. Added
+  `_parse_match_breakdown` + `test_floor_match_breakdown_by_type` to BOTH floor tests,
+  asserting the EXACT per-type dict (Rockwell 11-type =75 + 31 generic; Siemens
+  push_button 2 + 46 generic). Test-only; verified from ground truth: suite 372→374
+  green; WADDING_1 floor unchanged 11/106/75/0/78/35 (no production code touched).
 - 2026-06-16: tracker created; decisions gated & locked; TIA-1 delegated.
 - 2026-06-16: Eyeball render refreshed (`_eyeball_tia.qet`, 18 folios) + QET launched for Abel.
   F-DQ1500 [DI] gate RESOLVED → "draw RESERVA-only folio" (new item TIA-2b, queued behind TIA-3).
