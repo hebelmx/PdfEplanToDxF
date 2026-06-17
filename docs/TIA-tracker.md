@@ -45,6 +45,38 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 - stdlib only (zipfile+xml.etree for xlsx); never `git add` under `Fixtures/`.
 - `source_vendor="siemens"`; same `PlcProject` shape → renderer needs no vendor branch.
 
+## ⚠️ EPIC E6 — FULL-PLANT DISTRIBUTED I/O (the big reframe, Abel 2026-06-17)
+**Fundamental scope correction (Abel, reviewing with fresh eyes):** modern S7-1500 plants have
+**local I/O at the CPU + many DISTRIBUTED I/O drops** (often mixed families / other brands), unlike
+the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing only ONE station.**
+- **Ground truth (from the `.aml`, orchestrator-verified):** the plant has **9 I/O stations / 75 I/O
+  modules / 636 channels** — Q100 (1512SP CPU-local @ .10, 6 mod) + Q200–Q800 (IM155-6 ET200SP drops
+  @ .20–.80) + the **1214C** (@ .95, 2 mod). `IO_Channels.xml` exported **only Q100** (88 ch) → we
+  render ~14% of the real I/O.
+- **CORRECTION to the earlier handoff:** the 1214C's I/O **IS** in the `.aml` (@ .95); nothing is
+  blocked on an export. The data for the WHOLE plant is present: `.aml` = every station's modules +
+  `StartAddress`/`Length`/`IoType` (verified: e.g. `DI40_41` start 40 len 16 Input → `%I40.0..%I41.7`)
+  + the tag tables = names/descriptions/`%`addresses (`PLCTagsS71500` for the 1500 stations,
+  `PLCTagsS71200` for the .95 1214C).
+- **FEASIBILITY PROVEN (orchestrator):** computing channel addresses from the `.aml` and joining by
+  address to the tag table resolves real tags+descriptions on non-Q100 stations (Q400 DI 15/16,
+  Q400 DQ 12/16, Q500 10/16; unmapped = spares/RESERVA). The full set is reconstructable.
+- **Plan (each station its OWN section, per Abel):**
+  1. Extend `tia_aml.parse_aml` to extract per-module `StartAddress`/`Length`/`IoType` (addresses).
+  2. New front-end path: build the IR from the FULL `.aml` (all stations), enumerate each module's
+     channels by address, join **per-station to the right tag table** (reuse E6 foundation coverage
+     logic: 1500 stations → S71500, .95 → S71200), unmapped address = RESERVA. Carry station + owning
+     PLC on each point (the `controller_cpu`/`scope` seam is in place).
+  3. Renderer: **one section per station** (local CPU rack + each IM155-6 drop + the 1214C), I/O
+     folios + bornero per station, PLC-/station-labeled. **Section/numbering scheme = GATED visual
+     design decision (Abel).**
+  4. F-module addressing (safety, e.g. F-DI Length 48 for 8 ch) + analog word addressing need care.
+  5. Mixed-brand PROFINET nodes (EX260 valve terminals, SK drives, BIS RFID) — on the NET folio
+     already; draw I/O only where real addresses exist, else leave on the network overview (never invent).
+- **E6 foundation DONE @ `bc0e5b0`** (branch `feat/e6-s71500-descriptions`): per-station tag-table
+  selection + descriptions + symbol match/suppression + `controller_cpu` seam. **NOT merged** — hold
+  the merge until the distributed-I/O build lands so `main` never ships the misleading single-station set.
+
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
       `plc_ir.build_tia_project()`. IR ground truth: vendor=siemens, station "Q100-Cooling1/UV",
