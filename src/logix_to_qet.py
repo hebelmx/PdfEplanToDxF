@@ -1879,14 +1879,15 @@ PORTADA_ROWS = (
 
 
 def build_portada_folio(project: ET.Element, order: int, fields: dict,
-                        controller: str) -> int:
+                        controller: str, *, source_format: str = "L5X") -> int:
     """Append the cover (Portada) folio at the given section order, rendered with
     text + shape primitives ONLY (empty <elements>/<conductors>) so it inherits
     the ISO 7200 title block. The heading is the project/drawing name with the
     company beneath it; a label/value table lists the title-block metadata plus
-    the L5X controller name. Values are real data; an unset field leaves its
-    value cell blank (never invented). Returns 1 (the cover is part of every
-    set)."""
+    the controller name, tagged with its source-export format (``source_format``:
+    ``L5X`` for Rockwell, ``TIA`` for Siemens — the default keeps the Rockwell
+    cover byte-equivalent). Values are real data; an unset field leaves its value
+    cell blank (never invented). Returns 1 (the cover is part of every set)."""
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": PORTADA_TITLE,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -1914,7 +1915,7 @@ def build_portada_folio(project: ET.Element, order: int, fields: dict,
     add_rect(shapes, PORTADA_LABEL_X, 110, SUMMARY_PAGE_WIDTH, 112)
 
     # metadata table: label / value, one row each; blanks stay blank
-    rows = list(PORTADA_ROWS) + [("CONTROLADOR (L5X)", None)]
+    rows = list(PORTADA_ROWS) + [(f"CONTROLADOR ({source_format})", None)]
     for i, (label, key) in enumerate(rows):
         y = PORTADA_ROW_Y0 + i * PORTADA_ROW_DY
         add_text(inputs, PORTADA_LABEL_X, y, label, FONT_SMALL)
@@ -2059,6 +2060,9 @@ TOPOLOGY_NET_PATTERNS = (
     ("EN2TR", "EtherNet/IP"),
     ("EWEB", "EtherNet/IP"),
     ("ENET", "EtherNet/IP"),
+    ("AENT", "EtherNet/IP"),   # 1756-AENT / 5069-AENTR / 5094-AENTR adapters
+    ("DNB", "DeviceNet"),      # 1756-DNB DeviceNet scanner/bridge
+    ("DHRIO", "DH+/RIO"),      # 1756-DHRIO Data Highway Plus / Remote I/O
 )
 
 # Role tags shown on each node box (localized description text, NOT classifier
@@ -2091,7 +2095,10 @@ def classify_node(module, *, is_root: bool) -> str:
 
     - controller: the tree root (parent == own name).
     - io: kind in {DI, DO, AI, AO}.
-    - hmi: catalog contains PanelView / PV.
+    - hmi: catalog says PanelView — the literal word or a real AB PanelView
+      catalog family (2711 = PanelView / PanelView Plus / 800, 2715 = PanelView
+      5000). A bare 'PV' substring is NOT used (it false-positives on unrelated
+      catalogs and misses the real 2711P-* families — review finding).
     - bridge: a non-root, non-I/O module whose catalog matches a comms pattern.
     - generic: anything else (rendered as name + catalog, no invented role)."""
     if is_root:
@@ -2101,7 +2108,7 @@ def classify_node(module, *, is_root: bool) -> str:
         return "io"
     cat = (getattr(module, "catalog", "") or "")
     up = cat.upper()
-    if "PANELVIEW" in up or "PV" in up:
+    if "PANELVIEW" in up or up.startswith(("2711", "2715")):
         return "hmi"
     if topology_protocol(cat) is not None:
         return "bridge"
@@ -3102,8 +3109,12 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     used = [e for e in symbols if e["id"] in sym_counts]
     # Portada (cover) — the project's title-block metadata + controller name;
     # sorts to the very front (section page 0).
+    # The controller row is tagged with the source-export format so the cover
+    # reads accurately per vendor (Rockwell .L5X vs Siemens TIA export); the
+    # default 'L5X' keeps the Rockwell cover byte-equivalent.
+    source_format = "TIA" if project_ir.source_vendor == "siemens" else "L5X"
     portada_folios = build_portada_folio(project, SECTION_PORTADA, tb_fields,
-                                         controller)
+                                         controller, source_format=source_format)
     # Simbología (symbol legend) — one row per used symbol type (glyph + name);
     # sorts right after the cover (section page 1).
     symbology_folios = build_symbology_folio(project, SECTION_SIMBOLOGIA, used)

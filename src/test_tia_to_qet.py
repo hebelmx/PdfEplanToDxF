@@ -360,6 +360,17 @@ class SiemensRackIndexTest(unittest.TestCase):
         # halves (EYE-3) merge onto ONE drawing folio (7 drawing folios -> 6).
         self.assertEqual(len(root.findall("diagram")), 22)
 
+    def test_cover_controller_tag_is_tia_not_l5x(self):
+        # TIA-FIX-2: the Siemens cover must NOT carry the Rockwell '(L5X)' format
+        # tag; it reads '(TIA)' for the real source export. No invented value.
+        root, _ = self._run()
+        portada = [d for d in root.findall("diagram")
+                   if d.get("title") == q.PORTADA_TITLE][0]
+        labels = " | ".join(i.get("text")
+                            for i in portada.find("inputs").findall("input"))
+        self.assertIn("CONTROLADOR (TIA)", labels)
+        self.assertNotIn("(L5X)", labels)
+
     def test_network_folio_present_with_35_nodes_by_title(self):
         # T2: a POSITIVE NET assertion BY TITLE, with the real 35 PROFINET nodes
         # and the controller (Q100 CPU) highlighted via DeviceItemType=CPU.
