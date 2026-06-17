@@ -122,6 +122,20 @@ def _is_io_module(module_el: ET.Element) -> bool:
     return bool(_order_number(_attr_value(module_el, "TypeIdentifier")))
 
 
+def _position_number(module_el: ET.Element) -> int | None:
+    """Return the module's physical SLOT from its direct-child
+    `<Attribute Name="PositionNumber"><Value>N</Value>`, or None when absent or
+    non-numeric. The slot is read from the .aml ONLY — never invented (no
+    PositionNumber => None, which the IR/renderer surface as a blank slot)."""
+    raw = _attr_value(module_el, "PositionNumber")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
     """Parse a TIA CAx/AML export into a per-module hardware map.
 
@@ -131,6 +145,8 @@ def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
         network_address:str|None  (the station's PROFINET address, None when absent)
         channels:       int   (declared Channel_* count, 0 when none)
         device_item_type:str  ("CPU"/"HeadModule"/"" — provenance only)
+        slot:           int|None  (PositionNumber, the physical slot; None when
+                                  absent/non-numeric — NEVER invented)
     }
 
     NEVER raises into the caller for a malformed/missing file other than a true
@@ -167,6 +183,7 @@ def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
                     "network_address": station_addr,
                     "channels": _count_channels(mod),
                     "device_item_type": _attr_value(mod, "DeviceItemType") or "",
+                    "slot": _position_number(mod),
                 }
 
     return hw

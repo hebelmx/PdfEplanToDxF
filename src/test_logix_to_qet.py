@@ -1894,6 +1894,222 @@ class NetworkFolioTest(unittest.TestCase):
             self.assertNotIn("%{", prop.text or "")
 
 
+def _rack_modules():
+    """Synthetic IR modules for the rack folio: slots out of order (so the
+    builder must SORT), one module with NO slot (must fall back / blank label),
+    one with NO catalog (blank order#)."""
+    return [
+        SimpleNamespace(name="DQ10_11", catalog="6ES7 132-6BH00-0BA0",
+                        slot=7, kind="DO", points=16),
+        SimpleNamespace(name="F-DI150", catalog="6ES7 136-6BA00-0CA0",
+                        slot=2, kind="DI", points=16),
+        SimpleNamespace(name="NO-SLOT", catalog="", slot=None,
+                        kind="AI", points=2),
+    ]
+
+
+class RackFolioTest(unittest.TestCase):
+    """RACK (Story 2.3): the rack/chassis layout overview is VISUAL-only (text +
+    shape primitives, empty <elements>/<conductors>), draws one box per module in
+    SLOT order (slot #, name, catalog/order#, kind+points), keeps every box inside
+    the page frame, and never fabricates a slot/catalog (blank when unknown)."""
+
+    def test_builds_one_folio_at_given_order(self):
+        project = ET.Element("project")
+        n = q.build_rack_folio(project, q.SECTION_RACK, _rack_modules())
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(d.get("order"), str(q.SECTION_RACK))
+        self.assertEqual(d.get("title"), q.RACK_TITLE)
+
+    def test_empty_modules_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_rack_folio(project, q.SECTION_RACK, []), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_rack_folio(project, q.SECTION_RACK, _rack_modules())
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+        self.assertGreater(len(d.find("inputs").findall("input")), 0)
+
+    def test_modules_drawn_in_slot_order(self):
+        # the slot labels must appear in ascending slot order; the None-slot
+        # module sorts LAST with a BLANK slot label (never fabricated).
+        project = ET.Element("project")
+        q.build_rack_folio(project, q.SECTION_RACK, _rack_modules())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        slots = [t for t in texts if t.startswith("SLOT ")]
+        self.assertEqual(slots, ["SLOT 2", "SLOT 7"])   # sorted, None omitted
+        # name order follows slot order then IR order for the None-slot one
+        self.assertLess(texts.index("F-DI150"), texts.index("DQ10_11"))
+        self.assertLess(texts.index("DQ10_11"), texts.index("NO-SLOT"))
+
+    def test_real_order_numbers_and_kind_points(self):
+        project = ET.Element("project")
+        q.build_rack_folio(project, q.SECTION_RACK, _rack_modules())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("6ES7 136-6BA00-0CA0", texts)
+        self.assertIn("DI x16", texts)
+        # the no-catalog module must NOT invent an order number
+        self.assertNotIn("None", " ".join(texts))
+
+    def test_one_box_per_module(self):
+        project = ET.Element("project")
+        mods = _rack_modules()
+        q.build_rack_folio(project, q.SECTION_RACK, mods)
+        d = project.find("diagram")
+        boxes = [s for s in d.find("shapes").findall("shape")
+                 if abs(float(s.get("x2")) - float(s.get("x1")) - q.RACK_BOX_W) < 1
+                 and abs(float(s.get("y2")) - float(s.get("y1")) - q.RACK_BOX_H) < 1]
+        self.assertEqual(len(boxes), len(mods))
+
+    def test_full_extent_inside_page_frame(self):
+        # the FULL drawn extent (every box + rail + every label) lies inside the
+        # real page frame — asserted on a full 8-module + wrapped row case.
+        project = ET.Element("project")
+        many = [SimpleNamespace(name=f"M{i}", catalog="6ES7 000-0AA00-0AA0",
+                                slot=i, kind="DI", points=16) for i in range(10)]
+        q.build_rack_folio(project, q.SECTION_RACK, many)
+        d = project.find("diagram")
+        xs, ys = [], []
+        for s in d.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in d.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), q.RACK_PAGE_W)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.RACK_PAGE_H)
+
+    def test_inherits_titleblock_and_no_token_leak(self):
+        project = ET.Element("project")
+        q.build_rack_folio(project, q.SECTION_RACK, _rack_modules())
+        fields = q.resolve_title_block_fields(
+            {**{k: v for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items()
+                if isinstance(v, str)}, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        d = project.find("diagram")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        for prop in d.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+
+
+def _seed_folios(project, specs):
+    """Seed `project` with bare diagrams (order + title only) so the index can
+    enumerate them."""
+    for order, title in specs:
+        ET.SubElement(project, "diagram", {"order": str(order), "title": title})
+
+
+class IndexFolioTest(unittest.TestCase):
+    """IDX (Story 2.2): the drawing index / TOC is VISUAL-only (text + light rule
+    lines, empty <elements>/<conductors>), lists every folio in document order
+    with its SECTION page + title, INCLUDING its own entry, with correct final
+    page numbers, and stays inside the page frame."""
+
+    SPECS = [(0, "Portada"), (1, "Simbología"), (2, "Red PROFINET"),
+             (4, "Disposición del rack"), (101, "R0.S2 F-DI150"),
+             (200, "Bornero"), (900, "Historial")]
+
+    def test_builds_one_folio_at_given_order(self):
+        project = ET.Element("project")
+        _seed_folios(project, self.SPECS)
+        n = q.build_index_folio(project, q.SECTION_INDEX)
+        self.assertEqual(n, 1)
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        self.assertEqual(idx.get("order"), str(q.SECTION_INDEX))
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        _seed_folios(project, self.SPECS)
+        q.build_index_folio(project, q.SECTION_INDEX)
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        self.assertEqual(len(idx.find("elements").findall("element")), 0)
+        self.assertEqual(len(idx.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(idx.find("shapes").findall("shape")), 0)
+
+    def test_lists_every_folio_including_itself_in_order(self):
+        project = ET.Element("project")
+        _seed_folios(project, self.SPECS)
+        q.build_index_folio(project, q.SECTION_INDEX)
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        texts = [i.get("text") for i in idx.find("inputs").findall("input")]
+        # one page label per seeded folio + the index's own page (SECTION_INDEX)
+        pages = [t for t in texts if t.isdigit()]
+        expected = sorted(o for o, _ in self.SPECS) + [q.SECTION_INDEX]
+        self.assertEqual([int(p) for p in pages], sorted(expected))
+        # 3-digit zero-padding (the cajetín page scheme)
+        self.assertIn("000", pages)
+        self.assertIn(f"{q.SECTION_INDEX:03d}", pages)
+        # the index's own title is listed
+        self.assertIn(q.INDEX_TITLE, texts)
+
+    def test_self_page_is_section_index_and_does_not_renumber(self):
+        # the index's own page is SECTION_INDEX, and listing the fixed `order`s
+        # means no other folio's page is shifted by the index's insertion.
+        project = ET.Element("project")
+        _seed_folios(project, self.SPECS)
+        q.build_index_folio(project, q.SECTION_INDEX)
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        # pair page->title from the row inputs (skip the header + col headers)
+        inps = idx.find("inputs").findall("input")
+        rows = {}
+        i = 0
+        texts = [x.get("text") for x in inps]
+        for j, t in enumerate(texts):
+            if t.isdigit() and j + 1 < len(texts):
+                rows[int(t)] = texts[j + 1]
+        self.assertEqual(rows[q.SECTION_INDEX], q.INDEX_TITLE)
+        self.assertEqual(rows[0], "Portada")
+        self.assertEqual(rows[101], "R0.S2 F-DI150")
+
+    def test_full_extent_inside_page_frame(self):
+        # a long folio list (40 folios) keeps the last row + every rule inside
+        # the real page frame (the row pitch compresses if needed).
+        project = ET.Element("project")
+        _seed_folios(project, [(i, f"Folio {i}") for i in range(40)])
+        q.build_index_folio(project, q.SECTION_INDEX)
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        xs, ys = [], []
+        for s in idx.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in idx.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), q.INDEX_PAGE_W)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.INDEX_PAGE_H)
+
+    def test_inherits_titleblock_and_no_token_leak(self):
+        project = ET.Element("project")
+        _seed_folios(project, self.SPECS)
+        q.build_index_folio(project, q.SECTION_INDEX)
+        fields = q.resolve_title_block_fields(
+            {**{k: v for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items()
+                if isinstance(v, str)}, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        idx = [d for d in project.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        self.assertEqual(idx.get("titleblocktemplate"), "exxerpro")
+        for prop in idx.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+
+
 class TopologyWaddingRegressionTest(unittest.TestCase):
     """E2.1 end-to-end: the topology folio is added at order 2 from the real
     fixture WITHOUT moving the matched floor (106 drawn / 75 matched); CHAN

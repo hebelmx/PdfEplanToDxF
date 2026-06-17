@@ -887,7 +887,8 @@ def build_folio(project: ET.Element, order: int, mod, points,
     (the BOM rows are a pure side-channel; a card's own elements, including the
     inline power terminals drawn from its module_db power block, are unaffected
     by the accumulator)."""
-    title = f"R{mod.rack}.S{mod.slot} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
+    slot_txt = "" if mod.slot is None else str(mod.slot)
+    title = f"R{mod.rack}.S{slot_txt} {mod.name} ({mod.catalog} {mod.kind}{mod.points})"
     diagram = ET.SubElement(project, "diagram", {
         "order": str(order), "title": title,
         "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
@@ -909,7 +910,7 @@ def build_folio(project: ET.Element, order: int, mod, points,
 
     db = load_module_db(mod.catalog)
     header = (f"{mod.name}   |   {mod.catalog}   |   Rack {mod.rack}"
-              f"  Slot {mod.slot}   |   {mod.kind}{mod.points}")
+              f"  Slot {slot_txt}   |   {mod.kind}{mod.points}")
     # Header + sub-header sit at the top-left of the sheet. (The per-card power
     # potentials now render as a boxed table in the top-RIGHT corner — see
     # add_power_terminals — so nothing competes with the sub-header's lane.)
@@ -2339,6 +2340,212 @@ def build_network_folio(project: ET.Element, start_order: int, nodes) -> int:
     return 1
 
 
+# ── RACK: rack/chassis layout overview (Siemens, Story 2.3) ──────────────────
+# A horizontal rack strip: one box per module in SLOT order (slot #, name,
+# catalog/order#, kind+points). VISUAL-only (text + shape primitives, empty
+# <elements>/<conductors>); ISO 7200 title block inherited. Geometry stays
+# inside the page frame for the floor station (6 modules) and degrades to a
+# second row past RACK_COLS so the strip never overruns the frame.
+RACK_TITLE = "Disposición del rack"
+RACK_X_MARGIN = 20          # left/right page margin
+RACK_PAGE_W = 1010          # page frame width
+RACK_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+RACK_COLS = 8               # module boxes per rack row (8 modules + head fit)
+RACK_BOX_W = 120            # module box width
+RACK_BOX_H = 150            # module box height (tall, like a physical card)
+RACK_COL_GAP = 4            # horizontal gap between boxes (a tight rack)
+RACK_ROW_GAP = 30           # vertical gap between rack rows (when wrapped)
+RACK_RAIL_Y = 70            # mounting-rail bar y
+RACK_RAIL_H = 3             # rail bar thickness
+RACK_GRID_Y = 86            # first module-box row top y (below the rail)
+RACK_TEXT_X = 5             # text inset from a box's left edge
+
+
+def _rack_module_label(mod) -> tuple[str, str, str, str]:
+    """The four data lines for a rack box, all from real IR/.aml data — blank
+    (never invented) when unknown:
+        slot   : 'SLOT n'  (blank when slot is None — no .aml PositionNumber)
+        name   : the IR module name (the physical/split name)
+        cat    : the Siemens order number (mod.catalog; "" when no .aml match)
+        kind   : 'KIND x pts' (e.g. 'DI x16'); blank kind/points degrade out
+    """
+    slot = "" if mod.slot is None else f"SLOT {mod.slot}"
+    name = mod.name or ""
+    cat = mod.catalog or ""
+    kind = mod.kind or ""
+    pts = mod.points or 0
+    if kind and pts:
+        kindline = f"{kind} x{pts}"
+    elif kind:
+        kindline = kind
+    elif pts:
+        kindline = f"x{pts}"
+    else:
+        kindline = ""
+    return slot, name, cat, kindline
+
+
+def _rack_sort_key(mod):
+    """Order modules by SLOT when present, else keep IR order (None sorts last,
+    stably). Returns a key that puts known slots first in numeric order; modules
+    with no slot fall back to the IR order — NEVER fabricate a slot number."""
+    return (0, mod.slot) if mod.slot is not None else (1, 0)
+
+
+def _add_rack_box(shapes, inputs, x, y, mod):
+    """Draw one module box (slot / name / catalog / kind+points stack) at (x, y).
+    Text is lifted clear inside the box; all data-driven, blanks omitted."""
+    x2, y2 = x + RACK_BOX_W, y + RACK_BOX_H
+    add_rect(shapes, x, y, x2, y2)
+    slot, name, cat, kindline = _rack_module_label(mod)
+    tx = x + RACK_TEXT_X
+    # slot header band: a rule under the slot label so it reads as the box header
+    if slot:
+        add_text(inputs, tx, y + 16, slot, FONT_HEADER)
+    add_rect(shapes, x, y + 22, x2, y + 23)
+    # name / catalog / kind stack
+    add_text(inputs, tx, y + 40, name, FONT_TEXT)
+    if cat:
+        add_text(inputs, tx, y + 56, cat, FONT_SMALL)
+    if kindline:
+        add_text(inputs, tx, y + 72, kindline, FONT_SMALL)
+
+
+def build_rack_folio(project: ET.Element, start_order: int, modules) -> int:
+    """Append the rack/chassis layout overview at `start_order`. VISUAL-only
+    (text + shape primitives, empty <elements>/<conductors>), one box per module
+    drawn in SLOT order (slot #, name, catalog/order#, kind+points), all from the
+    IR/.aml. Returns 1 when modules exist, else 0 (graceful — no modules => no
+    folio, never invented). Modules with no slot fall back to IR order and show a
+    blank slot label."""
+    mods = list(modules)
+    if not mods:
+        return 0
+    ordered = sorted(mods, key=_rack_sort_key)  # stable: None-slot keep IR order
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": RACK_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(RACK_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, RACK_X_MARGIN, 30, RACK_TITLE.upper(), FONT_HEADER)
+
+    col_pitch = RACK_BOX_W + RACK_COL_GAP
+    row_pitch = RACK_BOX_H + RACK_ROW_GAP + 16  # +16 leaves room for the rail bar
+    for i, mod in enumerate(ordered):
+        col = i % RACK_COLS
+        row = i // RACK_COLS
+        x = RACK_X_MARGIN + col * col_pitch
+        rail_y = RACK_RAIL_Y + row * row_pitch
+        y = RACK_GRID_Y + row * row_pitch
+        if col == 0:
+            # mounting rail spanning this row's boxes
+            add_rect(shapes, RACK_X_MARGIN, rail_y, RACK_PAGE_W - RACK_X_MARGIN,
+                     rail_y + RACK_RAIL_H)
+        _add_rack_box(shapes, inputs, x, y, mod)
+    return 1
+
+
+# ── IDX: drawing index / table of contents (Siemens, Story 2.2) ──────────────
+# A table listing every folio in document order with its SECTION page number +
+# title. VISUAL-only (text + light rule lines, empty <elements>/<conductors>);
+# ISO 7200 title block inherited. Built LAST (after every other section exists)
+# so it can enumerate the real folios; it accounts for its OWN entry too.
+INDEX_TITLE = "Índice de planos"
+INDEX_X_MARGIN = 20         # left/right page margin
+INDEX_PAGE_W = 1010         # page frame width
+INDEX_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+INDEX_PAGE_COL_X = 30       # 'PÁG.' column x
+INDEX_TITLE_COL_X = 130     # folio-title column x
+INDEX_ROW_Y0 = 80          # first data-row baseline
+INDEX_ROW_DY = 18          # row pitch
+INDEX_HEAD_Y = 56          # column-header baseline
+INDEX_RULE_X2 = 990        # rule-line right end
+
+
+def _index_entries(project: ET.Element, self_order: int) -> list[tuple[int, str]]:
+    """Collect (section-page, title) for every diagram already on `project`, plus
+    the index's OWN entry at `self_order`, sorted by section page (document
+    order). The section page is each diagram's `order` attribute — the SAME value
+    the cajetín prints (DA.5b) — so the printed page numbers are correct
+    including the index's own page. The index's insertion does NOT renumber the
+    other folios: every section page is a fixed `order`, independent of document
+    POSITION, so listing the orders verbatim is exact. NEVER invents a folio."""
+    entries: list[tuple[int, str]] = []
+    for d in project.findall("diagram"):
+        title = d.get("title") or ""
+        try:
+            order = int(d.get("order"))
+        except (TypeError, ValueError):
+            continue  # a diagram with no integer order is not a numbered folio
+        entries.append((order, title))
+    entries.append((self_order, INDEX_TITLE))
+    entries.sort(key=lambda e: e[0])
+    return entries
+
+
+def build_index_folio(project: ET.Element, start_order: int) -> int:
+    """Append the drawing index / table-of-contents folio at `start_order`.
+    VISUAL-only (text + light rule lines, empty <elements>/<conductors>): one row
+    per folio in document order with its SECTION page (zero-padded to the 3-digit
+    page scheme) + title, INCLUDING the index's own entry. Returns 1 when any
+    folio exists to list, else 0 (graceful). Call this AFTER every other section
+    has been built so the enumeration is complete (its own page is computed from
+    `start_order`, which is fixed, so the numbering is correct)."""
+    entries = _index_entries(project, start_order)
+    if not entries:
+        return 0
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": INDEX_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(INDEX_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, INDEX_X_MARGIN, 30, INDEX_TITLE.upper(), FONT_HEADER)
+    # column headers + an underline rule
+    add_text(inputs, INDEX_PAGE_COL_X, INDEX_HEAD_Y, "PÁG.", FONT_SMALL)
+    add_text(inputs, INDEX_TITLE_COL_X, INDEX_HEAD_Y, "PLANO", FONT_SMALL)
+    add_rect(shapes, INDEX_X_MARGIN, INDEX_HEAD_Y + 4, INDEX_RULE_X2,
+             INDEX_HEAD_Y + 5)
+
+    # rows clamp to the frame: if there are more folios than fit, the row pitch
+    # is compressed so the last row still sits inside the page frame.
+    n = len(entries)
+    avail = INDEX_PAGE_H - 30 - INDEX_ROW_Y0   # keep a 30-px bottom margin
+    dy = INDEX_ROW_DY if (n - 1) * INDEX_ROW_DY <= avail else avail // max(n - 1, 1)
+    for i, (order, title) in enumerate(entries):
+        y = INDEX_ROW_Y0 + i * dy
+        add_text(inputs, INDEX_PAGE_COL_X, y, f"{order:03d}", FONT_SMALL)
+        add_text(inputs, INDEX_TITLE_COL_X, y, title, FONT_SMALL)
+        # a light rule under each row
+        add_rect(shapes, INDEX_X_MARGIN, y + 4, INDEX_RULE_X2, y + 5)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -2352,6 +2559,8 @@ def build_network_folio(project: ET.Element, start_order: int, nodes) -> int:
 SECTION_PORTADA = 0        # cover sheet (DA.3)
 SECTION_SIMBOLOGIA = 1     # symbol legend (DA.4)
 SECTION_TOPOLOGY = 2       # network/communications topology overview (E2.1)
+SECTION_INDEX = 3          # drawing index / table of contents (Siemens, Story 2.2)
+SECTION_RACK = 4           # rack/chassis layout overview (Siemens, Story 2.3)
 SECTION_SUPPLY = 100       # 'Alimentación' rail folio
 SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
 SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
@@ -2624,6 +2833,19 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # set has no Rockwell topology folio, so the two never collide.
     network_nodes = getattr(project_ir, "network_nodes", None) or []
     network_folios = build_network_folio(project, SECTION_TOPOLOGY, network_nodes)
+    # RACK (Siemens, Story 2.3): rack/chassis layout overview, one box per module
+    # in slot order (slot #, name, order#, kind+points). Siemens-only and gated on
+    # the IR having actual slot/.aml data (any module carrying a slot from the
+    # .aml PositionNumber) so the Rockwell set is untouched; Rockwell never
+    # reaches this branch (source_vendor != "siemens"). When on but no slot data,
+    # it would still draw in IR order with blank slots — but the gate keeps it
+    # off unless real slot data exists, never inventing a rack we can't source.
+    is_siemens = project_ir.source_vendor == "siemens"
+    has_slots = any(getattr(m, "slot", None) is not None for m in io_mods)
+    if is_siemens and io_mods and has_slots:
+        rack_folios = build_rack_folio(project, SECTION_RACK, io_mods)
+    else:
+        rack_folios = 0
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -2633,6 +2855,16 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # carries a traceability sheet.
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = build_changelog_folios(project, SECTION_CHANGELOG, revisions)
+    # IDX (Siemens, Story 2.2): drawing index / table of contents. Built LAST so
+    # it enumerates EVERY folio already on the project (including its own entry at
+    # SECTION_INDEX). Siemens-only — the Rockwell path never reaches here. The
+    # section page printed for each row is the folio's fixed `order`, so the
+    # index's insertion does NOT renumber the folios after it (orders are
+    # position-independent), and its own page is SECTION_INDEX itself.
+    if is_siemens:
+        index_folios = build_index_folio(project, SECTION_INDEX)
+    else:
+        index_folios = 0
     # DA.5c: prev/next continuation refs on the multi-sheet sections (drawings,
     # borneros, BOM). Added while <project> still holds only <diagram> children,
     # before the reorder; pure annotation, so the folio/element counts are
@@ -2716,6 +2948,13 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
         print(f"red PN     : {network_folios} '{PROFINET_TITLE}' folio(s) "
               f"(order {SECTION_TOPOLOGY}), {len(network_nodes)} PROFINET node(s)",
               file=err)
+    if rack_folios:
+        print(f"rack       : {rack_folios} '{RACK_TITLE}' folio(s) "
+              f"(order {SECTION_RACK}), {len(io_mods)} module(s) in slot order",
+              file=err)
+    if index_folios:
+        print(f"índice     : {index_folios} '{INDEX_TITLE}' folio(s) "
+              f"(order {SECTION_INDEX})", file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "
               f"{tb_fields['company'] or '(no company)'}, {page_total} folio(s)",

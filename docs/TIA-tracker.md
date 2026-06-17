@@ -102,8 +102,14 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       suite 320→336 (+16); WADDING_1 floor UNCHANGED 11/106/75/0/78/35 + 0 PROFINET refs on Rockwell;
       Siemens 20→21 folios, 35 nodes, ISO title block on all, 0 token leaks; omits w/o `--aml`.
       Abel preview-PDF sent for eyeball (proceeding per his "move fast"; tweakable before merge gate).
-- [ ] **RACK+IDX** — Rack/chassis layout overview (Story 2.3) + drawing index/TOC (Story 2.2) for
-      Siemens; derivable from the IR + `.aml`.
+- [~] **RACK+IDX** — Rack/chassis layout overview (Story 2.3) + drawing index/TOC (Story 2.2) for
+      Siemens; derivable from the IR + `.aml`. Rack uses real slot from `.aml` `PositionNumber`
+      (522 present); bonus: fill `Module.slot` → fixes "Slot None" in I/O titles. Both Siemens-only,
+      additive (Rockwell floor untouched). **DONE @ (commit below).** New `build_rack_folio`
+      (order 4, 'Disposición del rack', 7 modules slot order 2,3,4,4,5,6,7) + `build_index_folio`
+      (order 3, 'Índice de planos', all 23 folios). **Verified from ground truth:** suite 336→357;
+      Rockwell **BYTE-EQUIVALENT** (normalized diff EMPTY) + floor 11/106/75/0/78/35; Siemens 21→23
+      folios; I/O titles now show real slots R0.S2–S7 (no "Slot None"); 0 token leaks. Preview sent.
 - [ ] **ALIM** — Alimentación/power one-line for Siemens (Epic 5, config-driven). Needs Abel's
       panel power data (breakers/feeders/voltages) — never-invent. Build config schema + folio.
 - [ ] **Símbología vocabulary (future, low pri)** — only `push_button` matches the Siemens tag

@@ -378,6 +378,12 @@ def build_modules_and_points(
             addr = info.get("network_address")
             if addr:
                 mod.network_address = addr
+            # physical slot from the .aml PositionNumber — fixes the I/O folio
+            # titles' "Slot None". Both halves of a split physical module share
+            # the same slot. NEVER invented: no PositionNumber => slot stays None.
+            slot = info.get("slot")
+            if slot is not None:
+                mod.slot = slot
 
     return station_name, modules, io_mods, points, skipped
 

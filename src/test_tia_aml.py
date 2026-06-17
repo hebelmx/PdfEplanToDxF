@@ -62,6 +62,7 @@ _SYNTHETIC_AML = """<?xml version="1.0" encoding="utf-8"?>
             <InternalElement ID="m1" Name="DI10_11">
               <Attribute Name="TypeName"><Value>DI 16x24VDC ST</Value></Attribute>
               <Attribute Name="TypeIdentifier"><Value>OrderNumber:6ES7 131-6BH00-0BA0</Value></Attribute>
+              <Attribute Name="PositionNumber"><Value>5</Value></Attribute>
               <InternalElement ID="m1c" Name="DI10_11">
                 <ExternalInterface ID="c0" Name="Channel_DI_0"/>
                 <ExternalInterface ID="c1" Name="Channel_DI_1"/>
@@ -128,6 +129,15 @@ class SyntheticAmlTest(unittest.TestCase):
     def test_io_module_channel_count(self):
         hw = self._parse()
         self.assertEqual(hw[("StationA", "DI10_11")]["channels"], 2)
+
+    def test_position_number_captured_as_slot(self):
+        hw = self._parse()
+        self.assertEqual(hw[("StationA", "DI10_11")]["slot"], 5)
+
+    def test_missing_position_number_yields_none_slot(self):
+        # MASKED1 has no PositionNumber -> slot None (never invented)
+        hw = self._parse()
+        self.assertIsNone(hw[("StationA", "MASKED1")]["slot"])
 
     def test_io_module_inherits_station_profinet(self):
         # ET200SP I/O modules sit behind the head module's single PROFINET node
@@ -310,11 +320,28 @@ class Imv1IrJoinTest(unittest.TestCase):
         self.assertTrue(all(m.catalog for m in proj.io_mods))
         self.assertTrue(all(m.network_address for m in proj.io_mods))
 
+    def test_slots_populated_from_position_number(self):
+        # the .aml PositionNumber fills Module.slot (fixes "Slot None"); the 6
+        # physical Q100 modules carry slots 2..7, split halves share slot 4.
+        proj = plc_ir.build_tia_project(str(self.io), None, str(self.aml))
+        by_name = {m.name: m.slot for m in proj.io_mods}
+        self.assertEqual(by_name["F-DI150"], 2)
+        self.assertEqual(by_name["F-DI156"], 3)
+        self.assertEqual(by_name["DI10_11"], 5)
+        self.assertEqual(by_name["DI12_13"], 6)
+        self.assertEqual(by_name["DQ10_11"], 7)
+        # both split halves of F-DQ1500 share the physical slot 4
+        self.assertEqual(by_name["F-DQ1500 [DO]"], 4)
+        self.assertEqual(by_name["F-DQ1500 [DI]"], 4)
+        self.assertTrue(all(m.slot is not None for m in proj.io_mods))
+
     def test_without_aml_catalog_stays_blank(self):
-        # never-invent regression: no .aml -> catalog "" / network_address None
+        # never-invent regression: no .aml -> catalog "" / network_address None /
+        # slot None
         proj = plc_ir.build_tia_project(str(self.io))
         self.assertTrue(all(m.catalog == "" for m in proj.io_mods))
         self.assertTrue(all(m.network_address is None for m in proj.io_mods))
+        self.assertTrue(all(m.slot is None for m in proj.io_mods))
 
     def test_unmatched_module_degrades_to_blank(self):
         # an IR whose module names do NOT appear in the .aml must NOT be filled

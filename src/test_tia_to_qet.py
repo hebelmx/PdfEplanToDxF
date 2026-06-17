@@ -37,6 +37,11 @@ def _imv1_io_channels() -> Path:
     return root / "IMV1_QRO001_08AGO21_V15_IO_Channels.xml"
 
 
+def _imv1_aml() -> Path:
+    root = Path(__file__).resolve().parent.parent / "Fixtures" / "Siemens" / "TiaPortal"
+    return root / "IMV1_QRO001_08AGO21_V15.aml"
+
+
 def _wadding_fixture() -> Path:
     root = Path(__file__).resolve().parent.parent / "Fixtures"
     for c in (root / "Rockwell" / "WADDING_1.L5X", root / "WADDING_1.L5X"):
@@ -280,6 +285,81 @@ class SiemensIRFloorTest(SiemensRenderTestBase):
         self.assertEqual(len(spares), 40)
         channels = sum(m.points for m in ir.io_mods)
         self.assertEqual(channels, 88)
+
+
+class SiemensRackIndexTest(unittest.TestCase):
+    """RACK+IDX end-to-end (gated on BOTH the IMV1 IO_Channels.xml and .aml):
+    the Siemens render gains a rack-layout folio (modules in slot order with real
+    slots + order#s) and a drawing-index folio (all folios with correct pages),
+    and the I/O folio titles now show the real slot (not 'Slot None')."""
+
+    IO = _imv1_io_channels()
+    AML = _imv1_aml()
+
+    def setUp(self):
+        if not (self.IO.is_file() and self.AML.is_file()):
+            self.skipTest("IMV1 IO_Channels.xml or .aml fixture not present")
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "tia.qet"
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main([str(self.IO), "--aml", str(self.AML),
+                                      "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def test_rack_and_index_folios_present(self):
+        root, _ = self._run()
+        titles = [d.get("title") or "" for d in root.findall("diagram")]
+        self.assertIn(q.RACK_TITLE, titles)
+        self.assertIn(q.INDEX_TITLE, titles)
+        # was 21 (NET) -> 23 with RACK + IDX added
+        self.assertEqual(len(root.findall("diagram")), 23)
+
+    def test_rack_shows_modules_in_slot_order_with_real_data(self):
+        root, _ = self._run()
+        rack = [d for d in root.findall("diagram")
+                if d.get("title") == q.RACK_TITLE][0]
+        texts = [i.get("text") for i in rack.find("inputs").findall("input")]
+        slots = [int(t.split()[1]) for t in texts if t.startswith("SLOT ")]
+        # the 6 physical Q100 modules occupy slots 2..7 (F-DQ1500 split -> slot 4
+        # appears twice); ascending (sorted) order, no fabricated slot.
+        self.assertEqual(slots, sorted(slots))
+        self.assertEqual(slots, [2, 3, 4, 4, 5, 6, 7])
+        # real order numbers present (never invented)
+        self.assertIn("6ES7 136-6BA00-0CA0", texts)   # F-DI150
+        # visual-only
+        self.assertEqual(len(rack.find("elements").findall("element")), 0)
+        self.assertEqual(len(rack.find("conductors").findall("conductor")), 0)
+
+    def test_index_lists_all_folios_including_itself(self):
+        root, _ = self._run()
+        diagrams = root.findall("diagram")
+        idx = [d for d in diagrams if d.get("title") == q.INDEX_TITLE][0]
+        texts = [i.get("text") for i in idx.find("inputs").findall("input")]
+        pages = [int(t) for t in texts if t.isdigit()]
+        # one page per folio, including the index's own SECTION_INDEX page
+        self.assertEqual(sorted(pages),
+                         sorted(int(d.get("order")) for d in diagrams))
+        self.assertIn(q.SECTION_INDEX, pages)
+        self.assertEqual(len(pages), len(diagrams))   # 23 == 23 (self-counted)
+        # the index lists its own title + the rack title
+        self.assertIn(q.INDEX_TITLE, texts)
+        self.assertIn(q.RACK_TITLE, texts)
+
+    def test_io_folio_titles_show_real_slot_not_none(self):
+        root, _ = self._run()
+        io_titles = [d.get("title") for d in root.findall("diagram")
+                     if (d.get("title") or "").startswith("R0.S")]
+        self.assertTrue(io_titles, "no I/O drawing folios found")
+        for t in io_titles:
+            self.assertNotIn("Slot None", t)
+            self.assertNotIn("R0.S ", t)   # blank slot would show "R0.S "
+        # F-DI150 sits at slot 2
+        self.assertTrue(any("R0.S2 F-DI150" in t for t in io_titles))
 
 
 class TagDiscoveryTest(unittest.TestCase):
