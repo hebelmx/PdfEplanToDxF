@@ -72,9 +72,22 @@
   - (nits) magic `256` analog-word base; EPLAN `A/KF` class letters.
 
 ## ⚠️ OPEN / PENDING — all tracked in GitHub issue #2 (resolve in this order next cycle)
-1. **Abel's DESKTOP eyeball** (he found the phone-preview "looks unreal", deferring final visual calls):
-   - NET controller highlight: mark only the in-scope station's CPU, or all CPUs on the subnet?
-   - NET layout (drop-leads only on row 0 — spine/ladder?); símbología (1 symbol type); overall sign-off.
+1. ~~**Abel's DESKTOP eyeball**~~ ✅ **DONE 2026-06-17 → 4 visual fixes shipped** (branch
+   `feat/e4-tia-1200`, all verified from ground truth: suite 385 green; Rockwell BYTE-EQUIV +
+   floor 11/106/75/0/78/35; Siemens render checked; folios read from PDF). **Now pending Abel's
+   desktop RE-confirm of these fixes before the merge gate** (fresh `_eyeball_tia.qet` /
+   `_eyeball_wadding.qet` sent via SendUserFile — open in real QET; the matplotlib previewer
+   can't draw the box shapes, so QET-desktop is the true eyeball):
+   - ✅ **EYE-1+EYE-2** @ `bc06b57` (Red PROFINET): node-box 3rd line lifted off the bottom border
+     + controller header un-bolded + long-name ellipsis clip; every row now hangs off the bus
+     (per-column drop + inter-row spine) — rows 1-6 no longer float.
+   - ✅ **EYE-4** @ `13a0698` (I/O folios, both vendors): row-text lane widened +70 so long AB tags
+     clear the bornera (X1:n) + symbol (Abel chose "widen" over truncate).
+   - ✅ **EYE-3** @ `7811cff` (Siemens): split safety card F-DQ1500 [DO]+[DI] now side-by-side on ONE
+     folio (Siemens 23→22 folios; build_folio untouched → Rockwell byte-equiv). Spare points: OK.
+   - **Open Q for the re-confirm:** NET controller highlight still tags BOTH CPUs (Q100 1512SP @ .10
+     AND PLC_1 1214C @ .95) — mark only the in-scope station's CPU, or all? símbología (1 symbol
+     type); bornero merge for the split card (kept per-half for now); overall sign-off.
 2. ~~**No-output-change items**~~ ✅ **DONE 2026-06-16** (both shipped & pushed to `feat/e4-tia-1200`):
    - ✅ **FP=0 real counter** @ `2d2de39` — `_parse_match_breakdown` + `test_floor_match_breakdown_by_type`
      in BOTH floor tests assert the EXACT per-type dict (Rockwell 11-type=75 + 31 generic; Siemens

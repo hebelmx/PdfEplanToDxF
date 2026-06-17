@@ -163,6 +163,29 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 
 ## Status log
+- 2026-06-17: **DESKTOP EYEBALL (Abel) → 4 visual fixes DONE & pushed** (branch
+  `feat/e4-tia-1200`). All verified from ground truth (suite 385 green; Rockwell
+  BYTE-EQUIVALENT + floor 11/106/75/0/78/35; Siemens render checked; merged/NET
+  folios read from PDF). **Pending Abel's desktop RE-confirm before the merge gate.**
+  - **EYE-1+EYE-2** @ `bc06b57` (Red PROFINET, Siemens-only): node-box 3rd text
+    line lifted off the bottom border (y+6/24/42) + controller header in FONT_TEXT
+    (was bold) + `_fit_text` ellipsis clip so long names don't spill; and every row
+    now hangs off the bus (per-column drop + inter-row spine) — rows 1-6 were
+    floating. +3 positional tests.
+  - **EYE-4** @ `13a0698` (I/O folios, both vendors): widened the row-text lane by
+    +70 (STRIP_X_OFF 235→305, SYM_X_OFF 290→360) so long AB tags clear the bornera
+    (X1:n) + symbol — Abel chose "widen" over truncate. +70 is the safe max (left
+    sym 501<530 right-box; right sym 981<1010 frame). Rockwell counts unchanged
+    (positions shift → not byte-equiv, expected). +1 symbol-extent frame proof.
+  - **EYE-3** @ `7811cff` (Siemens, delegated dev-cycle + orchestrator-verified):
+    split safety card F-DQ1500 [DO]+[DI] now renders side-by-side on ONE folio
+    (`build_split_card_folio` + `_is_split_sibling_pair`, build_folio untouched →
+    Rockwell byte-equiv). Siemens 23→22 folios; bornero stays per-half (merge
+    deferred). Title kind-marker derived from real kinds (orchestrator fixed a
+    hard-coded "[DO+DI]" never-invent smell). +7 tests. **LIMITATION:** pairs only
+    CONSECUTIVE split siblings (the IMV1 case); non-adjacent halves degrade
+    gracefully to two folios (revisit if a fixture needs it).
+  - Spare points: Abel confirmed OK (no change).
 - 2026-06-16: **FP-FIX DONE & committed @ `2d2de39`, pushed.** No-output-change item
   from issue #2 (B): the floor tests asserted only the matched TOTAL → a semantic
   mis-classification (right count, wrong type) shipped green. Added
