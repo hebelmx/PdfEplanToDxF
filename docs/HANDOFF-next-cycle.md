@@ -72,6 +72,14 @@
   - (nits) magic `256` analog-word base; EPLAN `A/KF` class letters.
 
 ## ⚠️ OPEN / PENDING — all tracked in GitHub issue #2 (resolve in this order next cycle)
+0. ~~**Desktop RE-confirm + merge gate**~~ ✅ **DONE 2026-06-17.** Abel re-confirmed both fresh eyeball
+   sets in QET-desktop → "look good." Decisions locked: **NET = tag ALL real CPUs** (both 1512SP @ .10
+   + 1214C @ .95, no code change); **merge now, output-changing fixes after**. Ground truth re-derived
+   (385 green; Rockwell 11/106/75/0/78/35; Siemens 22 folios/35 nodes). `feat/e4-tia-1200` (17 commits)
+   **MERGED `--no-ff` → `main`.** símbología (1 type) + split-card per-half bornero accepted as-is.
+   **NEXT CYCLE = output-changing fixes on a fresh branch (TIA-FIX-2 cover (L5X) leak; Rockwell 24V
+   rail + supply test; PV HMI classifier; comms-bridge families) — each re-eyeballed + re-baselined;
+   then ALIM when Abel sends panel power data.**
 1. ~~**Abel's DESKTOP eyeball**~~ ✅ **DONE 2026-06-17 → 4 visual fixes shipped** (branch
    `feat/e4-tia-1200`, all verified from ground truth: suite 385 green; Rockwell BYTE-EQUIV +
    floor 11/106/75/0/78/35; Siemens render checked; folios read from PDF). **Now pending Abel's

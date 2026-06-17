@@ -102,6 +102,8 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       suite 320→336 (+16); WADDING_1 floor UNCHANGED 11/106/75/0/78/35 + 0 PROFINET refs on Rockwell;
       Siemens 20→21 folios, 35 nodes, ISO title block on all, 0 token leaks; omits w/o `--aml`.
       Abel preview-PDF sent for eyeball (proceeding per his "move fast"; tweakable before merge gate).
+      **DECISION LOCKED 2026-06-17 (desktop re-confirm): tag ALL real CPUs — both Q100 1512SP @ .10
+      and PLC_1 1214C @ .95 keep (CONTROLADOR); whole-plant view, no code change. NET item = DONE.**
 - [~] **RACK+IDX** — Rack/chassis layout overview (Story 2.3) + drawing index/TOC (Story 2.2) for
       Siemens; derivable from the IR + `.aml`. Rack uses real slot from `.aml` `PositionNumber`
       (522 present); bonus: fill `Module.slot` → fixes "Slot None" in I/O titles. Both Siemens-only,
@@ -163,6 +165,18 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 
 ## Status log
+- 2026-06-17: **DESKTOP RE-CONFIRM (Abel) → PASS. Both decisions gated & locked; MERGED to `main`.**
+  Abel opened both fresh eyeball sets in real QET-desktop (`_eyeball_wadding.qet` 35 folios +
+  `_eyeball_tia.qet` 22 folios, regenerated at HEAD post EYE-1..4) → "they look good." Decisions:
+  - **NET controller highlight = TAG ALL REAL CPUs** (current behavior LOCKED): both the in-scope
+    Q100 `1512SP F-1` @ .10 and the separate PLC_1 `1214C` @ .95 keep `(CONTROLADOR)` — correct for a
+    whole-plant PROFINET view, data-driven from `DeviceItemType=CPU`. **No code change.**
+  - **Merge order = MERGE NOW, output-changing fixes AFTER** on a fresh branch (each re-eyeballed).
+  Ground truth re-derived before the merge: suite **385 green** (1 skip); Rockwell floor
+  **11/106/75/0/78/35** + exact per-type breakdown; Siemens **22 folios / 35 PROFINET nodes / ISO on
+  all**. `feat/e4-tia-1200` (17 commits) merged `--no-ff` → `main`. símbología (1 type) + split-card
+  per-half bornero accepted as-is. **Next: output-changing fixes (TIA-FIX-2 + Rockwell 24V/PV/comms)
+  on a new branch; then ALIM when Abel sends panel power data.**
 - 2026-06-17: **DESKTOP EYEBALL (Abel) → 4 visual fixes DONE & pushed** (branch
   `feat/e4-tia-1200`). All verified from ground truth (suite 385 green; Rockwell
   BYTE-EQUIVALENT + floor 11/106/75/0/78/35; Siemens render checked; merged/NET
