@@ -145,9 +145,22 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       RE-BASELINE 10/106/75/0/62/33 → 11/106/75/0/78/35 w/ matched=75+FP=0 invariants; 1200-first;
       Siemens-only folio scope; `.aml`-direct catalog vs curated module_db for Story 4.1; resolve the
       4 carried open questions) + reconcile `epics.md` Stories 2.2/2.3 (Siemens-first) & 4.1.
+- [x] **Rockwell-pipeline audit** (Abel-requested, 3-lens Workflow) DONE 2026-06-16. Confirmed real
+      analogues of the TIA defect classes: (MAJOR) `SUPPLY_DEFAULT_RAILS` seeds a **`24V` rail no
+      WADDING card references** (collect_supply_rails, logix_to_qet.py:1298/1305) + the test locks it
+      in; (MAJOR) topology **HMI classifier 2-letter `PV` substring** (false-pos + misses real
+      `2711P-*`, :1894); (MINOR) comms-bridge list misses DNB/DHRIO/5094-AENTR (:1843); (MAJOR)
+      **FP=0 asserted by proxy** (generic count) not a real counter — both pipelines; (nits) magic 256
+      analog base, EPLAN `A/KF` letters. Rockwell fixes CHANGE the validated Rockwell output → need
+      Abel desktop eyeball before doing them.
+- [ ] **ALL OPEN ITEMS TRACKED IN GitHub issue #2** (https://github.com/hebelmx/PdfEplanToDxF/issues/2,
+      sanitized for the public repo): (A) pending desktop-eyeball visual decisions [two-CPU highlight,
+      NET layout, símbología, overall sign-off]; (B) queued fixes [TIA-FIX-2 cover leak; Rockwell 24V
+      rail + supply test + PV classifier + comms-bridge; FP=0 real counter both pipelines]; (C) docs
+      sync; (D) ALIM (blocked on power data). **Abel deferring final visual decisions to desktop
+      inspection** → fixes that change validated output wait for his go.
 - [ ] **TIA-DEFERRED (nits)** — >32-ch column overflow assert+test (latent); NET inter-row spine
-      (cosmetic); FP=0 explicit stderr counter (NFR-5, pre-existing proxy); two-column positional
-      test drive from a synthetic 32-ch module (currently skips on fixture).
+      (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 
 ## Status log
 - 2026-06-16: tracker created; decisions gated & locked; TIA-1 delegated.
