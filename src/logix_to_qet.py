@@ -46,7 +46,15 @@ ORIENT_CODE = {"n": 0, "e": 1, "s": 2, "w": 3}
 # semantic symbol matching (digital points only)
 SYM_FUZZ = 0.82        # min difflib ratio for a fuzzy word hit
 SYM_MIN_SCORE = 0.95   # below this the point keeps the generic terminal
-SYM_X_OFF = 290        # device symbol center, right of the tag/function texts
+# EYE-4 (2026-06-17, Abel desktop eyeball): the strip + device symbol were pushed
+# RIGHT by +70 (SYM_X_OFF 290->360, STRIP_X_OFF 235->305) to WIDEN the row-text
+# lane so long AB tag names (e.g. FROM_ABB_WE_SUPPLY_AIR_FAN_RUN_CONFIRM) stop
+# colliding with the bornera (X1:n) column + symbol. +70 is the safe maximum: a
+# device symbol ("simple", w40/h60, hotspot 28/31) rotated 90° reaches anchor+31
+# horizontally, so the LEFT column symbol right edge (COL_X[0]+360+31 = 501) still
+# clears the RIGHT column box-left (COL_X[1]-BOX_LEFT = 530) and the RIGHT column
+# symbol (COL_X[1]+360+31 = 981) stays inside the 1010 frame — both ~29 px margin.
+SYM_X_OFF = 360        # device symbol center, right of the tag/function texts
 
 
 def _strip_accents(s: str) -> str:
@@ -322,18 +330,17 @@ PIN_PLACEHOLDER = "__"
 
 # Inline terminal-strip (bornero) geometry. Each field conductor is broken by a
 # numbered strip terminal that sits in the clean slot BETWEEN the row text band
-# (which runs ~x+20…x+200) and the device symbol (x+SYM_X_OFF = x+290). The
-# device's WEST pin is NOT a fixed x+280: it varies per symbol — the closest one
-# in the symbol DB is the photocell at x+260, the rest sit at ≥ x+269. The strip
-# terminal centre is at x+STRIP_X_OFF; its borne_2 pin extent spans
-# x+STRIP_X_OFF … x+STRIP_X_OFF+10 (east pin) and y ± 10. STRIP_X_OFF=235 keeps
-# that full extent (…+245) clear of the row text (<x+200, margin 35), clear of
-# the CLOSEST device west pin (x+260, margin 15 — not the optimistic x+280),
-# well clear of the card box (right edge x+10), and on-sheet (smallest column
-# x=110 -> 345 ≥ 0). Every card's strip designation is "-X1" (resets per card);
-# the terminal number is the I/O channel = pt.index (0-based), so the strip reads
-# 1:1 against the drawn points (-X1:0 … -X1:15 on a single-column card).
-STRIP_X_OFF = 235
+# and the device symbol (x+SYM_X_OFF). EYE-4 widened the row-text lane (+70): the
+# strip centre moved from x+235 to x+305 so the band can run to ~x+285 (the
+# strip's borne_2 west extent) before the bornera, instead of the old ~x+200 that
+# long AB tags overran. The strip's pin extent spans x+STRIP_X_OFF … +10 (east)
+# and y ± 10; at 305 that east extent (…+315) stays clear of the device symbol
+# (west pin ≥ x+SYM_X_OFF-… ), well clear of the card box (right edge x+10), and
+# on-sheet for both columns (see the SYM_X_OFF note for the right-frame proof).
+# Every card's strip designation is "-X1" (resets per card); the terminal number
+# is the I/O channel = pt.index (0-based), so the strip reads 1:1 against the
+# drawn points (-X1:0 … -X1:15 on a single-column card).
+STRIP_X_OFF = 305
 STRIP_DESIGNATION = "-X1"
 
 # Per-card power table (DA.8 review fix): the card's supply/common potentials are

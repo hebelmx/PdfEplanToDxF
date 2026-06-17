@@ -3267,14 +3267,18 @@ class StripTerminalGeometryTest(unittest.TestCase):
 
     def test_full_extent_clears_box_text_device_and_sheet(self):
         device_west_off = self._min_device_west_offset()
-        # guard the guard: this must be the photocell-tight value, not a fiction
-        self.assertEqual(device_west_off, 260)
+        # guard the guard: the photocell-tight west pin tracks SYM_X_OFF. EYE-4
+        # pushed the symbol +70 (290->360) to widen the row-text lane, so the
+        # tightest west offset is now 330 (was 260).
+        self.assertEqual(device_west_off, 330)
         for x in q.COL_X:
             cx = x + q.STRIP_X_OFF        # strip terminal centre x
             # borne_2 east pin reaches cx+10; N/S pins at cx; pins span y±10
             left, right = cx, cx + 10
             box_right = x + q.BOX_RIGHT           # card box right edge
-            row_text_right = x + 20 + 180         # generous row-text band end
+            # EYE-4 WIDENED the row-text band from ~x+200 to ~x+285 (strip moved
+            # to x+305) so long AB tag names no longer overrun into the bornera.
+            row_text_right = x + 20 + 265         # widened row-text band end
             # the REAL closest device west pin (computed from the symbol DB), not
             # an assumed x+SYM_X_OFF-10 — so a regression that slides the strip
             # into the photocell pin turns this red.
@@ -3297,6 +3301,21 @@ class StripTerminalGeometryTest(unittest.TestCase):
         # which is comfortably inside the ROW_DY (=35) pitch, so adjacent strip
         # terminals never overlap vertically.
         self.assertLess(2 * 10, q.ROW_DY)
+
+    def test_symbol_extent_clears_right_column_and_frame(self):
+        # EYE-4: widening the row-text lane (+70) must NOT push the device symbol
+        # off-sheet or into the neighbouring column. A device symbol reaches
+        # ~anchor+31 horizontally when rotated 90° (the widest is the 'simple'
+        # w40/h60 def); use a conservative 40 px reach. This is the FULL-extent
+        # frame proof the lane-widen rests on — a future bump to SYM_X_OFF that
+        # breaks either bound turns this red.
+        SYM_MAX_REACH = 40
+        # right column device symbol stays inside the 1010 page frame
+        self.assertLess(q.COL_X[1] + q.SYM_X_OFF + SYM_MAX_REACH, 1010)
+        # left column device symbol clears the right column's card box (the
+        # inter-column collision the +70 had to respect)
+        self.assertLessEqual(q.COL_X[0] + q.SYM_X_OFF + SYM_MAX_REACH,
+                             q.COL_X[1] - q.BOX_LEFT)
 
 
 class BorneroFolioTest(unittest.TestCase):
