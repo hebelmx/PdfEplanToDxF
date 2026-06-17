@@ -2203,6 +2203,142 @@ def build_topology_folio(project: ET.Element, start_order: int,
     return 1
 
 
+# ── PROFINET network/topology folio (NET — Siemens) ─────────────────────────
+# A whole-plant network-architecture overview drawn from the PROFINET nodes in
+# the CAx/AML (PlcProject.network_nodes). Unlike the Rockwell topology folio
+# (which classifies a single controller's comms tree), this draws the ENTIRE
+# subnet: a labelled bus with one node box per device (name + IP + type), laid
+# out as a grid so all 35 nodes fit inside the page frame. The controller this
+# drawing set documents (the Q100 CPU, ip .10) is highlighted distinctly. Like
+# every diagram folio it is VISUAL-only — text + shape primitives, EMPTY
+# <elements>/<conductors> — so it inherits the title block with zero floor
+# impact. DATA-DRIVEN and never-invent: only real nodes/IPs/names from the .aml;
+# a node missing a name/type renders what it has (blank, not fabricated).
+PROFINET_TITLE = "Red PROFINET"
+
+# Geometry (page frame ≈ 1010 wide, SUMMARY_HEIGHT=660 tall). A horizontal bus
+# bar near the top labelled with the subnet; node boxes in a fixed-column grid
+# below it, each box a name/IP/type stack. Sizes chosen so 5 columns x up to 8
+# rows (40 nodes) all stay inside the frame.
+PN_X_MARGIN = 20            # left/right page margin
+PN_PAGE_W = 1010           # page frame width
+PN_PAGE_H = SUMMARY_HEIGHT  # page frame height (660)
+PN_COLS = 5                # node boxes per row
+PN_BOX_W = 190             # node box width
+PN_BOX_H = 60              # node box height
+PN_COL_GAP = 8             # horizontal gap between boxes
+PN_ROW_GAP = 16            # vertical gap between box rows
+PN_BUS_Y = 66              # network-bus bar y
+PN_BUS_H = 3               # bus bar thickness
+PN_GRID_Y = 96             # first node-box row top y (below the bus + its drop)
+PN_TEXT_X = 6              # text inset from a box's left edge
+PN_LEAD_W = 2             # drop-lead thickness
+
+
+def _subnet_label(nodes) -> str:
+    """Derive the subnet label from the nodes' shared /24 prefix, e.g.
+    'PROFINET — 192.168.10.0/24'. Falls back to the bare title when the prefix is
+    not uniform/derivable — NEVER invents an octet."""
+    prefixes = set()
+    for ip, _n, _t in nodes:
+        parts = (ip or "").split(".")
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            prefixes.add(".".join(parts[:3]))
+    if len(prefixes) == 1:
+        return f"PROFINET — {next(iter(prefixes))}.0/24"
+    return f"PROFINET — {PROFINET_TITLE}"
+
+
+def _is_controller_node(name: str, type_name: str, ip: str) -> bool:
+    """True for the node this drawing set documents: the Q100 station CPU. Matched
+    by the .aml facts (ip .10 AND a CPU-class TypeName) so it is data-driven, not
+    a hard-coded name. Any node whose type names a CPU at the .10 host is treated
+    as the documented controller — never invented."""
+    last = (ip or "").rsplit(".", 1)[-1]
+    return last == "10" and "CPU" in (type_name or "").upper()
+
+
+def _add_network_node_box(shapes, inputs, x, y, ip, name, type_name, controller):
+    """Draw one node box (name / IP / type stack) at (x, y). The controller box
+    is drawn with a heavier border + a '(CONTROLADOR)' tag so it reads distinctly
+    among the plant nodes. Text is lifted clear inside the box; all data-driven."""
+    x2, y2 = x + PN_BOX_W, y + PN_BOX_H
+    add_rect(shapes, x, y, x2, y2, width="2" if controller else "1")
+    tx = x + PN_TEXT_X
+    # name (header) — controller flagged inline; falls back to the IP when blank
+    header = name or ip
+    if controller:
+        header = f"{header}  (CONTROLADOR)"
+    add_text(inputs, tx, y + 16, header, FONT_HEADER if controller else FONT_TEXT)
+    # IP line (always present — it is the node's defining datum)
+    add_text(inputs, tx, y + 34, f"IP {ip}", FONT_SMALL)
+    # type line — only when known (never invented)
+    if type_name:
+        add_text(inputs, tx, y + 50, type_name, FONT_SMALL)
+
+
+def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
+    """Render the PROFINET network folio: a labelled bus bar with a grid of node
+    boxes below it (one per device), text + shape primitives only, EMPTY
+    <elements>/<conductors>. Each column drops a short lead from the bus to its
+    first row so the grid reads as hung off the subnet. The Q100 CPU node is
+    highlighted. Geometry stays inside the page frame for any node count."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": PROFINET_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    subnet = _subnet_label(nodes)
+    add_text(inputs, PN_X_MARGIN, 30, PROFINET_TITLE.upper(), FONT_HEADER)
+    add_text(inputs, PN_X_MARGIN, 48, subnet, FONT_SMALL)
+    if not nodes:
+        return diagram
+
+    # network bus: a horizontal bar spanning the page; the grid hangs below it.
+    bus_x1, bus_x2 = PN_X_MARGIN, PN_PAGE_W - PN_X_MARGIN
+    add_rect(shapes, bus_x1, PN_BUS_Y, bus_x2, PN_BUS_Y + PN_BUS_H)
+
+    # grid of node boxes; a short drop-lead from the bus to each column's top box.
+    col_pitch = PN_BOX_W + PN_COL_GAP
+    row_pitch = PN_BOX_H + PN_ROW_GAP
+    for i, (ip, name, type_name) in enumerate(nodes):
+        col = i % PN_COLS
+        row = i // PN_COLS
+        x = PN_X_MARGIN + col * col_pitch
+        y = PN_GRID_Y + row * row_pitch
+        if row == 0:
+            # drop lead from the bus down to this top-row box
+            drop_x = x + PN_BOX_W // 2
+            add_rect(shapes, drop_x, PN_BUS_Y + PN_BUS_H, drop_x + PN_LEAD_W, y)
+        controller = _is_controller_node(name, type_name, ip)
+        _add_network_node_box(shapes, inputs, x, y, ip, name, type_name,
+                              controller)
+    return diagram
+
+
+def build_network_folio(project: ET.Element, start_order: int, nodes) -> int:
+    """Append the whole-plant PROFINET network folio at `start_order`. VISUAL-only
+    (text + shape primitives, empty <elements>/<conductors>), built from the IR's
+    network_nodes list (real .aml PROFINET addresses). Returns 1 when nodes exist,
+    else 0 (graceful — no nodes / no .aml => no folio, never invented)."""
+    if not nodes:
+        return 0
+    _add_network_diagram(project, start_order, nodes)
+    return 1
+
+
 # ── Document assembly: section page numbering + folio order (DA.2 / DA.5) ────
 # Each document section starts on a round page boundary so a section can grow
 # without renumbering the sections downstream of it. The drawing-sheet page
@@ -2480,6 +2616,14 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
             project, supply_order + 1, io_mods, tmpl.get("grounding"))
     else:
         topology_folios = supply_folios = grounding_folios = 0
+    # NET (Siemens): whole-plant PROFINET network/topology folio, drawn from the
+    # IR's network_nodes (real .aml PROFINET addresses). Independent of the
+    # Rockwell vendor-folio gate — it is enabled whenever network nodes exist
+    # (Siemens with an --aml) and GRACEFULLY OMITTED otherwise (no .aml / no
+    # nodes => never invented). Shares the SECTION_TOPOLOGY page (2): the Siemens
+    # set has no Rockwell topology folio, so the two never collide.
+    network_nodes = getattr(project_ir, "network_nodes", None) or []
+    network_folios = build_network_folio(project, SECTION_TOPOLOGY, network_nodes)
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -2567,6 +2711,10 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     if emit_vendor_folios:
         print(f"topología  : {topology_folios} '{TOPOLOGY_TITLE}' folio(s) "
               f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree",
+              file=err)
+    if network_folios:
+        print(f"red PN     : {network_folios} '{PROFINET_TITLE}' folio(s) "
+              f"(order {SECTION_TOPOLOGY}), {len(network_nodes)} PROFINET node(s)",
               file=err)
     if page_total:
         print(f"title block: ISO 7200 ({TITLEBLOCK_NAME}) — "

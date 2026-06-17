@@ -172,6 +172,73 @@ def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
     return hw
 
 
+def _tn(el: ET.Element) -> str:
+    """Local tag name without the AML namespace prefix."""
+    return el.tag.split("}")[-1]
+
+
+def _ip_sort_key(ip: str) -> tuple:
+    """Numeric sort key for a dotted IPv4 string; a non-numeric/odd address sorts
+    last (deterministic) rather than raising — never invented."""
+    try:
+        return (0,) + tuple(int(x) for x in ip.split("."))
+    except (ValueError, AttributeError):
+        return (1, ip)
+
+
+def profinet_nodes(aml_path: str) -> list[tuple[str, str, str]]:
+    """Parse the CAx/AML for the PROFINET subnet node list.
+
+    Returns a list of (ip, name, type_name) tuples, one per `NetworkAddress`
+    attribute in the file, NUMERICALLY IP-sorted. The IP comes from the
+    `<Attribute Name="NetworkAddress"><Value>` itself; the device name + type are
+    resolved by climbing the parent chain (<=6 hops) from that attribute to the
+    first ancestor `<InternalElement>` carrying a `TypeName` attribute — that is
+    the owning device/module (the address sits several levels down on its PROFINET
+    interface node, which has only a Name). When no ancestor carries a TypeName,
+    the FIRST named `<InternalElement>` ancestor's Name is kept and the type is ""
+    — NEVER invented (a node with neither name nor type degrades to ("", "")).
+
+    Verified against the IMV1 export: 35 nodes on 192.168.10.x, e.g.
+    `192.168.10.10 Q100_QUERETARO1 / CPU 1512SP F-1 PN`.
+    """
+    tree = ET.parse(aml_path)
+    root = tree.getroot()
+    parent = {c: p for p in root.iter() for c in p}
+
+    nodes: list[tuple[str, str, str]] = []
+    for el in root.iter():
+        if _tn(el) != "Attribute" or el.get("Name") != "NetworkAddress":
+            continue
+        v = el.find("{*}Value")
+        ip = v.text.strip() if (v is not None and v.text and v.text.strip()) else None
+        if not ip:
+            continue
+        name = ""
+        type_name = ""
+        first_named = ""
+        cur = el
+        for _ in range(6):
+            cur = parent.get(cur)
+            if cur is None:
+                break
+            if _tn(cur) != "InternalElement":
+                continue
+            if not first_named and cur.get("Name"):
+                first_named = cur.get("Name")
+            tnm = _attr_value(cur, "TypeName")
+            if tnm:
+                name = cur.get("Name") or ""
+                type_name = tnm
+                break
+        if not name:
+            name = first_named  # device type unknown — keep the interface/device name
+        nodes.append((ip, name, type_name))
+
+    nodes.sort(key=lambda r: _ip_sort_key(r[0]))
+    return nodes
+
+
 def hardware_for_station(
     hw: dict[tuple[str, str], dict], station_name: str
 ) -> dict[str, dict]:

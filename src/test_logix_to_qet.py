@@ -1772,6 +1772,128 @@ class TopologyFolioTest(unittest.TestCase):
             self.assertNotIn("%{", prop.text or "")
 
 
+def _sample_nodes():
+    """A small PROFINET node list mirroring the .aml shape: the Q100 CPU at .10
+    plus a couple of plant nodes (one with no type — never invented)."""
+    return [
+        ("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN"),
+        ("192.168.10.12", "EV_UV_Q100", "EX260 SPN 3/4"),
+        ("192.168.10.13", "DRIVE UV Rotation", "SK TU3-PNT"),
+        ("192.168.10.99", "MYSTERY", ""),   # node with no type
+    ]
+
+
+def _many_nodes(n=35):
+    """n synthetic PROFINET nodes on 192.168.10.x with the CPU at .10, to assert
+    a full grid stays inside the page frame."""
+    nodes = [("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN")]
+    for i in range(1, n):
+        nodes.append((f"192.168.10.{100 + i}", f"NODE{i}", "SK TU3-PNT"))
+    return nodes
+
+
+class NetworkFolioTest(unittest.TestCase):
+    """NET: the whole-plant PROFINET network folio is VISUAL-only (text + shape
+    primitives, empty <elements>/<conductors>), draws a labelled subnet bus with
+    one node box per device (name + IP + type), highlights the Q100 CPU, keeps
+    every box inside the page frame, and is omitted gracefully when no nodes."""
+
+    def test_builds_one_folio_at_given_order(self):
+        project = ET.Element("project")
+        n = q.build_network_folio(project, 2, _sample_nodes())
+        self.assertEqual(n, 1)
+        d = project.find("diagram")
+        self.assertEqual(d.get("order"), "2")
+        self.assertEqual(d.get("title"), "Red PROFINET")
+
+    def test_empty_nodes_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_network_folio(project, 2, []), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_only_text_and_shapes_no_elements_or_conductors(self):
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        self.assertGreater(len(d.find("shapes").findall("shape")), 0)
+        self.assertGreater(len(d.find("inputs").findall("input")), 0)
+
+    def test_one_box_per_node(self):
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        d = project.find("diagram")
+        boxes = [s for s in d.find("shapes").findall("shape")
+                 if abs(float(s.get("x2")) - float(s.get("x1")) - q.PN_BOX_W) < 1
+                 and abs(float(s.get("y2")) - float(s.get("y1")) - q.PN_BOX_H) < 1]
+        self.assertEqual(len(boxes), len(_sample_nodes()))
+
+    def test_controller_node_highlighted(self):
+        # exactly one box (the .10 CPU) drawn with the heavier (width 2) border.
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        d = project.find("diagram")
+        heavy = [s for s in d.find("shapes").findall("shape")
+                 if s.find("pen") is not None
+                 and s.find("pen").get("widthF") == "2"]
+        self.assertEqual(len(heavy), 1)
+        texts = " | ".join(i.get("text") for i in d.find("inputs").findall("input"))
+        self.assertIn("CONTROLADOR", texts)
+        self.assertIn("Q100_QUERETARO1", texts)
+
+    def test_subnet_label_and_ips_rendered(self):
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        d = project.find("diagram")
+        texts = " | ".join(i.get("text") for i in d.find("inputs").findall("input"))
+        self.assertIn("192.168.10.0/24", texts)   # derived /24 subnet
+        self.assertIn("IP 192.168.10.10", texts)
+        self.assertIn("IP 192.168.10.12", texts)
+
+    def test_node_without_type_has_no_type_line_never_invented(self):
+        # the MYSTERY node (type "") must render name+IP only, no fabricated type.
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("MYSTERY", texts)
+        self.assertIn("IP 192.168.10.99", texts)
+
+    def test_full_extent_inside_page_frame_35_nodes(self):
+        # all 35 node boxes + bus + labels lie inside the real page frame.
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _many_nodes(35))
+        d = project.find("diagram")
+        boxes = [s for s in d.find("shapes").findall("shape")
+                 if abs(float(s.get("x2")) - float(s.get("x1")) - q.PN_BOX_W) < 1
+                 and abs(float(s.get("y2")) - float(s.get("y1")) - q.PN_BOX_H) < 1]
+        self.assertEqual(len(boxes), 35)
+        xs, ys = [], []
+        for s in d.find("shapes").findall("shape"):
+            xs += [float(s.get("x1")), float(s.get("x2"))]
+            ys += [float(s.get("y1")), float(s.get("y2"))]
+        for i in d.find("inputs").findall("input"):
+            xs.append(float(i.get("x")))
+            ys.append(float(i.get("y")))
+        self.assertGreaterEqual(min(xs), 0)
+        self.assertLessEqual(max(xs), 1010)
+        self.assertGreaterEqual(min(ys), 0)
+        self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)   # 660
+
+    def test_inherits_titleblock_and_no_token_leak(self):
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _sample_nodes())
+        fields = q.resolve_title_block_fields(
+            {**{k: v for k, v in q.PROJECT_TEMPLATE_DEFAULTS.items()
+                if isinstance(v, str)}, "company": "Exxerpro Solutions"}, "C")
+        q.attach_titleblocks(project, fields, q.load_titleblock_template())
+        d = project.find("diagram")
+        self.assertEqual(d.get("titleblocktemplate"), "exxerpro")
+        for prop in d.find("properties").findall("property"):
+            self.assertNotIn("%{", prop.text or "")
+
+
 class TopologyWaddingRegressionTest(unittest.TestCase):
     """E2.1 end-to-end: the topology folio is added at order 2 from the real
     fixture WITHOUT moving the matched floor (106 drawn / 75 matched); CHAN

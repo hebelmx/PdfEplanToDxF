@@ -160,6 +160,81 @@ class SyntheticAmlTest(unittest.TestCase):
         self.assertIn("DI10_11", st)
 
 
+class ProfinetNodesSyntheticTest(unittest.TestCase):
+    """profinet_nodes resolves (ip, name, type) by climbing to the TypeName
+    ancestor, sorts numerically by IP, and never invents missing fields."""
+
+    def _nodes(self, text=_SYNTHETIC_AML):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.aml"
+            p.write_text(text, encoding="utf-8")
+            return tia_aml.profinet_nodes(str(p))
+
+    def test_single_node_resolved_to_owning_device(self):
+        # the address sits under "PROFINET interface_1 > E1"; the resolver climbs
+        # to the first ancestor with a TypeName (the head module).
+        nodes = self._nodes()
+        self.assertEqual(nodes, [("192.168.10.55", "HeadA", "CPU 1512SP F-1 PN")])
+
+    def test_numeric_ip_sort(self):
+        # two addresses out of dotted-decimal order must sort numerically, not
+        # lexically (.10 before .9 lexically, but .9 < .10 numerically).
+        two = _SYNTHETIC_AML.replace(
+            '<Attribute Name="NetworkAddress"><Value>192.168.10.55</Value></Attribute>',
+            '<Attribute Name="NetworkAddress"><Value>192.168.10.10</Value></Attribute>'
+            '<Attribute Name="NetworkAddress"><Value>192.168.10.9</Value></Attribute>',
+        )
+        nodes = self._nodes(two)
+        ips = [ip for ip, _n, _t in nodes]
+        self.assertEqual(ips, ["192.168.10.9", "192.168.10.10"])
+
+    def test_no_typename_keeps_named_ancestor_blank_type(self):
+        # a node whose ancestors carry NO TypeName keeps the first named
+        # InternalElement and leaves the type "" — never invented.
+        text = _SYNTHETIC_AML.replace(
+            '<Attribute Name="TypeName"><Value>CPU 1512SP F-1 PN</Value></Attribute>',
+            "",
+        )
+        nodes = self._nodes(text)
+        self.assertEqual(len(nodes), 1)
+        ip, name, typ = nodes[0]
+        self.assertEqual(typ, "")
+        self.assertTrue(name)  # falls back to a named ancestor, not fabricated
+
+
+class ProfinetNodesFixtureTest(unittest.TestCase):
+    def setUp(self):
+        self.aml = _imv1_aml()
+        if not self.aml.is_file():
+            self.skipTest("IMV1 .aml fixture not present")
+
+    def test_thirtyfive_nodes_sorted_with_known_endpoints(self):
+        nodes = tia_aml.profinet_nodes(str(self.aml))
+        self.assertEqual(len(nodes), 35)
+        # numerically sorted, .10 first .95 last
+        self.assertEqual(nodes[0], ("192.168.10.10", "Q100_QUERETARO1",
+                                    "CPU 1512SP F-1 PN"))
+        self.assertEqual(nodes[-1], ("192.168.10.95", "PLC_1",
+                                     "CPU 1214C AC/DC/Rly"))
+        ips = [ip for ip, _n, _t in nodes]
+        self.assertEqual(ips, sorted(ips, key=tia_aml._ip_sort_key))
+
+    def test_sample_nodes_match(self):
+        nodes = {ip: (n, t) for ip, n, t in tia_aml.profinet_nodes(str(self.aml))}
+        self.assertEqual(nodes["192.168.10.12"], ("EV_UV_Q100", "EX260 SPN 3/4"))
+        self.assertEqual(nodes["192.168.10.20"], ("Q200_Q1", "IM 155-6 PN ST"))
+
+    def test_ir_carries_network_nodes_with_aml(self):
+        proj = plc_ir.build_tia_project(str(self.aml.parent /
+                "IMV1_QRO001_08AGO21_V15_IO_Channels.xml"), None, str(self.aml))
+        self.assertEqual(len(proj.network_nodes), 35)
+
+    def test_ir_network_nodes_empty_without_aml(self):
+        proj = plc_ir.build_tia_project(str(self.aml.parent /
+                "IMV1_QRO001_08AGO21_V15_IO_Channels.xml"))
+        self.assertEqual(proj.network_nodes, [])
+
+
 class PhysicalNameTest(unittest.TestCase):
     def test_strips_split_suffix(self):
         self.assertEqual(tia._physical_name("F-DQ1500 [DI]"), "F-DQ1500")

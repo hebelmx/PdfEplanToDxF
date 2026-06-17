@@ -88,9 +88,20 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       Siemens render OLD→NEW: folios 6→7 (F-DQ1500 [DI] now renders); points drawn 48→48;
       skipped 40→40; RESERVA 36→40 (all 88 channels represented). ISO title block on all folios,
       0 token leaks, 0 unresolved conductors on both sets. Suite green (320 tests, 1 pre-existing
-      skip). DONE 2026-06-16 (pending Abel re-eyeball gate before lock).
-- [ ] **NET** — Network/topology folio for Siemens (PROFINET `NetworkAddress` from `.aml`), the
-      vendor-neutral topology builder pattern. Derivable now (TIA-3 populated `network_address`).
+      skip). **DONE & committed @ `b2fe954`** — Abel-eyeballed both sets via PDF preview (approved
+      2026-06-16); floor RE-BASELINED in guardrails above.
+- [~] **NET** — whole-plant PROFINET network folio for Siemens (scope locked by Abel: ALL 35 nodes
+      on 192.168.10.x, Q100 CPU highlighted). `tia_aml.profinet_nodes()` resolves (ip, name, type)
+      per node from the `.aml` (35 nodes: Q100 CPU 1512SP F-1, IM 155-6 heads Q200-Q800, SK TU3-PNT
+      drives, EX260 valve terminals, BIS M-4008 RFID, CPU 1214C @ .95). Topology folio = text+shape
+      primitives (empty elements/conductors), gated ON for Siemens when nodes present, omitted w/o
+      `--aml`. **DONE @ (commit below).** Folio builder `build_network_folio` in `logix_to_qet`,
+      gated at `SECTION_TOPOLOGY` (order 2) by `PlcProject.network_nodes` (Rockwell IR empty → off,
+      independent of `emit_vendor_folios`). Layout: subnet bus + 5-col×7-row node grid, controller
+      (.10 host + CPU TypeName, data-driven) boxed + `(CONTROLADOR)`. **Verified from ground truth:**
+      suite 320→336 (+16); WADDING_1 floor UNCHANGED 11/106/75/0/78/35 + 0 PROFINET refs on Rockwell;
+      Siemens 20→21 folios, 35 nodes, ISO title block on all, 0 token leaks; omits w/o `--aml`.
+      Abel preview-PDF sent for eyeball (proceeding per his "move fast"; tweakable before merge gate).
 - [ ] **RACK+IDX** — Rack/chassis layout overview (Story 2.3) + drawing index/TOC (Story 2.2) for
       Siemens; derivable from the IR + `.aml`.
 - [ ] **ALIM** — Alimentación/power one-line for Siemens (Epic 5, config-driven). Needs Abel's
