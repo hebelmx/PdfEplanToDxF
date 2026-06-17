@@ -75,11 +75,15 @@
 1. **Abel's DESKTOP eyeball** (he found the phone-preview "looks unreal", deferring final visual calls):
    - NET controller highlight: mark only the in-scope station's CPU, or all CPUs on the subnet?
    - NET layout (drop-leads only on row 0 — spine/ladder?); símbología (1 symbol type); overall sign-off.
-2. **No-output-change items can proceed NOW without the eyeball** (do these next cycle):
-   - **FP=0 real counter** (assert per-type match breakdown, both pipelines) — TEST hardening only.
-   - **Docs sync** — append the E4 entry to `docs/planning/.decision-log.md` + reconcile `epics.md`
-     (floor re-baseline; 1200-first; Siemens-first folio scope for Stories 2.2/2.3; `.aml`-direct
-     catalog vs curated `module_db` for Story 4.1; resolve the 4 carried open questions).
+2. ~~**No-output-change items**~~ ✅ **DONE 2026-06-16** (both shipped & pushed to `feat/e4-tia-1200`):
+   - ✅ **FP=0 real counter** @ `2d2de39` — `_parse_match_breakdown` + `test_floor_match_breakdown_by_type`
+     in BOTH floor tests assert the EXACT per-type dict (Rockwell 11-type=75 + 31 generic; Siemens
+     push_button 2 + 46 generic). Verified the guard BITES (a 27/16 swap that keeps total=75 fails it).
+     Suite 372→374; floor unchanged 11/106/75/0/78/35; no production code touched.
+   - ✅ **Docs sync** @ `eb6dae0` — `.decision-log.md` 2026-06-16 E4 entry (floor re-baseline; 1200-first
+     + 1512SP correction; FR-8=YES no-Openness; `.aml`-direct catalog; Siemens-first 2.2/2.3; resolves
+     the 4 prd §11 open questions, power-config #3 still open) + `epics.md` reconciled (NFR-6, DoD,
+     Stories 2.2/2.3/4.1/4.2).
 3. **AFTER Abel's desktop go** (these CHANGE validated output → re-eyeball + re-baseline):
    - **TIA-FIX-2**: Siemens cover shows `CONTROLADOR (L5X)` (Rockwell format tag) — make vendor-aware
      (`logix_to_qet.py:1707`; Rockwell keeps it → byte-equiv).
