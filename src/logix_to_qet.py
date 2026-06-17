@@ -2285,23 +2285,46 @@ def _is_controller_node(node) -> bool:
     return bool(_node_field(node, 4, False))
 
 
+def _fit_text(text: str, max_chars: int) -> str:
+    """Clip `text` to `max_chars` with a trailing ellipsis so a long label never
+    overruns its box. Layout-only — the FULL value still appears on the rack/IO/
+    BOM folios; this trims the on-sheet copy that would otherwise spill out of the
+    box width. Never pads; returns "" unchanged."""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max(1, max_chars - 1)].rstrip() + "…"
+
+
+# Per-line character budgets for the node box (PN_BOX_W=190, PN_TEXT_X=6 inset).
+# Calibrated to the preview/QET widths so the longest real labels fit inside the
+# box instead of spilling into the neighbour (Q100's name + '(CONTROLADOR)' was
+# overrunning). The header uses FONT_TEXT (not the wider bold FONT_HEADER) so the
+# controller tag fits; the heavy border still marks the controller.
+PN_HEADER_CHARS = 30
+PN_LINE_CHARS = 32
+
+
 def _add_network_node_box(shapes, inputs, x, y, ip, name, type_name, controller):
     """Draw one node box (name / IP / type stack) at (x, y). The controller box
     is drawn with a heavier border + a '(CONTROLADOR)' tag so it reads distinctly
-    among the plant nodes. Text is lifted clear inside the box; all data-driven."""
+    among the plant nodes. The three text lines are lifted UP inside the box (the
+    type line used to sit on the bottom border) and clipped to the box width (long
+    names used to spill into the next box); all data-driven, never invented."""
     x2, y2 = x + PN_BOX_W, y + PN_BOX_H
     add_rect(shapes, x, y, x2, y2, width="2" if controller else "1")
     tx = x + PN_TEXT_X
-    # name (header) — controller flagged inline; falls back to the IP when blank
+    # name (header) — controller flagged inline; falls back to the IP when blank.
+    # FONT_TEXT (not bold FONT_HEADER) so 'name  (CONTROLADOR)' fits the width.
     header = name or ip
     if controller:
         header = f"{header}  (CONTROLADOR)"
-    add_text(inputs, tx, y + 16, header, FONT_HEADER if controller else FONT_TEXT)
+    add_text(inputs, tx, y + 6, _fit_text(header, PN_HEADER_CHARS), FONT_TEXT)
     # IP line (always present — it is the node's defining datum)
-    add_text(inputs, tx, y + 34, f"IP {ip}", FONT_SMALL)
-    # type line — only when known (never invented)
+    add_text(inputs, tx, y + 24, _fit_text(f"IP {ip}", PN_LINE_CHARS), FONT_SMALL)
+    # type line — only when known (never invented); kept clear of the bottom edge
     if type_name:
-        add_text(inputs, tx, y + 50, type_name, FONT_SMALL)
+        add_text(inputs, tx, y + 42, _fit_text(type_name, PN_LINE_CHARS),
+                 FONT_SMALL)
 
 
 def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
@@ -2337,7 +2360,11 @@ def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
     bus_x1, bus_x2 = PN_X_MARGIN, PN_PAGE_W - PN_X_MARGIN
     add_rect(shapes, bus_x1, PN_BUS_Y, bus_x2, PN_BUS_Y + PN_BUS_H)
 
-    # grid of node boxes; a short drop-lead from the bus to each column's top box.
+    # grid of node boxes. Each COLUMN hangs off the bus as a chain: a drop-lead
+    # from the bus to the top box, then a short inter-row lead in every row gap so
+    # rows 1..n are connected too (previously only row 0 was hung off the bus, so
+    # the lower rows read as floating/disconnected). The lead runs at the box
+    # centre, only through the empty PN_ROW_GAP between boxes — never over text.
     col_pitch = PN_BOX_W + PN_COL_GAP
     row_pitch = PN_BOX_H + PN_ROW_GAP
     for i, node in enumerate(nodes):
@@ -2348,10 +2375,14 @@ def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
         row = i // PN_COLS
         x = PN_X_MARGIN + col * col_pitch
         y = PN_GRID_Y + row * row_pitch
+        drop_x = x + PN_BOX_W // 2
         if row == 0:
             # drop lead from the bus down to this top-row box
-            drop_x = x + PN_BOX_W // 2
             add_rect(shapes, drop_x, PN_BUS_Y + PN_BUS_H, drop_x + PN_LEAD_W, y)
+        else:
+            # inter-row spine: connect this box up to the box above it (the gap
+            # between the previous box's bottom (y - PN_ROW_GAP) and this top y)
+            add_rect(shapes, drop_x, y - PN_ROW_GAP, drop_x + PN_LEAD_W, y)
         controller = _is_controller_node(node)
         _add_network_node_box(shapes, inputs, x, y, ip, name, type_name,
                               controller)

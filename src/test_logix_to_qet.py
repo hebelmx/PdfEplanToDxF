@@ -1962,6 +1962,65 @@ class NetworkFolioTest(unittest.TestCase):
         self.assertGreaterEqual(min(ys), 0)
         self.assertLessEqual(max(ys), q.SUMMARY_HEIGHT)   # 660
 
+    def test_every_node_connected_to_bus(self):
+        # EYE-2: every node hangs off the bus — row 0 via a drop-lead from the bus
+        # bar, rows 1+ via an inter-row lead up to the box above (previously only
+        # the top row was connected, so the lower rows read as floating). Exactly
+        # one vertical lead per node; PN_COLS of them start AT the bus.
+        project = ET.Element("project")
+        nodes = _many_nodes(35)
+        q.build_network_folio(project, 2, nodes)
+        d = project.find("diagram")
+        leads = [s for s in d.find("shapes").findall("shape")
+                 if (float(s.get("x2")) - float(s.get("x1"))) <= q.PN_LEAD_W + 1
+                 and (float(s.get("y2")) - float(s.get("y1"))) > 3]
+        self.assertEqual(len(leads), len(nodes))   # one lead per node
+        from_bus = [s for s in leads
+                    if abs(float(s.get("y1")) - (q.PN_BUS_Y + q.PN_BUS_H)) < 1]
+        self.assertEqual(len(from_bus), q.PN_COLS)            # top-row drops
+        self.assertEqual(len(leads) - len(from_bus),
+                         len(nodes) - q.PN_COLS)              # rest chain rows
+
+    def test_node_box_text_lines_clear_bottom_border(self):
+        # EYE-1: the third text line (module type) must sit INSIDE the box, not on
+        # the bottom border (it used to render at y+50 in a 60-tall box and overlap
+        # the edge). Assert the lowest text line's full height clears the box.
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, _many_nodes(12))
+        d = project.find("diagram")
+        boxes = [s for s in d.find("shapes").findall("shape")
+                 if abs(float(s.get("y2")) - float(s.get("y1")) - q.PN_BOX_H) < 1]
+        inputs = d.find("inputs").findall("input")
+        LINE_H = 14   # conservative QET text height at FONT_TEXT/FONT_SMALL
+        checked = 0
+        for b in boxes:
+            bx1, by1, by2 = (float(b.get("x1")), float(b.get("y1")),
+                             float(b.get("y2")))
+            lines = [float(i.get("y")) for i in inputs
+                     if abs(float(i.get("x")) - (bx1 + q.PN_TEXT_X)) < 2
+                     and by1 <= float(i.get("y")) <= by2]
+            if not lines:
+                continue
+            self.assertLessEqual(max(lines) + LINE_H, by2)
+            checked += 1
+        self.assertEqual(checked, len(boxes))   # every box validated
+
+    def test_long_node_header_clipped_to_box_width(self):
+        # EYE-1: a name long enough to overflow the box is clipped (ellipsis) so it
+        # never spills into the neighbour box; short names are untouched.
+        long_name = "VERY_LONG_STATION_NAME_THAT_OVERFLOWS_THE_NODE_BOX"
+        nodes = [("192.168.10.10", long_name, "CPU 1512SP F-1 PN",
+                  "255.255.255.0", True)]
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, nodes)
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        header = next(t for t in texts if t.startswith("VERY_LONG"))
+        self.assertLessEqual(len(header), q.PN_HEADER_CHARS)
+        self.assertTrue(header.endswith("…"))
+        # a short name is returned unchanged (no padding, no ellipsis)
+        self.assertEqual(q._fit_text("Q100", q.PN_HEADER_CHARS), "Q100")
+
     def test_inherits_titleblock_and_no_token_leak(self):
         project = ET.Element("project")
         q.build_network_folio(project, 2, _sample_nodes())
