@@ -139,10 +139,11 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       flagged via DeviceItemType=CPU = **2 real CPUs** (Q100 1512SP @ .10 AND PLC_1 1214C @ .95 —
       the old `.10` heuristic HID the 2nd CPU; correction surfaces both). N3 returns {} on station
       mismatch. All 6 findings + tests.
-- [~] **TIA-FIX-2 (Siemens vendor leak)** — `build_portada` hard-codes the cover row `"CONTROLADOR
-      (L5X)"` (`logix_to_qet.py:1707`); `(L5X)` is the Rockwell format tag, WRONG on the Siemens
-      cover. Make vendor-aware (Rockwell keeps `(L5X)` → byte-equiv; Siemens → accurate/neutral
-      label). Found while verifying TIA-FIX-1 (a cross-pipeline leak, the class Abel flagged).
+- [x] **TIA-FIX-2 (Siemens vendor leak)** — DONE @ `d52163e` (branch `feat/e5-output-fixes`).
+      `build_portada_folio` gained keyword `source_format` (default `"L5X"` → Rockwell byte-equiv);
+      `render_project` passes `"TIA"` for Siemens. Siemens cover now `CONTROLADOR (TIA)`, zero `(L5X)`
+      leak; suite 385→388; Rockwell BYTE-EQUIVALENT + floor 11/106/75/0/78/35. (Only user-visible
+      change this cycle → quick Siemens eyeball before the E5 merge.)
 - [ ] **TIA-DOCS** (orchestrator) — append E4 entry to `docs/planning/.decision-log.md` (floor
       RE-BASELINE 10/106/75/0/62/33 → 11/106/75/0/78/35 w/ matched=75+FP=0 invariants; 1200-first;
       Siemens-only folio scope; `.aml`-direct catalog vs curated module_db for Story 4.1; resolve the
@@ -155,6 +156,10 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       **FP=0 asserted by proxy** (generic count) not a real counter — both pipelines; (nits) magic 256
       analog base, EPLAN `A/KF` letters. Rockwell fixes CHANGE the validated Rockwell output → need
       Abel desktop eyeball before doing them.
+      **RESOLVED 2026-06-17 (E5 cycle):** #2 PV-classifier + #3 comms-bridge families fixed
+      BYTE-EQUIVALENTLY @ `b401555` (neither active on WADDING — its HMI is literal `PanelView`, its
+      bridges are CNB). #1 24V rail = WON'T-FIX (Abel: keep the standard rail template). FP=0 real
+      counter already shipped @ `2d2de39`. Remaining nits (magic 256, A/KF letters) still open, low-pri.
 - [ ] **ALL OPEN ITEMS TRACKED IN GitHub issue #2** (https://github.com/hebelmx/PdfEplanToDxF/issues/2,
       sanitized for the public repo): (A) pending desktop-eyeball visual decisions [two-CPU highlight,
       NET layout, símbología, overall sign-off]; (B) queued fixes [TIA-FIX-2 cover leak; Rockwell 24V
@@ -165,6 +170,24 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 
 ## Status log
+- 2026-06-17: **E5 OUTPUT-FIXES CYCLE (branch `feat/e5-output-fixes`, off `main` @ 586555e).**
+  Three commits, all verified from ground truth:
+  - **TIA-FIX-2** @ `d52163e` — vendor-aware cover controller tag. `build_portada_folio` gained a
+    keyword `source_format` (default `"L5X"`); `render_project` passes `"TIA"` for Siemens. Rockwell
+    **BYTE-EQUIVALENT** (default unchanged); Siemens cover now `CONTROLADOR (TIA)`, zero `(L5X)` leak.
+    Suite 385→388. **(Only user-visible change in this cycle → wants a quick Siemens eyeball.)**
+  - **RW-CLASSIFY** @ `b401555` (findings #2+#3) — **BYTE-EQUIVALENT** on WADDING (verified):
+    #2 `classify_node` HMI no longer uses the bare 2-letter `"PV"` substring (false-positived on
+    e.g. `1492-SPV-*` AND missed real `2711P-*`); now matches literal `PANELVIEW` or AB family
+    prefix `2711`/`2715`. WADDING's real HMI catalog is the literal `PanelView` → still hmi.
+    #3 added comms-bridge families `AENT`→EtherNet/IP, `DNB`→DeviceNet, `DHRIO`→DH+/RIO (WADDING
+    has none → additive). Suite 388→390.
+  - **Finding #1 (24V rail) = WON'T-FIX (Abel decision 2026-06-17): keep the standard rail template
+    L1/N/L+/24V/0V/PE** as an intentional panel skeleton, even though WADDING cards reference only
+    L1/N/L+/0V (the DC card names its rails L+/0V; L+ IS the 24V positive). No code change; the
+    existing supply-rail test correctly locks in the intended template.
+  **NEXT: quick Siemens cover eyeball → merge `feat/e5-output-fixes` → main; then ALIM (blocked on
+  Abel's panel power data); then S7-1500/S7-300.**
 - 2026-06-17: **DESKTOP RE-CONFIRM (Abel) → PASS. Both decisions gated & locked; MERGED to `main`.**
   Abel opened both fresh eyeball sets in real QET-desktop (`_eyeball_wadding.qet` 35 folios +
   `_eyeball_tia.qet` 22 folios, regenerated at HEAD post EYE-1..4) → "they look good." Decisions:
