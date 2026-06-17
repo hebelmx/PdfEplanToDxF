@@ -170,12 +170,11 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       BYTE-EQUIVALENTLY @ `b401555` (neither active on WADDING — its HMI is literal `PanelView`, its
       bridges are CNB). #1 24V rail = WON'T-FIX (Abel: keep the standard rail template). FP=0 real
       counter already shipped @ `2d2de39`. Remaining nits (magic 256, A/KF letters) still open, low-pri.
-- [ ] **ALL OPEN ITEMS TRACKED IN GitHub issue #2** (https://github.com/hebelmx/PdfEplanToDxF/issues/2,
-      sanitized for the public repo): (A) pending desktop-eyeball visual decisions [two-CPU highlight,
-      NET layout, símbología, overall sign-off]; (B) queued fixes [TIA-FIX-2 cover leak; Rockwell 24V
-      rail + supply test + PV classifier + comms-bridge; FP=0 real counter both pipelines]; (C) docs
-      sync; (D) ALIM (blocked on power data). **Abel deferring final visual decisions to desktop
-      inspection** → fixes that change validated output wait for his go.
+- [x] **GitHub issue #2 CLOSED 2026-06-17** — all substantive items DONE or decided + merged to `main`:
+      (A) visual decisions [two-CPU highlight=ALL CPUs, NET layout=EYE-1/2, símbología accepted, sign-off
+      passed]; (B) fixes [TIA-FIX-2 cover leak ✓, PV classifier ✓, comms-bridge ✓, FP=0 counter ✓; 24V
+      rail + supply test = WON'T-FIX (keep template)]; (C) docs sync ✓; (D) ALIM ✓ (shipped @ `56c6de3`
+      with Abel's test power data). The 3 surviving low-pri nits → **GitHub issue #3** (non-blocking).
 - [ ] **TIA-DEFERRED (nits)** — >32-ch column overflow assert+test (latent); NET inter-row spine
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
 

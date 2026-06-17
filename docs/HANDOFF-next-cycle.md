@@ -4,7 +4,7 @@
 > Updated 2026-06-17 (supersedes the "feature-complete on a branch, pending eyeball + merge gate"
 > version). Phase 1 (Rockwell) shipped & merged long ago; this is **Phase 2** (multi-vendor +
 > config-driven diagrams), driven by `docs/planning/{brief,prd,epics}.md`. **Live source of truth for
-> the open work = `docs/TIA-tracker.md` + GitHub issue #2** (read both; issue #2 is stale — see below).
+> the open work = `docs/TIA-tracker.md`** (GitHub issue #2 CLOSED 2026-06-17; surviving low-pri nits → issue #3).
 
 ## TL;DR — read this first
 - Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
@@ -86,10 +86,8 @@
 **2. S7-300 path** — spike was GO; fixture `Fixtures/Siemens/S7300/` in hand. Schema (`.asc` symbol
    table + `.cfg` HW config, join on byte address; masked `?` order-# digits are wildcards — keep) is
    in memory `siemens-import-findings`. Build a `build_s7300_project()` front-end → same IR shape.
-**3. GitHub issue #2 is STALE — needs a cleanup pass.** Nearly all its items are now DONE (desktop
-   eyeball, all 4 EYE fixes, TIA-FIX-2, RW-CLASSIFY #2/#3, FP=0 real counter, docs sync, AND ALIM).
-   What genuinely remains: only the low-pri nits below. Update/close it (SANITIZED — no plant data)
-   so it stops misrepresenting the state.
+**3. ✅ GitHub issue #2 CLOSED 2026-06-17** (all substantive items done or decided + merged). The 3
+   surviving low-pri nits were split into **issue #3** (non-blocking polish) — same as the list below.
 **4. Low-priority nits (not bugs, no floor risk):**
    - Símbología Siemens vocabulary — only `push_button` matches the Siemens tag vocabulary today
      (correct never-invent). Could add a CONFIDENT Siemens symbol dictionary (fcuv/VS_/etc.). Abel
@@ -186,11 +184,11 @@ PROFINET nodes, cover "CONTROLADOR (TIA)". No open feature branch.
 
 READ FIRST: docs/HANDOFF-next-cycle.md (this file), docs/TIA-tracker.md (current), docs/planning/*,
 memory tia-import-findings + siemens-import-findings + never-overwrite-working-qet + qet-preview-fidelity.
-(GitHub issue #2 is STALE — most items done; needs a cleanup pass.)
+(GitHub issue #2 is CLOSED; low-pri nits live in issue #3.)
 
 DO NEXT (priority order): (1) S7-1500 path (I/O in IO_Channels + PLCTagsS71500.xlsx rich English
 comments; CPU 1512SP in .aml) -> same IR shape. (2) S7-300 path (fixture Fixtures/Siemens/S7300/,
-schema in memory siemens-import-findings). (3) Clean up the stale GitHub issue #2. ALIM is DONE
+schema in memory siemens-import-findings). (3) Optionally pick up the low-pri nits in issue #3. ALIM is DONE
 (config-driven; extend via --power-config JSON, never invent).
 
 HARD RULES: never -o Fixtures/Rockwell/WADDING_1.qet; never invent (read the real datum or blank);
