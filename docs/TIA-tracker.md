@@ -112,8 +112,18 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
       (order 3, 'Índice de planos', all 23 folios). **Verified from ground truth:** suite 336→357;
       Rockwell **BYTE-EQUIVALENT** (normalized diff EMPTY) + floor 11/106/75/0/78/35; Siemens 21→23
       folios; I/O titles now show real slots R0.S2–S7 (no "Slot None"); 0 token leaks. Preview sent.
-- [ ] **ALIM** — Alimentación/power one-line for Siemens (Epic 5, config-driven). Needs Abel's
-      panel power data (breakers/feeders/voltages) — never-invent. Build config schema + folio.
+- [x] **ALIM** — Alimentación/power one-line for Siemens (Epic 5, config-driven). DONE on branch
+      `feat/e5-alim` (@ `026080c` + label tweak `310150d`), desktop-confirmed by Abel. New
+      `src/power_config.py` (stdlib json loader) + `build_power_folio` (`logix_to_qet.py`,
+      `SECTION_ALIM=5`, visual-only vertical one-line, gated `source_vendor=="siemens" AND
+      power_config` → Rockwell byte-equiv) + `tia_to_qet --power-config PATH` flag +
+      `docs/examples/power_config.example.json` (synthetic schema example). **TEST values
+      (Abel-supplied test assumptions, NOT real plant data — see memory `alim-test-power-config`):
+      120 VAC single system; input CB 2 A; PS 10 A; output CB 10 A; no transformer/UPS.** One-line:
+      `120 VAC → [CB 2A] → [PS 10A] → [CB 10A] → control/PLC loads`; absent transformer/ups omitted
+      (never-invent). Verified: suite 390→397 green; Rockwell BYTE-EQUIVALENT + floor
+      11/106/75/0/78/35; Siemens 22→23 folios, Alimentación order 5 (0 elements/0 conductors),
+      listed in the drawing index. **Pending the human merge gate `feat/e5-alim` → main.**
 - [ ] **Símbología vocabulary (future, low pri)** — only `push_button` matches the Siemens tag
       vocabulary today (correct never-invent). Could add a Siemens symbol dictionary (fcuv/VS_/etc.)
       with CONFIDENT mappings only. Not a bug.

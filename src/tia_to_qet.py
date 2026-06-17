@@ -29,6 +29,7 @@ from pathlib import Path
 
 import plc_ir
 import logix_to_qet
+import power_config as power_config_mod
 
 
 def _discover_tags(io_channels_path: str) -> str | None:
@@ -71,6 +72,11 @@ def main(argv=None):
                          "module order numbers + PROFINET addresses (overrides "
                          "the sibling *.aml auto-discovery; absent => catalog/"
                          "network_address stay blank)")
+    ap.add_argument("--power-config",
+                    help="path to a power one-line JSON config (system voltage, "
+                         "input/output breakers, power supply, optional "
+                         "transformer/ups); absent => no 'Alimentación' folio "
+                         "(never invented). See docs/examples/power_config.example.json")
     ap.add_argument("--no-symbols", action="store_true",
                     help="skip field-device symbol matching (terminals only)")
     ap.add_argument("--wire-scheme", choices=("address", "sequential"),
@@ -82,6 +88,7 @@ def main(argv=None):
 
     tags_path = args.tags or _discover_tags(args.io_channels)
     aml_path = args.aml or _discover_aml(args.io_channels)
+    power_cfg = power_config_mod.load_power_config(args.power_config)
 
     # Build the vendor-neutral PlcProject IR via the Siemens front end, then hand
     # it to the SAME renderer logix_to_qet uses — only emit_vendor_folios differs.
@@ -101,6 +108,7 @@ def main(argv=None):
         no_symbols=args.no_symbols,
         wire_scheme=args.wire_scheme,
         emit_vendor_folios=False,
+        power_config=power_cfg,
     )
 
 
