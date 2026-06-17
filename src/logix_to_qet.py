@@ -2735,6 +2735,118 @@ def build_rack_folio(project: ET.Element, start_order: int, modules) -> int:
     return 1
 
 
+# ── ALIM: power one-line 'Alimentación' folio (Siemens, E5; config-driven) ───
+# Siemens panels have no module_db power source, so this folio is driven by an
+# EXPLICIT user JSON config (see src/power_config.py) — NOT derived, NOT
+# invented. It renders a simple vertical one-line: the source voltage label at
+# top, then a centered stack of small labeled device boxes (input breaker,
+# [transformer], power supply, [ups], output breaker), then the loads label at
+# the bottom, joined by thin vertical lead lines down the center. Optional
+# devices (transformer, ups) are OMITTED entirely when absent — never drawn
+# blank. VISUAL-only (text + shape primitives, empty <elements>/<conductors>);
+# ISO 7200 title block inherited.
+POWER_TITLE = "Alimentación"
+POWER_PAGE_W = 1010                 # page frame width
+POWER_PAGE_H = SUMMARY_HEIGHT       # page frame height (660)
+POWER_CENTER_X = POWER_PAGE_W // 2  # one-line runs down the page center
+POWER_BOX_W = 160                   # device-box width
+POWER_BOX_H = 48                    # device-box height
+POWER_ROW_GAP = 44                  # vertical gap between stacked items (lead run)
+POWER_TOP_Y = 70                    # source-label baseline (top of the one-line)
+POWER_LEAD_W = 2                    # vertical lead-line thickness (a thin bar)
+POWER_TEXT_X = 6                    # text inset from a box's left edge
+
+
+def _power_box(shapes, inputs, cx, top_y, label: str, rating: str) -> int:
+    """Draw one centered device box at vertical position `top_y` with a label
+    line and (when present) a rating line under it. Returns the box's bottom y so
+    the caller can hang the next lead line off it. Blanks are omitted."""
+    x1 = cx - POWER_BOX_W // 2
+    x2 = cx + POWER_BOX_W // 2
+    y2 = top_y + POWER_BOX_H
+    add_rect(shapes, x1, top_y, x2, y2)
+    tx = x1 + POWER_TEXT_X
+    if label:
+        add_text(inputs, tx, top_y + 18, label, FONT_HEADER)
+    if rating:
+        add_text(inputs, tx, top_y + 36, rating, FONT_TEXT)
+    return y2
+
+
+def build_power_folio(project: ET.Element, start_order: int, power_config) -> int:
+    """Append the power one-line 'Alimentación' folio at `start_order`. VISUAL-
+    only (text + shape primitives, empty <elements>/<conductors>), driven ENTIRELY
+    by `power_config` (the normalized dict from power_config.load_power_config).
+    Returns 0 when `power_config` is falsy (graceful → no folio, never invented).
+
+    Draws, down the page center: the system_voltage source label, a stack of the
+    present device boxes (input_breaker, [transformer], power_supply, [ups],
+    output_breaker) each showing label + rating, then the loads label — joined by
+    thin vertical lead lines. Absent optional devices are omitted; every string
+    comes from the config, blanks omitted."""
+    if not power_config:
+        return 0
+    devices = power_config.get("devices") or {}
+    system_voltage = power_config.get("system_voltage") or ""
+    loads = power_config.get("loads") or ""
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": POWER_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(POWER_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    # empty containers — NO element/terminal instances, NO conductors
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, 20, 30, POWER_TITLE.upper(), FONT_HEADER)
+
+    cx = POWER_CENTER_X
+    # source label at the top of the one-line (system_voltage in), centered text
+    if system_voltage:
+        add_text(inputs, cx - POWER_BOX_W // 2 + POWER_TEXT_X, POWER_TOP_Y,
+                 system_voltage, FONT_HEADER)
+    # current vertical position the next lead line hangs from
+    cursor_y = POWER_TOP_Y + 8
+    # device boxes in fixed draw order; only present devices are rendered, so the
+    # transformer/ups rows simply do not appear when absent (never invented).
+    for key in power_config_device_order():
+        dev = devices.get(key)
+        if not dev:
+            continue
+        box_top = cursor_y + POWER_ROW_GAP
+        # lead line connecting the previous item down to this box's top
+        add_rect(shapes, cx - POWER_LEAD_W // 2, cursor_y,
+                 cx + POWER_LEAD_W // 2 + POWER_LEAD_W, box_top)
+        cursor_y = _power_box(shapes, inputs, cx, box_top,
+                              dev.get("label") or "", dev.get("rating") or "")
+    # final lead line + loads label at the bottom of the one-line
+    if loads:
+        loads_y = cursor_y + POWER_ROW_GAP
+        add_rect(shapes, cx - POWER_LEAD_W // 2, cursor_y,
+                 cx + POWER_LEAD_W // 2 + POWER_LEAD_W, loads_y)
+        add_text(inputs, cx - POWER_BOX_W // 2 + POWER_TEXT_X, loads_y + 14,
+                 loads, FONT_TEXT)
+    return 1
+
+
+def power_config_device_order() -> tuple:
+    """The fixed top-to-bottom draw order of the one-line device boxes. Mirrors
+    power_config.POWER_DEVICE_KEYS without importing it at module scope (the
+    renderer must not hard-depend on the loader); kept here so build_power_folio
+    stays self-contained and order is documented in one place."""
+    return ("input_breaker", "transformer", "power_supply", "ups",
+            "output_breaker")
+
+
 # ── IDX: drawing index / table of contents (Siemens, Story 2.2) ──────────────
 # A table listing every folio in document order with its SECTION page number +
 # title. VISUAL-only (text + light rule lines, empty <elements>/<conductors>);
@@ -2853,6 +2965,7 @@ SECTION_SIMBOLOGIA = 1     # symbol legend (DA.4)
 SECTION_TOPOLOGY = 2       # network/communications topology overview (E2.1)
 SECTION_INDEX = 3          # drawing index / table of contents (Siemens, Story 2.2)
 SECTION_RACK = 4           # rack/chassis layout overview (Siemens, Story 2.3)
+SECTION_ALIM = 5           # power one-line 'Alimentación' folio (Siemens, E5; config-driven)
 SECTION_SUPPLY = 100       # 'Alimentación' rail folio
 SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
 SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
@@ -2987,7 +3100,8 @@ def main(argv=None):
 
 
 def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
-                   wire_scheme="address", emit_vendor_folios=True):
+                   wire_scheme="address", emit_vendor_folios=True,
+                   power_config=None):
     """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
     write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
     and the Siemens command (tia_to_qet); the only difference between vendors is
@@ -3167,6 +3281,13 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
         rack_folios = build_rack_folio(project, SECTION_RACK, io_mods)
     else:
         rack_folios = 0
+    # ALIM (Siemens, E5): power one-line 'Alimentación' folio. Siemens-only and
+    # driven ENTIRELY by an explicit user --power-config (NOT derived). Gated on
+    # source_vendor == "siemens" AND a config being passed — independent of
+    # emit_vendor_folios (like NET/RACK). Rockwell never passes power_config, so
+    # power_config is None there => no folio => Rockwell stays byte-equivalent.
+    power_folios = build_power_folio(project, SECTION_ALIM, power_config) \
+        if (is_siemens and power_config) else 0
     # dedicated terminal-strip (bornero) folios — one per drawing card, grouped,
     # in the same deterministic order as the drawing folios.
     bornero_folios = build_bornero_folios(project, SECTION_BORNERO, drawn_cards)
@@ -3273,6 +3394,9 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
         print(f"rack       : {rack_folios} '{RACK_TITLE}' folio(s) "
               f"(order {SECTION_RACK}), {len(io_mods)} module(s) in slot order",
               file=err)
+    if is_siemens:
+        print(f"alim       : {power_folios} '{POWER_TITLE}' one-line folio "
+              f"(order {SECTION_ALIM})", file=err)
     if index_folios:
         print(f"índice     : {index_folios} '{INDEX_TITLE}' folio(s) "
               f"(order {SECTION_INDEX})", file=err)

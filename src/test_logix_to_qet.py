@@ -1373,6 +1373,82 @@ class SupplyFolioTest(unittest.TestCase):
         self.assertIsNotNone(d.find("properties"))
 
 
+import power_config as pc
+
+
+def _power_cfg(**over):
+    """A normalized power-config dict for the one-line folio tests. Defaults to
+    the committed example values (120 VAC, Q1 2 A, PS1 10 A, Q2 10 A, no
+    transformer/ups); override any top-level key via kwargs."""
+    raw = {
+        "system_voltage": "120 VAC",
+        "input_breaker":  {"label": "Q1", "rating": "2 A"},
+        "power_supply":   {"label": "PS1", "rating": "10 A"},
+        "output_breaker": {"label": "Q2", "rating": "10 A"},
+        "loads": "Control / PLC",
+        "transformer": None,
+        "ups": None,
+    }
+    raw.update(over)
+    return pc.normalize_power_config(raw)
+
+
+class PowerFolioTest(unittest.TestCase):
+    """ALIM (E5): the config-driven Siemens power one-line 'Alimentación' folio.
+    VISUAL-only (text + shapes, empty <elements>/<conductors>); every value comes
+    from the user config; absent optional fields (transformer, ups) are OMITTED,
+    never invented."""
+
+    def test_appends_one_folio_titled_alimentacion(self):
+        project = ET.Element("project")
+        n = q.build_power_folio(project, q.SECTION_ALIM, _power_cfg())
+        self.assertEqual(n, 1)
+        diagrams = project.findall("diagram")
+        self.assertEqual(len(diagrams), 1)
+        self.assertEqual(diagrams[0].get("title"), "Alimentación")
+        self.assertEqual(diagrams[0].get("order"), str(q.SECTION_ALIM))
+
+    def test_visual_only_with_config_values_in_inputs(self):
+        project = ET.Element("project")
+        q.build_power_folio(project, q.SECTION_ALIM, _power_cfg())
+        d = project.find("diagram")
+        self.assertEqual(len(d.find("elements").findall("element")), 0)
+        self.assertEqual(len(d.find("conductors").findall("conductor")), 0)
+        inputs = d.find("inputs").findall("input")
+        self.assertGreater(len(inputs), 0)
+        texts = [i.get("text") for i in inputs]
+        self.assertIn("120 VAC", texts)
+        self.assertIn("2 A", texts)
+        self.assertIn("10 A", texts)
+
+    def test_none_config_appends_nothing(self):
+        project = ET.Element("project")
+        self.assertEqual(q.build_power_folio(project, q.SECTION_ALIM, None), 0)
+        self.assertEqual(len(project.findall("diagram")), 0)
+
+    def test_absent_transformer_ups_never_invented(self):
+        # the example config carries NO transformer/ups — no such text may appear
+        project = ET.Element("project")
+        q.build_power_folio(project, q.SECTION_ALIM, _power_cfg())
+        d = project.find("diagram")
+        blob = " ".join(i.get("text") for i in d.find("inputs").findall("input"))
+        low = blob.lower()
+        self.assertNotIn("transformer", low)
+        self.assertNotIn("transformador", low)
+        self.assertNotIn("ups", low)
+
+    def test_present_transformer_round_trips(self):
+        # a config that DOES include a transformer must draw it (optional field
+        # round-trips); its label/rating appear in the inputs.
+        project = ET.Element("project")
+        cfg = _power_cfg(transformer={"label": "T1", "rating": "120/24 VAC"})
+        q.build_power_folio(project, q.SECTION_ALIM, cfg)
+        d = project.find("diagram")
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        self.assertIn("T1", texts)
+        self.assertIn("120/24 VAC", texts)
+
+
 def _mod(rack, parent, slot=0, name=None, points=16):
     """A minimal module stand-in for the grounding/chassis tests."""
     return SimpleNamespace(rack=rack, parent=parent, slot=slot,

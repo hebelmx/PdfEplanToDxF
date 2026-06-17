@@ -1,0 +1,9 @@
+{
+  "system_voltage": "120 VAC",
+  "input_breaker":  {"label": "Q1", "rating": "2 A"},
+  "power_supply":   {"label": "PS1", "rating": "10 A"},
+  "output_breaker": {"label": "Q2", "rating": "10 A"},
+  "loads": "Control / PLC",
+  "transformer": null,
+  "ups": null
+}

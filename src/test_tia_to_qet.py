@@ -17,6 +17,7 @@ Two groups:
 """
 
 import io
+import json
 import re
 import sys
 import tempfile
@@ -639,6 +640,71 @@ class SiemensSplitCardFolioTest(unittest.TestCase):
         m = re.search(r"bom\s*:\s*\d+\s+rows\s*\((\d+)\s+module", err)
         self.assertIsNotNone(m)
         self.assertEqual(int(m.group(1)), 7)
+
+
+class SiemensPowerFolioIntegrationTest(unittest.TestCase):
+    """ALIM (E5) end-to-end (gated on BOTH the IMV1 IO_Channels.xml and .aml):
+    with --power-config the Siemens render gains the config-driven 'Alimentación'
+    one-line folio (22 -> 23 diagrams, listed BY TITLE and in the drawing index);
+    without the flag it stays 22. The temp config is written to a tempfile dir,
+    never into the repo."""
+
+    IO = _imv1_io_channels()
+    AML = _imv1_aml()
+
+    POWER = {
+        "system_voltage": "120 VAC",
+        "input_breaker":  {"label": "Q1", "rating": "2 A"},
+        "power_supply":   {"label": "PS1", "rating": "10 A"},
+        "output_breaker": {"label": "Q2", "rating": "10 A"},
+        "loads": "Control / PLC",
+        "transformer": None,
+        "ups": None,
+    }
+
+    def setUp(self):
+        if not (self.IO.is_file() and self.AML.is_file()):
+            self.skipTest("IMV1 IO_Channels.xml or .aml fixture not present")
+
+    def _run(self, with_power):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "tia.qet"
+            argv = [str(self.IO), "--aml", str(self.AML)]
+            if with_power:
+                cfg = Path(d) / "power.json"
+                cfg.write_text(json.dumps(self.POWER), encoding="utf-8")
+                argv += ["--power-config", str(cfg)]
+            argv += ["-o", str(out)]
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main(argv)
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def test_with_power_config_adds_alimentacion_folio(self):
+        root, err = self._run(with_power=True)
+        diagrams = root.findall("diagram")
+        self.assertEqual(len(diagrams), 23)   # was 22, +1 'Alimentación'
+        titles = [d.get("title") or "" for d in diagrams]
+        self.assertIn(q.POWER_TITLE, titles)
+        self.assertRegex(err, r"alim\s*:\s*1\b")
+        # the drawing-index folio lists the new folio's section page
+        idx = [d for d in diagrams if d.get("title") == q.INDEX_TITLE][0]
+        idx_pages = [int(t) for t in
+                     (i.get("text") for i in idx.find("inputs").findall("input"))
+                     if t.isdigit()]
+        self.assertIn(q.SECTION_ALIM, idx_pages)
+        # index still self-counts every folio (including ALIM and itself)
+        self.assertEqual(len(idx_pages), len(diagrams))
+
+    def test_without_power_config_stays_22(self):
+        root, err = self._run(with_power=False)
+        diagrams = root.findall("diagram")
+        self.assertEqual(len(diagrams), 22)
+        titles = [d.get("title") or "" for d in diagrams]
+        self.assertNotIn(q.POWER_TITLE, titles)
+        self.assertRegex(err, r"alim\s*:\s*0\b")
 
 
 if __name__ == "__main__":
