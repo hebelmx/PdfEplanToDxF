@@ -2060,6 +2060,9 @@ TOPOLOGY_NET_PATTERNS = (
     ("EN2TR", "EtherNet/IP"),
     ("EWEB", "EtherNet/IP"),
     ("ENET", "EtherNet/IP"),
+    ("AENT", "EtherNet/IP"),   # 1756-AENT / 5069-AENTR / 5094-AENTR adapters
+    ("DNB", "DeviceNet"),      # 1756-DNB DeviceNet scanner/bridge
+    ("DHRIO", "DH+/RIO"),      # 1756-DHRIO Data Highway Plus / Remote I/O
 )
 
 # Role tags shown on each node box (localized description text, NOT classifier
@@ -2092,7 +2095,10 @@ def classify_node(module, *, is_root: bool) -> str:
 
     - controller: the tree root (parent == own name).
     - io: kind in {DI, DO, AI, AO}.
-    - hmi: catalog contains PanelView / PV.
+    - hmi: catalog says PanelView — the literal word or a real AB PanelView
+      catalog family (2711 = PanelView / PanelView Plus / 800, 2715 = PanelView
+      5000). A bare 'PV' substring is NOT used (it false-positives on unrelated
+      catalogs and misses the real 2711P-* families — review finding).
     - bridge: a non-root, non-I/O module whose catalog matches a comms pattern.
     - generic: anything else (rendered as name + catalog, no invented role)."""
     if is_root:
@@ -2102,7 +2108,7 @@ def classify_node(module, *, is_root: bool) -> str:
         return "io"
     cat = (getattr(module, "catalog", "") or "")
     up = cat.upper()
-    if "PANELVIEW" in up or "PV" in up:
+    if "PANELVIEW" in up or up.startswith(("2711", "2715")):
         return "hmi"
     if topology_protocol(cat) is not None:
         return "bridge"

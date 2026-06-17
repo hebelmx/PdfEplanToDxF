@@ -1610,6 +1610,28 @@ class TopologyClassificationTest(unittest.TestCase):
         self.assertEqual(q.classify_node(io, is_root=False), "io")
         self.assertEqual(q.classify_node(generic, is_root=False), "generic")
 
+    def test_protocol_inference_extra_bridge_families(self):
+        # review finding #3: DeviceNet / DH+RIO / EtherNet-IP adapter families
+        self.assertEqual(q.topology_protocol("1756-DNB"), "DeviceNet")
+        self.assertEqual(q.topology_protocol("1756-DHRIO"), "DH+/RIO")
+        self.assertEqual(q.topology_protocol("1756-AENT"), "EtherNet/IP")
+        self.assertEqual(q.topology_protocol("5094-AENTR"), "EtherNet/IP")
+
+    def test_hmi_match_is_panelview_family_not_bare_pv(self):
+        # review finding #2: a real 2711P-* PanelView Plus catalog (no literal
+        # 'PanelView', no 'PV' substring) must classify as HMI...
+        pvp = _tmod("HMI", "Local", "2711P-T10C4D1")
+        self.assertEqual(q.classify_node(pvp, is_root=False), "hmi")
+        pv5000 = _tmod("HMI", "Local", "2715P-T19CD-B")
+        self.assertEqual(q.classify_node(pv5000, is_root=False), "hmi")
+        # ...and the literal word still matches...
+        lit = _tmod("HMI", "Local", "PanelView")
+        self.assertEqual(q.classify_node(lit, is_root=False), "hmi")
+        # ...but a bare 'PV' substring in an unrelated catalog must NOT (the old
+        # 2-letter substring false-positived). 'SPV' contains 'PV'.
+        bogus = _tmod("X", "Local", "1492-SPV-LINK")
+        self.assertNotEqual(q.classify_node(bogus, is_root=False), "hmi")
+
     def test_real_fixture_tree_matches_ground_truth(self):
         fixture = _wadding_fixture()
         if not fixture.is_file():
