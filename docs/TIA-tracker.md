@@ -73,6 +73,22 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
   4. F-module addressing (safety, e.g. F-DI Length 48 for 8 ch) + analog word addressing need care.
   5. Mixed-brand PROFINET nodes (EX260 valve terminals, SK drives, BIS RFID) — on the NET folio
      already; draw I/O only where real addresses exist, else leave on the network overview (never invent).
+- **LOCKED DESIGN (Abel, 2026-06-17):**
+  * **Section block per station** (divider/rack + I/O folios + bornero), contiguous, in plant order.
+  * **Heaviest PLC first** (capability ordinal; 1512SP >> 1214C) → the 1512SP's 8 stations (Q100
+    CPU-local first, then Q200–Q800 drops), THEN the 1214C's station.
+  * **PLC→I/O ownership comes from the DATA, never guessed; ASK the user if ambiguous.**
+  * **General + extendable**, not fixture-hardcoded; "not so worried about polymorphic, but extendable."
+- **OWNERSHIP RESOLVED data-drivenly (orchestrator-verified):** a station's I/O addresses resolve in
+  exactly ONE PLC's program tag table (Q100–Q800 → all in `PLCTagsS71500` / the 1512SP @ .10, 0 in
+  1200; the .95 station → all in `PLCTagsS71200` / the 1214C, 0 in 1500). **Zero overlap → unambiguous.**
+  This reuses the E6 coverage selector (now per-station for BOTH the tag-join AND ownership); keep the
+  ask-on-ambiguity fallback for any future station that splits across both tables.
+  The `.aml` has NO explicit ownership attribute (only network addresses + 537 PROFINET InternalLinks),
+  so tag-table coverage is the ownership source of truth.
+- **BUILD CHUNKS:** (data) extend `parse_aml` for per-module addresses → build the multi-station IR
+  (all 9 stations, ownership + channel→address→tag join + RESERVA, ordered heaviest-PLC-first); THEN
+  (render) section-block-per-station folios — the section/numbering scheme + a desktop eyeball gate.
 - **E6 foundation DONE @ `bc0e5b0`** (branch `feat/e6-s71500-descriptions`): per-station tag-table
   selection + descriptions + symbol match/suppression + `controller_cpu` seam. **NOT merged** — hold
   the merge until the distributed-I/O build lands so `main` never ships the misleading single-station set.
