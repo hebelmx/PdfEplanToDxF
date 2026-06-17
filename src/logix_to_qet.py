@@ -2236,27 +2236,53 @@ PN_TEXT_X = 6              # text inset from a box's left edge
 PN_LEAD_W = 2             # drop-lead thickness
 
 
+def _node_field(node, i, default=None):
+    """Tolerant tuple accessor: PROFINET node tuples are
+    (ip, name, type_name, subnet_mask, is_controller) but older callers may pass
+    a 3-tuple (ip, name, type_name). Returns the i-th field or `default` when the
+    tuple is too short — never raises, never invents."""
+    return node[i] if len(node) > i else default
+
+
 def _subnet_label(nodes) -> str:
-    """Derive the subnet label from the nodes' shared /24 prefix, e.g.
-    'PROFINET — 192.168.10.0/24'. Falls back to the bare title when the prefix is
-    not uniform/derivable — NEVER invents an octet."""
+    """Derive the subnet label from the REAL SubnetMask carried in the .aml, e.g.
+    'PROFINET — 192.168.10.0/24'.
+
+    The network address (shared host prefix) names the subnet; the mask gives the
+    prefix length. The label is emitted ONLY when a SINGLE uniform real mask is
+    present across the nodes AND the host prefix is uniform — both sourced from
+    the .aml, never reconstructed. When the mask is absent or non-uniform (or the
+    prefix is non-uniform) it falls back to the BARE title ('Red PROFINET'),
+    NEVER a fabricated '.0/24' from the host IPs and never the doubled
+    'PROFINET — Red PROFINET'."""
+    import tia_aml
+
     prefixes = set()
-    for ip, _n, _t in nodes:
-        parts = (ip or "").split(".")
+    prefix_lens = set()
+    for node in nodes:
+        ip = _node_field(node, 0, "") or ""
+        mask = _node_field(node, 3)  # real SubnetMask from the .aml (None if 3-tuple)
+        parts = ip.split(".")
         if len(parts) == 4 and all(p.isdigit() for p in parts):
             prefixes.add(".".join(parts[:3]))
-    if len(prefixes) == 1:
-        return f"PROFINET — {next(iter(prefixes))}.0/24"
-    return f"PROFINET — {PROFINET_TITLE}"
+        plen = tia_aml._mask_to_prefix(mask)
+        prefix_lens.add(plen)  # None when this node has no/odd mask
+    # require a single uniform host prefix AND a single uniform REAL mask
+    if (len(prefixes) == 1 and len(prefix_lens) == 1
+            and None not in prefix_lens):
+        net = next(iter(prefixes))
+        plen = next(iter(prefix_lens))
+        return f"PROFINET — {net}.0/{plen}"
+    return PROFINET_TITLE
 
 
-def _is_controller_node(name: str, type_name: str, ip: str) -> bool:
-    """True for the node this drawing set documents: the Q100 station CPU. Matched
-    by the .aml facts (ip .10 AND a CPU-class TypeName) so it is data-driven, not
-    a hard-coded name. Any node whose type names a CPU at the .10 host is treated
-    as the documented controller — never invented."""
-    last = (ip or "").rsplit(".", 1)[-1]
-    return last == "10" and "CPU" in (type_name or "").upper()
+def _is_controller_node(node) -> bool:
+    """True for the node this drawing set documents: the station CPU.
+
+    Sourced from REAL provenance — the .aml `DeviceItemType=CPU` flag carried in
+    the node tuple's 5th field — NOT a hard-coded host IP. A 3-tuple (no flag)
+    degrades to False (never invented). Name/IP/type are display-only."""
+    return bool(_node_field(node, 4, False))
 
 
 def _add_network_node_box(shapes, inputs, x, y, ip, name, type_name, controller):
@@ -2314,7 +2340,10 @@ def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
     # grid of node boxes; a short drop-lead from the bus to each column's top box.
     col_pitch = PN_BOX_W + PN_COL_GAP
     row_pitch = PN_BOX_H + PN_ROW_GAP
-    for i, (ip, name, type_name) in enumerate(nodes):
+    for i, node in enumerate(nodes):
+        ip = _node_field(node, 0, "")
+        name = _node_field(node, 1, "")
+        type_name = _node_field(node, 2, "")
         col = i % PN_COLS
         row = i // PN_COLS
         x = PN_X_MARGIN + col * col_pitch
@@ -2323,7 +2352,7 @@ def _add_network_diagram(project: ET.Element, order: int, nodes) -> ET.Element:
             # drop lead from the bus down to this top-row box
             drop_x = x + PN_BOX_W // 2
             add_rect(shapes, drop_x, PN_BUS_Y + PN_BUS_H, drop_x + PN_LEAD_W, y)
-        controller = _is_controller_node(name, type_name, ip)
+        controller = _is_controller_node(node)
         _add_network_node_box(shapes, inputs, x, y, ip, name, type_name,
                               controller)
     return diagram
@@ -2484,14 +2513,29 @@ def _index_entries(project: ET.Element, self_order: int) -> list[tuple[int, str]
     other folios: every section page is a fixed `order`, independent of document
     POSITION, so listing the orders verbatim is exact. NEVER invents a folio."""
     entries: list[tuple[int, str]] = []
+    seen: dict[int, str] = {}
     for d in project.findall("diagram"):
         title = d.get("title") or ""
         try:
             order = int(d.get("order"))
         except (TypeError, ValueError):
             continue  # a diagram with no integer order is not a numbered folio
+        if order in seen:
+            # two folios sharing a section page would print DUPLICATE page
+            # numbers silently; keep the FIRST and warn rather than emit a
+            # confusing double-numbered index. NEVER invents a new page number.
+            print(f"índice     : duplicate diagram order {order:03d} "
+                  f"({title!r} collides with {seen[order]!r}); skipping the "
+                  f"duplicate in the index", file=sys.stderr)
+            continue
+        seen[order] = title
         entries.append((order, title))
-    entries.append((self_order, INDEX_TITLE))
+    if self_order not in seen:
+        entries.append((self_order, INDEX_TITLE))
+    else:
+        print(f"índice     : index self-order {self_order:03d} collides with "
+              f"{seen[self_order]!r}; index lists the existing folio at that "
+              f"page", file=sys.stderr)
     entries.sort(key=lambda e: e[0])
     return entries
 

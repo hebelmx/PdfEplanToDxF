@@ -103,6 +103,17 @@ class ParseHelpersTest(unittest.TestCase):
         self.assertEqual(tia_aml._order_number(None), "")
         self.assertEqual(tia_aml._order_number(""), "")
 
+    def test_mask_to_prefix(self):
+        # N1 helper: dotted netmask -> CIDR prefix; odd/absent -> None (never /24)
+        self.assertEqual(tia_aml._mask_to_prefix("255.255.255.0"), 24)
+        self.assertEqual(tia_aml._mask_to_prefix("255.255.0.0"), 16)
+        self.assertEqual(tia_aml._mask_to_prefix("255.255.255.255"), 32)
+        self.assertEqual(tia_aml._mask_to_prefix("0.0.0.0"), 0)
+        self.assertIsNone(tia_aml._mask_to_prefix(None))
+        self.assertIsNone(tia_aml._mask_to_prefix(""))
+        self.assertIsNone(tia_aml._mask_to_prefix("255.0.255.0"))  # non-contiguous
+        self.assertIsNone(tia_aml._mask_to_prefix("255.255.255"))   # not 4 octets
+
 
 class SyntheticAmlTest(unittest.TestCase):
     def _parse(self):
@@ -162,12 +173,13 @@ class SyntheticAmlTest(unittest.TestCase):
         self.assertIn("DI10_11", st)
         self.assertEqual(st["DI10_11"]["order_number"], "6ES7 131-6BH00-0BA0")
 
-    def test_hardware_for_unknown_station_merges_all(self):
-        # an unknown station name falls back to the merged module map so unique
-        # module names still join (graceful, never fails)
+    def test_hardware_for_unknown_station_yields_empty_no_contamination(self):
+        # N3: a station-name MISMATCH must NOT merge sibling stations' modules
+        # (that would bind another physical station's catalog/PROFINET to a
+        # module). The map is empty => caller leaves catalog ""/addr None.
         hw = self._parse()
         st = tia_aml.hardware_for_station(hw, "does-not-exist")
-        self.assertIn("DI10_11", st)
+        self.assertEqual(st, {})
 
 
 class ProfinetNodesSyntheticTest(unittest.TestCase):
@@ -182,9 +194,15 @@ class ProfinetNodesSyntheticTest(unittest.TestCase):
 
     def test_single_node_resolved_to_owning_device(self):
         # the address sits under "PROFINET interface_1 > E1"; the resolver climbs
-        # to the first ancestor with a TypeName (the head module).
+        # to the first ancestor with a TypeName (the head module). The 5-tuple
+        # now carries the REAL SubnetMask sibling and the DeviceItemType=CPU flag.
         nodes = self._nodes()
-        self.assertEqual(nodes, [("192.168.10.55", "HeadA", "CPU 1512SP F-1 PN")])
+        # HeadA carries DeviceItemType=CPU and no SubnetMask sibling => (mask None,
+        # controller True). The mask is None (never reconstructed from the IP).
+        self.assertEqual(
+            nodes,
+            [("192.168.10.55", "HeadA", "CPU 1512SP F-1 PN", None, True)],
+        )
 
     def test_numeric_ip_sort(self):
         # two addresses out of dotted-decimal order must sort numerically, not
@@ -195,7 +213,7 @@ class ProfinetNodesSyntheticTest(unittest.TestCase):
             '<Attribute Name="NetworkAddress"><Value>192.168.10.9</Value></Attribute>',
         )
         nodes = self._nodes(two)
-        ips = [ip for ip, _n, _t in nodes]
+        ips = [n[0] for n in nodes]
         self.assertEqual(ips, ["192.168.10.9", "192.168.10.10"])
 
     def test_no_typename_keeps_named_ancestor_blank_type(self):
@@ -207,9 +225,33 @@ class ProfinetNodesSyntheticTest(unittest.TestCase):
         )
         nodes = self._nodes(text)
         self.assertEqual(len(nodes), 1)
-        ip, name, typ = nodes[0]
+        ip, name, typ, mask, ctrl = nodes[0]
         self.assertEqual(typ, "")
         self.assertTrue(name)  # falls back to a named ancestor, not fabricated
+        self.assertFalse(ctrl)  # no TypeName ancestor => DeviceItemType unseen
+
+    def test_real_subnet_mask_read_from_sibling(self):
+        # N1: a SubnetMask sibling Attribute under the node element is read as the
+        # 4th field — NEVER reconstructed from the host IP.
+        text = _SYNTHETIC_AML.replace(
+            '<Attribute Name="NetworkAddress"><Value>192.168.10.55</Value></Attribute>',
+            '<Attribute Name="NetworkAddress"><Value>192.168.10.55</Value></Attribute>'
+            '<Attribute Name="SubnetMask"><Value>255.255.255.0</Value></Attribute>',
+        )
+        nodes = self._nodes(text)
+        self.assertEqual(nodes[0][3], "255.255.255.0")
+
+    def test_controller_flag_from_device_item_type(self):
+        # N2: DeviceItemType=CPU on the owning module sets is_controller (real
+        # provenance, not a host-IP heuristic).
+        nodes = self._nodes()
+        self.assertTrue(nodes[0][4])  # HeadA carries DeviceItemType=CPU
+        # a non-CPU owner does not flag controller
+        text = _SYNTHETIC_AML.replace(
+            "<Attribute Name=\"DeviceItemType\"><Value>CPU</Value></Attribute>",
+            "<Attribute Name=\"DeviceItemType\"><Value>HeadModule</Value></Attribute>",
+        )
+        self.assertFalse(self._nodes(text)[0][4])
 
 
 class ProfinetNodesFixtureTest(unittest.TestCase):
@@ -221,16 +263,22 @@ class ProfinetNodesFixtureTest(unittest.TestCase):
     def test_thirtyfive_nodes_sorted_with_known_endpoints(self):
         nodes = tia_aml.profinet_nodes(str(self.aml))
         self.assertEqual(len(nodes), 35)
-        # numerically sorted, .10 first .95 last
+        # numerically sorted, .10 first .95 last; 5-tuple w/ real mask + the
+        # DeviceItemType=CPU controller flag
         self.assertEqual(nodes[0], ("192.168.10.10", "Q100_QUERETARO1",
-                                    "CPU 1512SP F-1 PN"))
+                                    "CPU 1512SP F-1 PN", "255.255.255.0", True))
         self.assertEqual(nodes[-1], ("192.168.10.95", "PLC_1",
-                                     "CPU 1214C AC/DC/Rly"))
-        ips = [ip for ip, _n, _t in nodes]
+                                     "CPU 1214C AC/DC/Rly", "255.255.255.0", True))
+        ips = [n[0] for n in nodes]
         self.assertEqual(ips, sorted(ips, key=tia_aml._ip_sort_key))
 
+    def test_all_nodes_carry_real_uniform_mask(self):
+        # N1: every node carries the REAL 255.255.255.0 from the .aml SubnetMask
+        nodes = tia_aml.profinet_nodes(str(self.aml))
+        self.assertEqual({n[3] for n in nodes}, {"255.255.255.0"})
+
     def test_sample_nodes_match(self):
-        nodes = {ip: (n, t) for ip, n, t in tia_aml.profinet_nodes(str(self.aml))}
+        nodes = {n[0]: (n[1], n[2]) for n in tia_aml.profinet_nodes(str(self.aml))}
         self.assertEqual(nodes["192.168.10.12"], ("EV_UV_Q100", "EX260 SPN 3/4"))
         self.assertEqual(nodes["192.168.10.20"], ("Q200_Q1", "IM 155-6 PN ST"))
 
@@ -252,6 +300,59 @@ class PhysicalNameTest(unittest.TestCase):
 
     def test_passes_unsuffixed_through(self):
         self.assertEqual(tia._physical_name("F-DI150"), "F-DI150")
+
+
+# A tiny IO_Channels.xml whose Station Name does NOT match the synthetic .aml's
+# "StationA", but whose module Name ("DI10_11") DOES exist in the .aml. The N3
+# guarantee: the .aml join must NOT bind that sibling station's hardware.
+_MISMATCH_IO = """<?xml version="1.0" encoding="UTF-8"?>
+<Stations>
+  <Station Name="OtherStation">
+    <Rack Name="Rack_0">
+      <Module Name="DI10_11">
+        <IOChannel Number="0"><Address>%I10.0</Address><Tag>some_tag</Tag></IOChannel>
+        <IOChannel Number="1"><Address>%I10.1</Address><Tag></Tag></IOChannel>
+      </Module>
+    </Rack>
+  </Station>
+</Stations>
+"""
+
+
+class N3CrossStationContaminationTest(unittest.TestCase):
+    """N3: when the IO_Channels station name does NOT match any .aml station, the
+    hardware join must leave catalog ''/network_address None (never bind a
+    DIFFERENT physical station's order#/PROFINET to the module)."""
+
+    def test_mismatched_station_yields_no_contamination(self):
+        with tempfile.TemporaryDirectory() as d:
+            aml = Path(d) / "plant.aml"
+            aml.write_text(_SYNTHETIC_AML, encoding="utf-8")
+            io = Path(d) / "x_IO_Channels.xml"
+            io.write_text(_MISMATCH_IO, encoding="utf-8")
+            _st, _mods, io_mods, _pts, _sk = tia.build_modules_and_points(
+                str(io), {}, str(aml))
+        by_name = {m.name: m for m in io_mods}
+        self.assertIn("DI10_11", by_name)
+        # the .aml HAS a DI10_11 (under StationA) with order# 6ES7 131-6BH00-0BA0
+        # and addr 192.168.10.55 — but the station mismatch must NOT bind it.
+        self.assertEqual(by_name["DI10_11"].catalog, "")
+        self.assertIsNone(getattr(by_name["DI10_11"], "network_address", None))
+        self.assertIsNone(by_name["DI10_11"].slot)
+
+    def test_matching_station_still_joins(self):
+        # control: the SAME module under the MATCHING station name DOES join.
+        matched_io = _MISMATCH_IO.replace('Name="OtherStation"', 'Name="StationA"')
+        with tempfile.TemporaryDirectory() as d:
+            aml = Path(d) / "plant.aml"
+            aml.write_text(_SYNTHETIC_AML, encoding="utf-8")
+            io = Path(d) / "x_IO_Channels.xml"
+            io.write_text(matched_io, encoding="utf-8")
+            _st, _mods, io_mods, _pts, _sk = tia.build_modules_and_points(
+                str(io), {}, str(aml))
+        by_name = {m.name: m for m in io_mods}
+        self.assertEqual(by_name["DI10_11"].catalog, "6ES7 131-6BH00-0BA0")
+        self.assertEqual(by_name["DI10_11"].network_address, "192.168.10.55")
 
 
 # --------------------------------------------------------------------------

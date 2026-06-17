@@ -41,9 +41,11 @@ class PlcProject:
       skipped         list of (tag, addr, reason) tuples not bound to a point
       controller_tags controller-scope tag dict (collectors may still need it)
       program_tags    program-scope tag dicts keyed by program name
-      network_nodes   list[(ip, name, type)] PROFINET subnet nodes for the
-                      network/topology folio; empty unless a front-end populates
-                      it (Siemens fills it from the CAx/AML). NEVER invented.
+      network_nodes   list[(ip, name, type, subnet_mask, is_controller)]
+                      PROFINET subnet nodes for the network/topology folio;
+                      empty unless a front-end populates it (Siemens fills it
+                      from the CAx/AML — subnet_mask + is_controller are REAL
+                      .aml provenance, never invented).
     """
 
     name: str

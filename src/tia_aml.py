@@ -101,6 +101,38 @@ def _first_network_address(el: ET.Element) -> str | None:
     return None
 
 
+def _mask_to_prefix(mask: str | None) -> int | None:
+    """Convert a dotted IPv4 subnet mask to its CIDR prefix length, or None.
+
+    `255.255.255.0` -> 24. A mask that is not 4 dotted octets, or whose bit
+    pattern is not a valid contiguous-ones netmask, yields None — NEVER invented
+    (an odd/non-uniform mask degrades to no prefix rather than a guessed /24).
+    """
+    if not mask:
+        return None
+    parts = mask.split(".")
+    if len(parts) != 4:
+        return None
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    bits = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
+    # a valid netmask is N contiguous 1-bits followed by 32-N 0-bits
+    prefix = 0
+    seen_zero = False
+    for i in range(31, -1, -1):
+        if bits & (1 << i):
+            if seen_zero:
+                return None  # a 1-bit after a 0-bit => not a contiguous netmask
+            prefix += 1
+        else:
+            seen_zero = True
+    return prefix
+
+
 def _count_channels(module_el: ET.Element) -> int:
     """Count physical I/O channels declared under a module via the
     `Channel_*` ExternalInterface elements. 0 when none are declared (e.g. a
@@ -203,27 +235,51 @@ def _ip_sort_key(ip: str) -> tuple:
         return (1, ip)
 
 
-def profinet_nodes(aml_path: str) -> list[tuple[str, str, str]]:
+def _sibling_attr_value(parent_el: ET.Element | None, name: str) -> str | None:
+    """Return the <Value> text of a NAMESPACE-AGNOSTIC direct-child
+    `<Attribute Name="name">` of `parent_el`, or None. Used to read the
+    `SubnetMask` Attribute that sits as a SIBLING of `NetworkAddress` under the
+    same PROFINET-node element. NEVER invented — None when absent/empty."""
+    if parent_el is None:
+        return None
+    for a in parent_el:
+        if _tn(a) != "Attribute" or a.get("Name") != name:
+            continue
+        v = a.find("{*}Value")
+        if v is not None and v.text is not None and v.text.strip():
+            return v.text.strip()
+    return None
+
+
+def profinet_nodes(aml_path: str) -> list[tuple[str, str, str, str | None, bool]]:
     """Parse the CAx/AML for the PROFINET subnet node list.
 
-    Returns a list of (ip, name, type_name) tuples, one per `NetworkAddress`
-    attribute in the file, NUMERICALLY IP-sorted. The IP comes from the
-    `<Attribute Name="NetworkAddress"><Value>` itself; the device name + type are
-    resolved by climbing the parent chain (<=6 hops) from that attribute to the
-    first ancestor `<InternalElement>` carrying a `TypeName` attribute — that is
-    the owning device/module (the address sits several levels down on its PROFINET
-    interface node, which has only a Name). When no ancestor carries a TypeName,
-    the FIRST named `<InternalElement>` ancestor's Name is kept and the type is ""
-    — NEVER invented (a node with neither name nor type degrades to ("", "")).
+    Returns a list of (ip, name, type_name, subnet_mask, is_controller) tuples,
+    one per `NetworkAddress` attribute in the file, NUMERICALLY IP-sorted.
 
-    Verified against the IMV1 export: 35 nodes on 192.168.10.x, e.g.
-    `192.168.10.10 Q100_QUERETARO1 / CPU 1512SP F-1 PN`.
+      * `ip` comes from the `<Attribute Name="NetworkAddress"><Value>` itself.
+      * `subnet_mask` is the REAL mask read from the SIBLING
+        `<Attribute Name="SubnetMask"><Value>` under the same node element (e.g.
+        "255.255.255.0"); None when absent — NEVER reconstructed from the IP.
+      * `name` + `type_name` are resolved by climbing the parent chain (<=6 hops)
+        from that attribute to the first ancestor `<InternalElement>` carrying a
+        `TypeName` attribute — that is the owning device/module (the address sits
+        several levels down on its PROFINET interface node, which has only a
+        Name). When no ancestor carries a TypeName, the FIRST named
+        `<InternalElement>` ancestor's Name is kept and the type is "" — NEVER
+        invented (a node with neither name nor type degrades to ("", "")).
+      * `is_controller` is REAL provenance: True when the owning device/module's
+        `<Attribute Name="DeviceItemType">` is "CPU" — NOT a hard-coded host IP.
+
+    Verified against the IMV1 export: 35 nodes on 192.168.10.x, mask
+    255.255.255.0, e.g. `192.168.10.10 Q100_QUERETARO1 / CPU 1512SP F-1 PN`
+    (DeviceItemType=CPU => controller).
     """
     tree = ET.parse(aml_path)
     root = tree.getroot()
     parent = {c: p for p in root.iter() for c in p}
 
-    nodes: list[tuple[str, str, str]] = []
+    nodes: list[tuple[str, str, str, str | None, bool]] = []
     for el in root.iter():
         if _tn(el) != "Attribute" or el.get("Name") != "NetworkAddress":
             continue
@@ -231,9 +287,12 @@ def profinet_nodes(aml_path: str) -> list[tuple[str, str, str]]:
         ip = v.text.strip() if (v is not None and v.text and v.text.strip()) else None
         if not ip:
             continue
+        # the SubnetMask sits as a SIBLING Attribute under the same node element
+        mask = _sibling_attr_value(parent.get(el), "SubnetMask")
         name = ""
         type_name = ""
         first_named = ""
+        is_controller = False
         cur = el
         for _ in range(6):
             cur = parent.get(cur)
@@ -247,10 +306,12 @@ def profinet_nodes(aml_path: str) -> list[tuple[str, str, str]]:
             if tnm:
                 name = cur.get("Name") or ""
                 type_name = tnm
+                # real provenance: the owning device/module declares its kind
+                is_controller = (_attr_value(cur, "DeviceItemType") or "") == "CPU"
                 break
         if not name:
             name = first_named  # device type unknown — keep the interface/device name
-        nodes.append((ip, name, type_name))
+        nodes.append((ip, name, type_name, mask, is_controller))
 
     nodes.sort(key=lambda r: _ip_sort_key(r[0]))
     return nodes
@@ -259,15 +320,15 @@ def profinet_nodes(aml_path: str) -> list[tuple[str, str, str]]:
 def hardware_for_station(
     hw: dict[tuple[str, str], dict], station_name: str
 ) -> dict[str, dict]:
-    """Project the (station, module) map down to {module_name -> info} for one
-    station. Falls back to merging ALL stations when `station_name` is unknown
-    (so a name mismatch still lets the unique module names join) — last write
-    wins on a name collision across stations, which does not occur for the IMV1
-    floor (module names are globally unique there)."""
-    exact = {m: info for (st, m), info in hw.items() if st == station_name}
-    if exact:
-        return exact
-    merged: dict[str, dict] = {}
-    for (_st, m), info in hw.items():
-        merged[m] = info
-    return merged
+    """Project the (station, module) map down to {module_name -> info} for ONE
+    station, matched EXACTLY by `station_name`.
+
+    On a station-name mismatch (no `(station_name, *)` keys), returns an EMPTY
+    map — the caller then leaves catalog ""/network_address None (never invented)
+    rather than binding a DIFFERENT physical station's hardware. The previous
+    merge-all-stations fallback was a cross-station contamination hazard: with
+    globally-unique module names a sibling station's module could win and stamp
+    the wrong order#/PROFINET address onto a module that is not physically that
+    one. We never bind another station's hardware — a real station match or
+    nothing."""
+    return {m: info for (st, m), info in hw.items() if st == station_name}

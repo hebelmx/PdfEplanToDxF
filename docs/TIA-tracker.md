@@ -115,8 +115,39 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 - [ ] **Símbología vocabulary (future, low pri)** — only `push_button` matches the Siemens tag
       vocabulary today (correct never-invent). Could add a Siemens symbol dictionary (fcuv/VS_/etc.)
       with CONFIDENT mappings only. Not a bug.
-- [ ] **Adversarial review** at the phase boundary (3-lens + general) vs `docs/planning/*` before
-      proposing the merge gate.
+- [x] **Adversarial review** (phase boundary, 5 refute-lenses Workflow) DONE 2026-06-16. No floor
+      blockers (matched=75/FP=0/byte-equiv all confirmed). Findings triaged below.
+- [~] **TIA-FIX-1** — address review findings (never-invent + test holes). IN FLIGHT 2026-06-16:
+      - N1 (MAJOR): `_subnet_label` fabricates `/24` from host IPs; real `SubnetMask` (255.255.255.0)
+        is in the `.aml` next to each `NetworkAddress`. → read real mask, label only when uniform,
+        else bare "PROFINET" (no invented octet). Fixes the doubled "PROFINET — Red PROFINET" nit too.
+      - N2 (MINOR): controller flagged by hard-coded `.10` host; use the parsed `DeviceItemType=CPU`
+        (dropped in `profinet_nodes`) instead. Fix docstring.
+      - N3 (MINOR): cross-station contamination — `hardware_for_station` merges all stations
+        last-write-wins on name mismatch → skip join (catalog ''/addr None), never bind wrong station.
+      - T1 (MAJOR): `_discover_aml` untested → add the 2 tests (mirror `_discover_tags`).
+      - T2 (MAJOR): "no --aml" render tests silently auto-discover the fixture `.aml`; NET render-side
+        omission never asserted → isolated-dir omission test (assert `PROFINET_TITLE` absent + no `red
+        PN`) + positive title assertions for NET/RACK/IDX (not just count 23).
+      - IDX-guard (MINOR): dedup/guard duplicate diagram orders in `_index_entries`.
+      Guardrail: WADDING_1 floor 11/106/75/0/78/35 + Rockwell byte-equiv must hold (fixes are
+      Siemens-path); Siemens still 23 folios (subnet label stays /24 for IMV1, from real mask).
+      **DONE @ (commit below).** Verified from ground truth: suite 357→372; Rockwell BYTE-EQUIVALENT
+      + floor held; Siemens 23 folios, subnet "192.168.10.0/24" from REAL SubnetMask, controllers
+      flagged via DeviceItemType=CPU = **2 real CPUs** (Q100 1512SP @ .10 AND PLC_1 1214C @ .95 —
+      the old `.10` heuristic HID the 2nd CPU; correction surfaces both). N3 returns {} on station
+      mismatch. All 6 findings + tests.
+- [~] **TIA-FIX-2 (Siemens vendor leak)** — `build_portada` hard-codes the cover row `"CONTROLADOR
+      (L5X)"` (`logix_to_qet.py:1707`); `(L5X)` is the Rockwell format tag, WRONG on the Siemens
+      cover. Make vendor-aware (Rockwell keeps `(L5X)` → byte-equiv; Siemens → accurate/neutral
+      label). Found while verifying TIA-FIX-1 (a cross-pipeline leak, the class Abel flagged).
+- [ ] **TIA-DOCS** (orchestrator) — append E4 entry to `docs/planning/.decision-log.md` (floor
+      RE-BASELINE 10/106/75/0/62/33 → 11/106/75/0/78/35 w/ matched=75+FP=0 invariants; 1200-first;
+      Siemens-only folio scope; `.aml`-direct catalog vs curated module_db for Story 4.1; resolve the
+      4 carried open questions) + reconcile `epics.md` Stories 2.2/2.3 (Siemens-first) & 4.1.
+- [ ] **TIA-DEFERRED (nits)** — >32-ch column overflow assert+test (latent); NET inter-row spine
+      (cosmetic); FP=0 explicit stderr counter (NFR-5, pre-existing proxy); two-column positional
+      test drive from a synthetic 32-ch module (currently skips on fixture).
 
 ## Status log
 - 2026-06-16: tracker created; decisions gated & locked; TIA-1 delegated.

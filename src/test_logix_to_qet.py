@@ -1773,22 +1773,28 @@ class TopologyFolioTest(unittest.TestCase):
 
 
 def _sample_nodes():
-    """A small PROFINET node list mirroring the .aml shape: the Q100 CPU at .10
-    plus a couple of plant nodes (one with no type — never invented)."""
+    """A small PROFINET node list mirroring the .aml shape: the Q100 CPU plus a
+    couple of plant nodes (one with no type — never invented). The 5-tuple shape
+    is (ip, name, type, subnet_mask, is_controller) — mask + controller are REAL
+    .aml provenance (here the CPU carries DeviceItemType=CPU => controller, NOT
+    its .10 host)."""
     return [
-        ("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN"),
-        ("192.168.10.12", "EV_UV_Q100", "EX260 SPN 3/4"),
-        ("192.168.10.13", "DRIVE UV Rotation", "SK TU3-PNT"),
-        ("192.168.10.99", "MYSTERY", ""),   # node with no type
+        ("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN", "255.255.255.0", True),
+        ("192.168.10.12", "EV_UV_Q100", "EX260 SPN 3/4", "255.255.255.0", False),
+        ("192.168.10.13", "DRIVE UV Rotation", "SK TU3-PNT", "255.255.255.0", False),
+        ("192.168.10.99", "MYSTERY", "", "255.255.255.0", False),   # node with no type
     ]
 
 
 def _many_nodes(n=35):
-    """n synthetic PROFINET nodes on 192.168.10.x with the CPU at .10, to assert
-    a full grid stays inside the page frame."""
-    nodes = [("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN")]
+    """n synthetic PROFINET nodes on 192.168.10.x with the CPU first, to assert a
+    full grid stays inside the page frame. 5-tuple shape (real mask + controller
+    flag from the .aml)."""
+    nodes = [("192.168.10.10", "Q100_QUERETARO1", "CPU 1512SP F-1 PN",
+              "255.255.255.0", True)]
     for i in range(1, n):
-        nodes.append((f"192.168.10.{100 + i}", f"NODE{i}", "SK TU3-PNT"))
+        nodes.append((f"192.168.10.{100 + i}", f"NODE{i}", "SK TU3-PNT",
+                      "255.255.255.0", False))
     return nodes
 
 
@@ -1842,14 +1848,65 @@ class NetworkFolioTest(unittest.TestCase):
         self.assertIn("CONTROLADOR", texts)
         self.assertIn("Q100_QUERETARO1", texts)
 
+    def test_controller_flag_from_device_item_type_not_host(self):
+        # N2: the controller flag is REAL provenance (DeviceItemType=CPU carried
+        # as the node's 5th field), NOT the .10 host. A CPU at a NON-.10 host IS
+        # flagged; a non-CPU device sitting at .10 is NOT.
+        cpu_off_ten = ("192.168.10.42", "ODD_CPU", "CPU 1512SP F-1 PN",
+                       "255.255.255.0", True)
+        device_at_ten = ("192.168.10.10", "NOT_A_CPU", "EX260 SPN 3/4",
+                         "255.255.255.0", False)
+        self.assertTrue(q._is_controller_node(cpu_off_ten))
+        self.assertFalse(q._is_controller_node(device_at_ten))
+        # and it renders: exactly the CPU box (off-.10) gets the heavy border +
+        # the CONTROLADOR tag; the .10 non-CPU does not.
+        project = ET.Element("project")
+        q.build_network_folio(project, 2, [cpu_off_ten, device_at_ten])
+        d = project.find("diagram")
+        heavy = [s for s in d.find("shapes").findall("shape")
+                 if s.find("pen") is not None
+                 and s.find("pen").get("widthF") == "2"]
+        self.assertEqual(len(heavy), 1)
+        texts = [i.get("text") for i in d.find("inputs").findall("input")]
+        joined = " | ".join(texts)
+        self.assertIn("ODD_CPU  (CONTROLADOR)", joined)
+        self.assertNotIn("NOT_A_CPU  (CONTROLADOR)", joined)
+
     def test_subnet_label_and_ips_rendered(self):
         project = ET.Element("project")
         q.build_network_folio(project, 2, _sample_nodes())
         d = project.find("diagram")
         texts = " | ".join(i.get("text") for i in d.find("inputs").findall("input"))
-        self.assertIn("192.168.10.0/24", texts)   # derived /24 subnet
+        # /24 sourced from the REAL SubnetMask (255.255.255.0), not the host IPs
+        self.assertIn("192.168.10.0/24", texts)
         self.assertIn("IP 192.168.10.10", texts)
         self.assertIn("IP 192.168.10.12", texts)
+
+    def test_subnet_label_uses_real_mask_not_host_octets(self):
+        # N1: same host prefix but a /16 mask (255.255.0.0) => label must read /16,
+        # proving the prefix length comes from the REAL mask, NOT a hard /24 nor a
+        # reconstructed .0 octet from the host IPs.
+        nodes = [(ip, n, t, "255.255.0.0", c)
+                 for (ip, n, t, _m, c) in _sample_nodes()]
+        self.assertEqual(q._subnet_label(nodes), "PROFINET — 192.168.10.0/16")
+
+    def test_subnet_label_absent_mask_falls_back_to_bare_title(self):
+        # N1: no real mask present (3-tuple legacy / None) => bare title, NEVER a
+        # fabricated .0/24 from host octets and never the doubled "PROFINET — Red
+        # PROFINET".
+        nodes = [(ip, n, t, None, c) for (ip, n, t, _m, c) in _sample_nodes()]
+        label = q._subnet_label(nodes)
+        self.assertEqual(label, q.PROFINET_TITLE)
+        self.assertNotIn("/24", label)
+        self.assertNotIn("PROFINET — Red PROFINET", label)
+
+    def test_subnet_label_nonuniform_mask_falls_back_to_bare_title(self):
+        # N1: a non-uniform real mask across nodes => bare title (never invented).
+        sample = _sample_nodes()
+        nodes = [(sample[0][0], sample[0][1], sample[0][2], "255.255.255.0", sample[0][4])]
+        nodes += [(ip, n, t, "255.255.0.0", c)
+                  for (ip, n, t, _m, c) in sample[1:]]
+        self.assertEqual(q._subnet_label(nodes), q.PROFINET_TITLE)
 
     def test_node_without_type_has_no_type_line_never_invented(self):
         # the MYSTERY node (type "") must render name+IP only, no fabricated type.
@@ -2054,6 +2111,25 @@ class IndexFolioTest(unittest.TestCase):
         self.assertIn(f"{q.SECTION_INDEX:03d}", pages)
         # the index's own title is listed
         self.assertIn(q.INDEX_TITLE, texts)
+
+    def test_duplicate_orders_deduped_with_warning(self):
+        # IDX-guard: two folios sharing a section order must NOT print two
+        # identical page numbers silently — keep the first, warn on stderr.
+        project = ET.Element("project")
+        _seed_folios(project, [(0, "Portada"), (5, "First"), (5, "Collision")])
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            entries = q._index_entries(project, q.SECTION_INDEX)
+        orders = [o for o, _t in entries]
+        self.assertEqual(len(orders), len(set(orders)),
+                         f"duplicate page numbers in index: {entries}")
+        self.assertIn(5, orders)
+        # the FIRST folio at the colliding order is kept
+        self.assertIn((5, "First"), entries)
+        self.assertNotIn((5, "Collision"), entries)
+        err = buf.getvalue()
+        self.assertIn("duplicate diagram order", err)
+        self.assertIn("005", err)
 
     def test_self_page_is_section_index_and_does_not_renumber(self):
         # the index's own page is SECTION_INDEX, and listing the fixed `order`s

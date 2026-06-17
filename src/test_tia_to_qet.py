@@ -314,10 +314,40 @@ class SiemensRackIndexTest(unittest.TestCase):
     def test_rack_and_index_folios_present(self):
         root, _ = self._run()
         titles = [d.get("title") or "" for d in root.findall("diagram")]
+        # T2: assert the .aml-derived folios BY TITLE (not just the count 23)
+        self.assertIn(q.PROFINET_TITLE, titles)
         self.assertIn(q.RACK_TITLE, titles)
         self.assertIn(q.INDEX_TITLE, titles)
         # was 21 (NET) -> 23 with RACK + IDX added
         self.assertEqual(len(root.findall("diagram")), 23)
+
+    def test_network_folio_present_with_35_nodes_by_title(self):
+        # T2: a POSITIVE NET assertion BY TITLE, with the real 35 PROFINET nodes
+        # and the controller (Q100 CPU) highlighted via DeviceItemType=CPU.
+        root, err = self._run()
+        titles = [d.get("title") or "" for d in root.findall("diagram")]
+        self.assertIn(q.PROFINET_TITLE, titles)
+        net = [d for d in root.findall("diagram")
+               if d.get("title") == q.PROFINET_TITLE][0]
+        # one node box per device (35); a node box has the PN_BOX_W x PN_BOX_H size
+        boxes = [s for s in net.find("shapes").findall("shape")
+                 if abs(float(s.get("x2")) - float(s.get("x1")) - q.PN_BOX_W) < 1
+                 and abs(float(s.get("y2")) - float(s.get("y1")) - q.PN_BOX_H) < 1]
+        self.assertEqual(len(boxes), 35)
+        # the subnet label reads /24 sourced from the REAL SubnetMask
+        net_texts = " | ".join(i.get("text")
+                               for i in net.find("inputs").findall("input"))
+        self.assertIn("192.168.10.0/24", net_texts)
+        # N2: the controller(s) are flagged by REAL DeviceItemType=CPU, not a host
+        # IP. This plant genuinely carries TWO CPUs on the subnet (Q100 CPU 1512SP
+        # F-1 @ .10 AND a CPU 1214C @ .95) — both are real CPUs, so both get the
+        # heavy border + CONTROLADOR tag. The documented Q100 CPU is among them.
+        heavy = [s for s in net.find("shapes").findall("shape")
+                 if s.find("pen") is not None
+                 and s.find("pen").get("widthF") == "2"]
+        self.assertEqual(len(heavy), 2)   # two real CPUs in the .aml (never invented)
+        self.assertIn("Q100_QUERETARO1  (CONTROLADOR)", net_texts)
+        self.assertRegex(err, r"red PN\s*:.*35 PROFINET node")
 
     def test_rack_shows_modules_in_slot_order_with_real_data(self):
         root, _ = self._run()
@@ -381,6 +411,75 @@ class TagDiscoveryTest(unittest.TestCase):
             xml = Path(d) / "x_IO_Channels.xml"
             xml.write_text("<Project/>", encoding="utf-8")
             self.assertIsNone(tia_to_qet._discover_tags(str(xml)))
+
+
+class SiemensNoAmlOmissionTest(unittest.TestCase):
+    """T2: the REAL 'omits without --aml' guarantee. SiemensRenderTestBase runs
+    main() from the fixture's own directory, where _discover_aml finds the sibling
+    fixture .aml — so those tests run WITH the .aml. Here we copy ONLY the
+    IO_Channels.xml into an isolated temp dir (NO sibling .aml), so nothing is
+    discovered, and assert the PROFINET network folio is OMITTED."""
+
+    FIXTURE = _imv1_io_channels()
+
+    def setUp(self):
+        if not self.FIXTURE.is_file():
+            self.skipTest("IMV1 IO_Channels.xml fixture not present")
+
+    def test_no_aml_omits_network_rack_and_index_folios(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            # copy ONLY the IO_Channels.xml — no sibling .aml, no PLCTags*.xlsx
+            iso_xml = Path(d) / self.FIXTURE.name
+            iso_xml.write_bytes(self.FIXTURE.read_bytes())
+            out = Path(d) / "tia.qet"
+            # sanity: nothing auto-discoverable in the isolated dir
+            self.assertIsNone(tia_to_qet._discover_aml(str(iso_xml)))
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main([str(iso_xml), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            root = ET.fromstring(out.read_text(encoding="utf-8"))
+        titles = [d.get("title") or "" for d in root.findall("diagram")]
+        # NET + RACK are .aml-derived => omitted without an .aml. (IDX is NOT
+        # .aml-gated — the drawing index enumerates whatever folios exist, so it
+        # still renders; it simply has no NET/RACK rows to list.)
+        self.assertNotIn(q.PROFINET_TITLE, titles)
+        self.assertNotIn(q.RACK_TITLE, titles)
+        # and the index, present, does NOT list a (non-existent) PROFINET folio
+        idx = [d for d in root.findall("diagram")
+               if d.get("title") == q.INDEX_TITLE][0]
+        idx_texts = [i.get("text") for i in idx.find("inputs").findall("input")]
+        self.assertNotIn(q.PROFINET_TITLE, idx_texts)
+        self.assertNotIn(q.RACK_TITLE, idx_texts)
+        # the network-folio stderr line is emitted ONLY when a folio is drawn, so
+        # with no .aml there is NO 'red PN' line (and no PROFINET_TITLE mention).
+        err = buf.getvalue()
+        self.assertNotIn("red PN", err)
+        self.assertNotIn(q.PROFINET_TITLE, err)
+        # core folios still present (cover/símbología/I-O/bornero/BOM/changelog)
+        self.assertIn("Portada", titles)
+        self.assertIn("Simbología", titles)
+
+
+class AmlDiscoveryTest(unittest.TestCase):
+    """T1: sibling *.aml auto-discovery (mirror of TagDiscoveryTest)."""
+
+    def test_sibling_aml_discovered_deterministically(self):
+        # a temp dir with sibling .aml files returns the FIRST (sorted) one.
+        with tempfile.TemporaryDirectory() as d:
+            xml = Path(d) / "x_IO_Channels.xml"
+            xml.write_text("<Stations/>", encoding="utf-8")
+            (Path(d) / "b_plant.aml").write_text("<CAEXFile/>", encoding="utf-8")
+            (Path(d) / "a_plant.aml").write_text("<CAEXFile/>", encoding="utf-8")
+            found = tia_to_qet._discover_aml(str(xml))
+            self.assertIsNotNone(found)
+            self.assertEqual(Path(found).name, "a_plant.aml")  # sorted-first
+
+    def test_absent_dir_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            xml = Path(d) / "x_IO_Channels.xml"
+            xml.write_text("<Stations/>", encoding="utf-8")
+            self.assertIsNone(tia_to_qet._discover_aml(str(xml)))
 
 
 if __name__ == "__main__":
