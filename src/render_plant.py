@@ -139,6 +139,12 @@ def _derive_functional_name(station_ir) -> str:
     leads: dict[str, int] = {}
     described = 0
     for pt in getattr(station_ir, "points", None) or []:
+        # NON-DEVICE points (VS_/'Vsupply' supply monitors, permits) describe the
+        # device's SUPPLY/interlock, not the station's function — skip them so a
+        # 'Vsupply …'-dominated count never masks the real theme (reuses the IR's
+        # own no_symbol classification; never invents).
+        if getattr(pt, "no_symbol", False):
+            continue
         desc = (getattr(pt, "description", "") or "").strip()
         if not desc:
             continue
