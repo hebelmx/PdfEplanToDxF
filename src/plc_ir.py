@@ -223,6 +223,68 @@ def build_tia_distributed_project(
     return projects
 
 
+def build_s7300_project(
+    cfg_path: str,
+    asc_path: str | None = None,
+) -> list[PlcProject]:
+    """Siemens S7-300 front-end: build ONE PlcProject per station/drop.
+
+    Thin seam over ``s7300_front_end`` (mirrors ``build_tia_distributed_project``
+    over ``tia_front_end.build_distributed_stations``). Reads the STEP 7 Classic
+    ``.cfg`` hardware-config (the primary channel source via inline SYMBOL lines)
+    and, optionally, the ``.asc`` global symbol table (used ONLY to join the local
+    AI8's analog channels via their PIW word addresses — the AI8 has no inline
+    symbols). Returns an ORDERED ``list[PlcProject]``: the local rack first, then
+    each wired PROFIBUS-DP drop by ascending DP address.
+
+    Every project: ``source_vendor="siemens"``; ``controller_cpu`` = the real CPU
+    type from the ``.cfg`` (e.g. "CPU 315-2 PN/DP"); ``modules``/``io_mods``/
+    ``points``/``skipped`` filled (a spare channel -> RESERVA in ``skipped``, not
+    a point). ``network_nodes`` is left EMPTY (the PROFIBUS/PROFINET topology
+    folio is a later render decision; an empty list makes the renderer omit it).
+
+    The CMMP-AS servo drives and Keyence PROFINET cameras are NOT wired channel
+    modules: they never appear in any io_mods/points; their identity + real
+    address ranges are exposed separately via
+    ``s7300_front_end.offmodule_devices(parse_cfg(cfg_path))`` for a later chunk.
+
+    NEVER raises on a missing/!cfg — returns [] (mirroring the TIA path's graceful
+    degradation of optional inputs). NEVER invents.
+    """
+    import os
+
+    if not cfg_path or not os.path.isfile(cfg_path):
+        return []
+
+    import s7300_cfg
+    import s7300_asc
+    import s7300_front_end as s7
+
+    cfg = s7300_cfg.parse_cfg(cfg_path)
+    asc_symbols = (s7300_asc.parse_asc(asc_path)
+                   if asc_path and os.path.isfile(asc_path) else [])
+
+    stations = s7.build_stations(cfg, asc_symbols)
+
+    projects: list[PlcProject] = []
+    for s in stations:
+        projects.append(
+            PlcProject(
+                name=s["station_name"],
+                source_vendor="siemens",
+                modules=s["modules"],
+                io_mods=s["io_mods"],
+                points=s["points"],
+                skipped=s["skipped"],
+                controller_tags={},
+                program_tags={},
+                network_nodes=[],
+                controller_cpu=s["controller_cpu"],
+            )
+        )
+    return projects
+
+
 def _owning_controller_cpu(network_nodes: list, io_mods: list) -> str | None:
     """Identify the CPU TYPE that owns this station from REAL .aml data.
 
