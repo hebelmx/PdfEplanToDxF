@@ -176,6 +176,14 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
         status subslot excluded; servos+cameras → off-module never synthesized; analog clamped;
         no index collisions; graceful degradation; masked-? + GSD backslash + subnet mask faithful;
         stdlib-only. → **S7300-DATAFIX cycle (M1–M4 + m1) next; then S7300-3 render.**
+- [x] **S7300-DATAFIX — M1–M4 + m1 applied; floor RE-LOCKED. DONE @ `1dd2e96`.** Verified from
+      ground truth (suite 531→**538** green; only the 6 s7300 files touched → Rockwell byte-identical;
+      floor re-derived by a direct `build_s7300_project` call). **NEW LOCKED FLOOR: 7 stations,
+      capacity 256 / mapped 214 / RESERVA 42** (was 187/69 — M1 recovered 27 real wired channels that
+      were wrongly dropped). Per-station: local rack 109/27, ET200eco DP4 14/2 DP5 13/3 DP6 14/2
+      DP7 14/2 DP8 10/6, Festo CPX 40/0 (every valve channel named+described → 0 spare). M1 verified
+      both ways (recovered channels mapped; bare placeholders `I3.7`/`I39.1` still RESERVA). m1 needed
+      `s7300_asc.py` (the finding's own target) — 6 files, honestly flagged.
 
 ## Status log
 - 2026-06-17: Tracker created; branch `feat/s7300-import` cut off `main` @ `f3a3fc5` (E6 merged,
