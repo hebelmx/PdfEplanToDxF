@@ -145,8 +145,37 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
         (regen `_eyeball_s7300.qet`, launch QET) — mirror E6 c1/c2.
       * **BLOCKED until the data fix cycle lands** (the M1 spare-regex over-drop fix re-locks the
         floor — don't render on wrong data).
-- [ ] **Adversarial review** at the phase boundary (3 lenses + general) against this tracker
-      + the never-invent guardrails. Triage findings back here.
+- [~] **Adversarial review (data phase, 3 lenses, 2026-06-17) — DONE; triaged → one fix cycle.**
+      Acceptance lens CLEAN (floor 256/187/69 reproduced + pinned, Rockwell 11/106/75/0/78/35
+      byte-floor intact, 531 green, hygiene clean) — but the faithfulness + edge-case lenses found
+      the green floor encodes a DATA-LOSS bug. Findings:
+      * **M1 [FIX] MAJOR (faithfulness/data-loss).** `s7300_cfg.py:100` `_PLACEHOLDER_NAME_RE =
+        ^[IQ]?\d+\.\d` is `re.match` UNANCHORED → any name *starting* with a digit/address token is
+        demoted to RESERVA, deleting its real tag+comment. Drops real wired I/O: `I2.6 LeftSide
+        S.Det Vent`/"Deteccion Color VentCap", `Q3.4 Venturi AutoExp`/"VW216", `13.5 lamp test
+        power`/"Power on to lamp", `Q7.6/Q7.7…`, `I2.5…` (~8–13 ch, local rack). Fix: anchor to a
+        FULL bare-address match `^[IQ]?\d+\.\d+$` (strip first); KEEP the `comment=="Spare"` arm.
+        `Xspare`-named ch (e.g. `Q3.6spare`/"1=resistance test") → MAPPED (faithful; preserves
+        data). **CHANGES THE LOCKED FLOOR** (mapped ↑, RESERVA ↓) → re-derive + re-lock + flip the
+        tests that pin the old numbers (incl. `test_s7300_cfg.py:61`). FYI the ambiguous `Xspare`
+        handful → surface to Abel at the S7300-3 eyeball gate.
+      * **M2 [FIX] MAJOR(latent).** `s7300_front_end.py:116` `_emit_digital_channels` loops symbols
+        with NO capacity clamp (analog path IS clamped) → a module with more inline symbols than its
+        declared points emits mapped>capacity. Clamp `sym.ch >= capacity` (skip/guard).
+      * **M3 [FIX] MAJOR(latent).** `s7300_front_end.py:206-207` reads `m.in_addr.start_byte` /
+        `out_addr` UNCONDITIONALLY (analog `:217` guards) → `AttributeError` crash on a DI/DO module
+        with no address block (plausible sibling). Guard `… if m.in_addr else 0`.
+      * **M4 [FIX] MAJOR(extend.).** `s7300_front_end.py:274` ET200 capacity gated on the literal
+        `slave.type_str == "ET 200eco 16DI"` → an `ET 200eco 32DI` sibling under-counts. The helper
+        `_et200_capacity` is already generic — always call it; drop the string gate.
+      * **m1 [fix-if-cheap] MINOR.** `s7300_asc.py:127` fixed `_COL_DTYPE=(36,46)` truncates the
+        (UNUSED) datatype on wide operands (S7-400 high addresses). area/addr are tokenised (safe).
+      * **m2 [DEFER] MINOR.** `controller_cpu_type` returns the first `kind=="cpu"` — fine for the
+        single-CPU S7-300 scope; revisit for H/multi-CPU siblings.
+      * Notable CLEAN (corroborated): diag-vs-wired addr not conflated; quoted-comma split; CPX
+        status subslot excluded; servos+cameras → off-module never synthesized; analog clamped;
+        no index collisions; graceful degradation; masked-? + GSD backslash + subnet mask faithful;
+        stdlib-only. → **S7300-DATAFIX cycle (M1–M4 + m1) next; then S7300-3 render.**
 
 ## Status log
 - 2026-06-17: Tracker created; branch `feat/s7300-import` cut off `main` @ `f3a3fc5` (E6 merged,
