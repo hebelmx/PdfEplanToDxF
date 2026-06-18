@@ -45,6 +45,169 @@ Station "Q100-Cooling1/UV", Rack_0, **6 modules / 88 channels / 48 tagged / 40 s
 - stdlib only (zipfile+xml.etree for xlsx); never `git add` under `Fixtures/`.
 - `source_vendor="siemens"`; same `PlcProject` shape → renderer needs no vendor branch.
 
+## ⚠️ EPIC E6 — FULL-PLANT DISTRIBUTED I/O (the big reframe, Abel 2026-06-17)
+**Fundamental scope correction (Abel, reviewing with fresh eyes):** modern S7-1500 plants have
+**local I/O at the CPU + many DISTRIBUTED I/O drops** (often mixed families / other brands), unlike
+the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing only ONE station.**
+- **Ground truth (from the `.aml`, orchestrator-verified):** the plant has **9 I/O stations / 75 I/O
+  modules / 636 channels** — Q100 (1512SP CPU-local @ .10, 6 mod) + Q200–Q800 (IM155-6 ET200SP drops
+  @ .20–.80) + the **1214C** (@ .95, 2 mod). `IO_Channels.xml` exported **only Q100** (88 ch) → we
+  render ~14% of the real I/O.
+- **CORRECTION to the earlier handoff:** the 1214C's I/O **IS** in the `.aml` (@ .95); nothing is
+  blocked on an export. The data for the WHOLE plant is present: `.aml` = every station's modules +
+  `StartAddress`/`Length`/`IoType` (verified: e.g. `DI40_41` start 40 len 16 Input → `%I40.0..%I41.7`)
+  + the tag tables = names/descriptions/`%`addresses (`PLCTagsS71500` for the 1500 stations,
+  `PLCTagsS71200` for the .95 1214C).
+- **FEASIBILITY PROVEN (orchestrator):** computing channel addresses from the `.aml` and joining by
+  address to the tag table resolves real tags+descriptions on non-Q100 stations (Q400 DI 15/16,
+  Q400 DQ 12/16, Q500 10/16; unmapped = spares/RESERVA). The full set is reconstructable.
+- **Plan (each station its OWN section, per Abel):**
+  1. Extend `tia_aml.parse_aml` to extract per-module `StartAddress`/`Length`/`IoType` (addresses).
+  2. New front-end path: build the IR from the FULL `.aml` (all stations), enumerate each module's
+     channels by address, join **per-station to the right tag table** (reuse E6 foundation coverage
+     logic: 1500 stations → S71500, .95 → S71200), unmapped address = RESERVA. Carry station + owning
+     PLC on each point (the `controller_cpu`/`scope` seam is in place).
+  3. Renderer: **one section per station** (local CPU rack + each IM155-6 drop + the 1214C), I/O
+     folios + bornero per station, PLC-/station-labeled. **Section/numbering scheme = GATED visual
+     design decision (Abel).**
+  4. F-module addressing (safety, e.g. F-DI Length 48 for 8 ch) + analog word addressing need care.
+  5. Mixed-brand PROFINET nodes (EX260 valve terminals, SK drives, BIS RFID) — on the NET folio
+     already; draw I/O only where real addresses exist, else leave on the network overview (never invent).
+- **LOCKED DESIGN (Abel, 2026-06-17):**
+  * **Section block per station** (divider/rack + I/O folios + bornero), contiguous, in plant order.
+  * **Heaviest PLC first** (capability ordinal; 1512SP >> 1214C) → the 1512SP's 8 stations (Q100
+    CPU-local first, then Q200–Q800 drops), THEN the 1214C's station.
+  * **PLC→I/O ownership comes from the DATA, never guessed; ASK the user if ambiguous.**
+  * **General + extendable**, not fixture-hardcoded; "not so worried about polymorphic, but extendable."
+- **OWNERSHIP RESOLVED data-drivenly (orchestrator-verified):** a station's I/O addresses resolve in
+  exactly ONE PLC's program tag table (Q100–Q800 → all in `PLCTagsS71500` / the 1512SP @ .10, 0 in
+  1200; the .95 station → all in `PLCTagsS71200` / the 1214C, 0 in 1500). **Zero overlap → unambiguous.**
+  This reuses the E6 coverage selector (now per-station for BOTH the tag-join AND ownership); keep the
+  ask-on-ambiguity fallback for any future station that splits across both tables.
+  The `.aml` has NO explicit ownership attribute (only network addresses + 537 PROFINET InternalLinks),
+  so tag-table coverage is the ownership source of truth.
+- **BUILD CHUNKS:** (data) extend `parse_aml` for per-module addresses → build the multi-station IR
+  (all 9 stations, ownership + channel→address→tag join + RESERVA, ordered heaviest-PLC-first); THEN
+  (render) section-block-per-station folios — the section/numbering scheme + a desktop eyeball gate.
+- **E6 foundation DONE @ `bc0e5b0`** (branch `feat/e6-s71500-descriptions`): per-station tag-table
+  selection + descriptions + symbol match/suppression + `controller_cpu` seam. **NOT merged** — hold
+  the merge until the distributed-I/O build lands so `main` never ships the misleading single-station set.
+- **E6(a) DONE @ `6135125`** — `parse_aml` carries `addresses` = list[(io_type,start_byte,length_bits)]
+  per module (suite 419). Ordered list entries; F-modules carry 2 ranges; never invented.
+- **GROUND-TRUTH RE-DERIVATION before E6(b) (orchestrator, 2026-06-17 — corrects the prior
+  "feasibility proven" summary, which hid the F-module trap):**
+  * Real stations in the `.aml` (9): `Q100-Cooling1/UV` (1512SP CPU-local) + `Q200 Q300 Q400 Q500
+    Q600 Q700 Q700_1` (IM155-6 drops) + `S7-1200 station_1` (1214C onboard @ .95). NB the names are
+    `Q700_1`, not "Q800".
+  * Tag tables: `PLCTagsS71500.xlsx` 1167 tags (759 parse to I/Q addrs, rich English comments);
+    `PLCTagsS71200.xlsx` 143 tags (21 parse, comments empty, auto-names like "I0.4").
+  * **OWNERSHIP by coverage is unambiguous:** Q100–Q700_1 resolve 100% in S71500 / 0 in S71200;
+    `S7-1200 station_1` resolves in S71200 (21) >> S71500 (10). Zero genuine overlap.
+  * **CAPACITY / channel-count rules (VALIDATED: reproduce Abel's approved Q100 floor 88/48/40 EXACTLY):**
+    - Standard digital DI/DQ Nx: capacity = ExtIf count = `Length` bits; single module.
+    - **F-DI 8x: capacity = 2×ExtIf = 16, ALL in the Input area** (byte = 8 device values, byte+1 =
+      8 `VS_*`/"Vsupply" value-status bits — already suppressed to generic by the foundation). The
+      `.aml` `Length`=48 is PROFIsafe-inflated; do NOT enumerate by Length.
+    - **F-DQ 4x: SPLIT — DO part = ExtIf %Q[start].0..3, DI-readback part = ExtIf %I[start].0..3**
+      (8 total; readback usually all-spare). Matches the existing [DO]+[DI] split.
+    - Analog Nx: capacity = ExtIf words = `Length`/16; addresses %{area}W[start+2i].
+    - **1214C (S7-1200 station_1): conservative** — enumerate only standard onboard low-address I/O
+      (`%I0`/`%Q0` digital, `%IW64` analog); the `%ID1000…` HSC/pulse **double-word** ranges parse to
+      None → emit ONLY real mapped tags there, never synthesize digital spares (never-invent).
+  * **The doc figure "636 ch / 75 modules" was a RAW-ExtIf sum that UNDERCOUNTS F-modules** (it gives
+    Q100=68, but the approved Q100 is 88). The user-facing total (with the F-DI ×2 / F-DQ split) is
+    higher; recompute it from the IR and update the figure when E6(b) lands.
+  * **Spares are a COUNT, not addresses** (CHAN decision): mapped channels carry real tag+address from
+    the tag table; RESERVA = capacity − mapped drawn as anonymous stubs (pin `__`, no address) — this
+    is the "sidesteps F-module per-channel addressing" the design intended.
+- **E6(b) DONE @ `f4c1de5`** — `build_tia_distributed_project(aml)` → ordered `list[PlcProject]`,
+  9 stations / 776 ch / 549 mapped / 227 RESERVA; Q100 reproduces approved 88/48/40 (suite 433).
+  Existing single-station path untouched; Rockwell floor untouched.
+- **E6(b) ADVERSARIAL REVIEW (3 lenses, 2026-06-17) — triage.** Strongest +evidence: Q100 synthesis is
+  BYTE-IDENTICAL to the real `IO_Channels.xml` point source (faithful). No BLOCKERs. Findings:
+  * [FIX] MAJOR — ordering + `controller_cpu` for the 7 drops derive from the wrong key (drops get
+    `cpu_rank(None)`, rescued only because Q100 is present; remove Q100 → 1200 sorts ahead of 1500
+    drops). Derive owning-PLC CPU/class from the OWNER LABEL's CPU-local station; populate the drops'
+    `controller_cpu` (needed for E6c labeling). Data-driven, never-invented.
+  * [FIX] MAJOR(latent) — digital capacity uses `range(channels)`, ignores range `Length`; clamp so a
+    garbage `channels` can't synthesize addresses past the declared range.
+  * [FIX] MAJOR(latent) — analog heuristic `Length==16*channels` false-positives a 1-ch digital w/ a
+    16-bit range; guard `channels>=2` (keeps real `SM 1232 AQ2`, channels=2).
+  * [FIX] MINOR — `_synthesize_cpu_onboard` hardcodes `(start,length)` triples (fails silently for other
+    1200 CPUs); drive from declared ranges `start<1000`. + MINOR modules-dict collision guard; docstring
+    "tag-sweep" correction; missing-file docstring/guard.
+  * [SCOPE, not a bug] 231 S71500 tags (`%IW>=1000` VFD telegrams, RFID, drive status on mixed-brand
+    PROFINET nodes) map to NO I/O module → correctly NOT drawn as wired I/O (design pt 5: stay on the
+    NET folio; never invent a module). Document scope + add a transparent per-station off-module count;
+    SURFACE to Abel at the E6c gate. (So plant addressed I/O = 776 module ch + ~231 off-module telegram.)
+  * CLEAN (corroborated): per-station arithmetic, SM1232 analog fix, no wrong-module/cross-station join,
+    descriptions all real, `no_symbol` suppression correct, ownership unambiguous, masked-`?`/blanks.
+- **E6(b-fix) DONE @ `b8d4afc`** — ordering/controller_cpu from owner label, digital capacity clamp,
+  analog channels>=2 guard, CPU-onboard range-driven, docstring/collision guards. Suite 439; Q100
+  byte-identical; plant 776/549/227; all 9 stations carry their owning CPU; both render gates held.
+- **E6(c) GATED VISUAL DECISIONS (Abel, 2026-06-17) — LOCKED:**
+  1. **Layout = PER-STATION NUMERIC BANDS.** Each station its own band: I/O 101+/201+/…/9xx (1214C),
+     bornero 12xx/22xx/…, preceded by a station divider. Plant folios: portada 0, símbología 1,
+     Red PROFINET 2, índice 3, rack 4 (per station), then per-station I/O+bornero bands, BOM 300+,
+     changelog 900. índice spans all stations; BOM aggregates all.
+  2. **Q100 = UNIFORM** — build ALL 9 stations (incl. Q100) through the new distributed `.aml` path
+     (proven byte-identical to approved Q100). Single-station IO_Channels CLI stays available.
+  3. **Section label = station + owning-PLC CPU + a FUNCTIONAL "tag name"**, derived from the data when
+     available (the `.aml` device Name carries it: Q100 → "Cooling1/UV"; Q200–Q700_1 are bare), ELSE
+     **semantically derived** from the station's tag descriptions — CONSERVATIVE (a real common token,
+     blank if nothing clear; never invent). Eyeball-gate the derived names.
+  4. **OFF-MODULE PROFINET I/O = a NEW SECTION (chunk c2), grouped by FUNCTION.** The ~231 non-1:1
+     addressed tags (VFD telegrams `%IW>=1000`, RFID, barcode, drive status on SK drives / EX260 valve
+     terminals / BIS RFID) are NOT on a Siemens I/O module → draw them in subsections of a new section
+     grouped by function (drives, RFID, barcode, valves…), each element with its real address range +
+     tags, as a finishable starting point for the user. (Abel also OK with adding an address-range
+     column on the Red PROFINET folio, but PREFERS the new grouped-by-function section.) Needs a data
+     investigation first: link telegram addresses → PROFINET device/function (the `.aml` drives/RFID
+     are devices but their telegram ranges are NOT captured as I/O modules — investigate before design).
+- **E6(c1) DONE & EYEBALL-APPROVED (Abel, 2026-06-17) @ `6db8e91`.** `src/render_plant.py` +
+  `tia_to_qet --distributed`. 191 folios (76 I/O + 86 bornero + matter), 9 per-station bands
+  (front 0–50, bands 100–900, back BOM 1000+/changelog 1900 — moved off 300/900 to clear the
+  Q300/1214C bands), 0 order collisions / 0 token leaks / 0 unresolved conductors, ISO on all.
+  `logix_to_qet.py` untouched → Rockwell byte-identical; single-station Siemens unchanged (22/48/40).
+  Suite 454. **Abel: "looks good — proceed to c2."** Functional-name decision: **keep auto-derived +
+  blanks** (Q100 Cooling1/UV real; Q200 Infrareds, Q300 Coating derived; rest blank — never invent;
+  non-device VS_/Vsupply points excluded from derivation).
+- **E6(c2) INVESTIGATION (orchestrator, 2026-06-17) — feasibility + NO data-layer gap.**
+  * PROFINET non-controller nodes: **17 SK TU3-PNT drives, 5 EX260 valve terminals, 3 BIS M-4008 RFID**,
+    7 IM155-6 heads. ONLY the ET200SP/1200 stations carry `.aml` Address blocks — the drives/RFID/valve
+    devices do NOT expose a device-linked address range, so a telegram-tag → specific-drive join is NOT
+    available from the `.aml` (group by address-range + name pattern instead; per-element ≈ per
+    thousand-block).
+  * **NO data-layer gap (verified):** of the 231 off-module S71500 tags, 10 fall inside a parse_aml
+    range — ALL the 1214C `%IW/%QW>=1000` drive-telegram words (conservatively excluded as non-wired,
+    correct). The rest fall in NO module range (incl. `%I556/557 bcoat_*` which LOOKS like an F-DI but
+    is genuinely not on an ET200SP module — soft-mapped, not a missed module). The per-station synthesis
+    is complete; these are real "non-1:1" I/O.
+  * **Function buckets (231 tags):** Drives ~111 (`%IW/%QW>=1000` telegrams + 1214C telegram words);
+    Identification 36 (`%I/%O>=8600`, RFID); Plant coordination & safety ~84 (inter-station status
+    `%I14/15` "Qx 90%"/"24V Alarm", Coating-zone e-stops `%I556/557`, output coordination `%O100-599`).
+  * **c2 DESIGN LOCKED (Abel, 2026-06-17): subsection BY FUNCTION → PER ELEMENT; format = BOTH
+    (a summary table per function AND a drawn placeholder box per element).** Element identity =
+    tag-name prefix (strip `VS_`, leading alpha+digits token). VALIDATED grouping: Drives **19
+    elements** (UvRot/UvTran/CoatLA/IRConv… 6–8 telegram words each), Identification **3** (A1/A2/A3 =
+    BIS RFID, 12 each), Coordination/Safety **~41** (`ev*` EX260 valves, `bcoat` coating safety,
+    Q1–Q6 station 90%/24V-alarm). Function bucket = analog `%xW>=1000` (+1214C telegram words) → Drives;
+    digital `%x>=8600` → Identification; else → Coordination/Safety. Each element box = address-range
+    header + a stub per tag (addr+name+desc); pack several boxes per folio. All real data, never invent.
+- **E6(c2) DONE & EYEBALL-APPROVED (Abel, 2026-06-17) @ `fcc92fb`** — `build_offmodule_groups` +
+  `render_plant.build_offmodule_section`. Plant 191→206 folios, section 1100–1114 (Drives 19/Ident
+  3/Coord 41; tables + per-element boxes), 0 collisions/leaks. Abel: "looks good."
+- **E6(c2-fix) 1214C PHYSICAL onboard I/O (Abel datasheet observation, 2026-06-17).** The `.aml`
+  declares the VIRTUAL process-image allocation (Input 0/16 + Output 0/16), but the CPU 1214C
+  (6ES7 214-1BG40-0XB0) physically has **14 DI / 10 DO / 2 AI** (Siemens S7-1200 catalog p.3 +
+  6ES72141BG40 datasheet, both now in `docs/`). Added `_CPU_ONBOARD_PHYSICAL_IO` (1211/1212/1214/
+  1215/1217 incl. AQ; F-variants share) keyed on `CPU 12xx`; `_synthesize_cpu_onboard` CLAMPS to the
+  model's physical counts (unknown model → keeps the .aml range, never invent). Effect: 1214C station
+  **36→28 ch / 21→19 mapped / 15→9 RESERVA**; the 2 virtual outputs `%Q1.2/%Q1.3` (tagged but not
+  wired) surface in the off-module Coordination/Safety section (231→**233** off-module tags). Plant
+  **776→768 ch / 549→547 mapped / 227→221 RESERVA**. Q100–Q700_1 + Rockwell + single-station Siemens
+  UNCHANGED (22 folios). Suite **471** green.
+
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
       `plc_ir.build_tia_project()`. IR ground truth: vendor=siemens, station "Q100-Cooling1/UV",

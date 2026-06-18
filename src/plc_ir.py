@@ -46,6 +46,13 @@ class PlcProject:
                       empty unless a front-end populates it (Siemens fills it
                       from the CAx/AML — subnet_mask + is_controller are REAL
                       .aml provenance, never invented).
+      controller_cpu  str|None — the CPU TYPE that owns this station (e.g.
+                      "CPU 1512SP F-1 PN"), derived from the real .aml PROFINET
+                      controller node whose IP matches the station's modules'
+                      network_address. DATA-ONLY seam for a later by-PLC
+                      labelling cycle (no rendering uses it yet). None when no
+                      .aml / no matching controller / no station address — and
+                      always None for Rockwell. NEVER invented.
     """
 
     name: str
@@ -57,6 +64,7 @@ class PlcProject:
     controller_tags: dict = field(default_factory=dict)
     program_tags: dict = field(default_factory=dict)
     network_nodes: list = field(default_factory=list)
+    controller_cpu: str | None = None
 
     # convenience alias: the renderer/old tuple called this `controller`
     @property
@@ -115,9 +123,11 @@ def build_tia_project(
     # CAx/AML is supplied (the IO_Channels.xml carries no addresses); empty
     # otherwise so the folio is gracefully omitted — NEVER invented.
     network_nodes: list = []
+    controller_cpu: str | None = None
     if aml_path:
         import tia_aml
         network_nodes = tia_aml.profinet_nodes(aml_path)
+        controller_cpu = _owning_controller_cpu(network_nodes, io_mods)
     return PlcProject(
         name=station_name,
         source_vendor="siemens",
@@ -128,4 +138,113 @@ def build_tia_project(
         controller_tags={},
         program_tags={},
         network_nodes=network_nodes,
+        controller_cpu=controller_cpu,
     )
+
+
+def build_tia_distributed_project(
+    aml_path: str,
+    tag_paths: list[str] | None = None,
+) -> list[PlcProject]:
+    """E6: build ONE PlcProject per station for the FULL plant's distributed I/O.
+
+    The single-station `build_tia_project` reads a per-station IO_Channels.xml
+    (only Q100 has one). This NEW path instead synthesizes every station's real
+    channel addresses from the FULL CAx/AML (`parse_aml`) and joins them to the
+    per-PLC `PLCTags*.xlsx` tag tables by address — covering all 9 stations.
+
+    Args:
+      aml_path:  the full CAx/AML export.
+      tag_paths: explicit list of PLCTags*.xlsx paths; when None, sibling
+                 `PLCTags*.xlsx` next to the .aml are auto-discovered (sorted).
+
+    Returns an ORDERED `list[PlcProject]` (heaviest-PLC-first; see
+    tia_front_end.build_distributed_stations), one per station, each with
+    source_vendor="siemens", modules/io_mods/points/skipped filled, the shared
+    plant `network_nodes`, and `controller_cpu` set to the OWNING-PLC CPU type
+    (derived from the owner group's CPU-local station, so distributed drops that
+    carry no CPU module still show their owning 1512SP / 1214C).
+
+    NEVER raises on a missing/!aml or missing tag tables — returns [] (mirroring
+    the existing path's graceful degradation of optional inputs). NEVER invents.
+    """
+    import os
+    import glob as _glob
+
+    if not aml_path or not os.path.isfile(aml_path):
+        return []
+
+    import tia_front_end as tia
+    import tia_aml
+
+    # discover sibling PLCTags*.xlsx if not given (mirror tia_to_qet spirit)
+    if tag_paths is None:
+        folder = os.path.dirname(os.path.abspath(aml_path))
+        tag_paths = sorted(_glob.glob(os.path.join(folder, "PLCTags*.xlsx")))
+
+    # label each table by its xlsx stem with the "PLCTags" prefix stripped, e.g.
+    # "PLCTagsS71500.xlsx" -> "S71500" — the owning-PLC label surfaced in the IR.
+    tag_tables: dict[str, dict] = {}
+    for p in tag_paths or []:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        label = stem[len("PLCTags"):] if stem.startswith("PLCTags") else stem
+        tag_tables[label] = tia.load_tag_table(p)
+
+    try:
+        stations = tia.build_distributed_stations(aml_path, tag_tables)
+    except Exception:
+        # a true .aml parse error degrades to [] rather than crashing the caller
+        return []
+
+    network_nodes = tia_aml.profinet_nodes(aml_path)
+
+    projects: list[PlcProject] = []
+    for s in stations:
+        # controller_cpu = the OWNING-PLC CPU type, derived data-driven from the
+        # owner group's CPU-local station (so ET200SP drops that carry no CPU
+        # module still show their owning 1512SP/1214C). Falls back to the
+        # IP-matched controller node only if the front-end didn't surface one.
+        controller_cpu = s.get("owning_cpu") or _owning_controller_cpu(
+            network_nodes, s["io_mods"])
+        projects.append(
+            PlcProject(
+                name=s["station_name"],
+                source_vendor="siemens",
+                modules=s["modules"],
+                io_mods=s["io_mods"],
+                points=s["points"],
+                skipped=s["skipped"],
+                controller_tags={},
+                program_tags={},
+                network_nodes=network_nodes,
+                controller_cpu=controller_cpu,
+            )
+        )
+    return projects
+
+
+def _owning_controller_cpu(network_nodes: list, io_mods: list) -> str | None:
+    """Identify the CPU TYPE that owns this station from REAL .aml data.
+
+    The station's owning CPU is the PROFINET node that IS a controller
+    (`is_controller==True`) AND whose IP equals the station IP — the
+    `network_address` shared by the station's I/O modules. Returns that node's
+    `type` (the CPU type string, e.g. "CPU 1512SP F-1 PN"), or None when there
+    is no station address, or no controller node matches it — NEVER invented.
+
+    network_nodes tuples are (ip, name, type, subnet_mask, is_controller).
+    """
+    # the station IP is the network_address the station's modules carry (filled
+    # from the .aml by the front-end). Take the first non-empty one.
+    station_ip = None
+    for mod in io_mods:
+        addr = getattr(mod, "network_address", None)
+        if addr:
+            station_ip = addr
+            break
+    if not station_ip:
+        return None
+    for ip, _name, type_name, _mask, is_controller in network_nodes:
+        if is_controller and ip == station_ip:
+            return type_name or None
+    return None

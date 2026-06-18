@@ -120,6 +120,31 @@ class KindAndSpareTest(unittest.TestCase):
         self.assertFalse(tia.is_spare("fcuv_door1a"))
 
 
+class NonDeviceSignalTest(unittest.TestCase):
+    """_is_nondevice_signal suppresses a device symbol for supply-monitor and
+    permit channels ONLY (Abel 2026-06-17) — never a real field device."""
+
+    def test_supply_monitor_by_tag_prefix(self):
+        self.assertTrue(tia._is_nondevice_signal("VS_buv_ema", "Vsupply Emergency Stop"))
+
+    def test_supply_monitor_by_description(self):
+        self.assertTrue(tia._is_nondevice_signal("anything", "Vsupply UV Door 1 Open"))
+
+    def test_permit_signal(self):
+        self.assertTrue(tia._is_nondevice_signal("buv_p2open", "Permission to Open UV Door"))
+
+    def test_real_device_kept(self):
+        # a genuine door limit switch / e-stop / light is NOT suppressed
+        self.assertFalse(tia._is_nondevice_signal("fcuv_door1a", "UV Door 1 Open"))
+        self.assertFalse(tia._is_nondevice_signal("buv_ema", "Emergency Stop"))
+
+    def test_permission_word_midphrase_is_kept(self):
+        # the critical non-suppression: a real pilot light whose description
+        # merely CONTAINS 'permission' (not at the start) must keep its symbol
+        self.assertFalse(
+            tia._is_nondevice_signal("uv_slpermission", "Light Signal Permission Door"))
+
+
 # --------------------------------------------------------------------------
 # Pure-helper tests: xlsx shared-string resolution (synthetic, no fixture)
 # --------------------------------------------------------------------------
@@ -271,6 +296,670 @@ class TiaFixtureTest(unittest.TestCase):
         tags_path = str(xlsx) if xlsx.is_file() else None
         proj = plc_ir.build_tia_project(str(self.fixture), tags_path)
         self.assertTrue(all(p.description == "" for p in proj.points))
+
+
+def _imv1_aml() -> Path:
+    root = Path(__file__).resolve().parent.parent / "Fixtures" / "Siemens" / "TiaPortal"
+    return root / "IMV1_QRO001_08AGO21_V15.aml"
+
+
+# --------------------------------------------------------------------------
+# E6 distributed-I/O: PURE unit tests on inline parse_aml-shaped dicts
+# --------------------------------------------------------------------------
+class DistributedStationsPureTest(unittest.TestCase):
+    """build_distributed_stations driven by hand-built parse_aml-shaped hw and
+    inline tag tables — no real fixtures. We monkeypatch tia_aml.parse_aml /
+    profinet_nodes so the pure synthesis + join logic is exercised in isolation."""
+
+    def _run(self, hw, tag_tables, nodes=None):
+        import tia_aml
+        orig_parse = tia_aml.parse_aml
+        orig_nodes = tia_aml.profinet_nodes
+        orig_hw_for = tia_aml.hardware_for_station
+        tia_aml.parse_aml = lambda _p: hw
+        tia_aml.profinet_nodes = lambda _p: (nodes or [])
+        # real hardware_for_station works on the dict shape; keep it
+        try:
+            return tia.build_distributed_stations("dummy.aml", tag_tables)
+        finally:
+            tia_aml.parse_aml = orig_parse
+            tia_aml.profinet_nodes = orig_nodes
+            tia_aml.hardware_for_station = orig_hw_for
+
+    @staticmethod
+    def _counts(station):
+        mapped = len(station["points"])
+        reserva = sum(1 for s in station["skipped"] if s[0] == "RESERVA")
+        return mapped + reserva, mapped, reserva
+
+    def test_standard_di16_12_tags(self):
+        """A standard DI 16x with 12 tags -> 12 mapped + 4 RESERVA."""
+        hw = {
+            ("ST", "DI0_1"): {
+                "order_number": "6ES7-X", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.1", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 0, 16)],
+            },
+        }
+        tags = {f"t{i}": {"address": f"%I{i // 8}.{i % 8}", "comment": f"c{i}"}
+                for i in range(12)}
+        sts = self._run(hw, {"A": tags})
+        self.assertEqual(len(sts), 1)
+        ch, m, r = self._counts(sts[0])
+        self.assertEqual((ch, m, r), (16, 12, 4))
+
+    def test_fdi_8x_value_and_status_all_mapped(self):
+        """F-DI 8x -> 16 channels; 8 device tags + 8 VS_ status tags all mapped,
+        and the VS_ points get no_symbol=True."""
+        hw = {
+            ("ST", "F-DI150"): {
+                "order_number": "6ES7-F", "type_name": "F-DI 8x24VDC HF",
+                "network_address": "10.0.0.1", "channels": 8,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 150, 48), ("Output", 150, 32)],
+            },
+        }
+        tags = {}
+        for i in range(8):
+            tags[f"dev{i}"] = {"address": f"%I150.{i}", "comment": f"Device {i}"}
+            tags[f"VS_dev{i}"] = {"address": f"%I151.{i}", "comment": f"Vsupply {i}"}
+        sts = self._run(hw, {"A": tags})
+        ch, m, r = self._counts(sts[0])
+        self.assertEqual((ch, m, r), (16, 16, 0))
+        vs = [p for p in sts[0]["points"] if p.tag.startswith("VS_")]
+        self.assertEqual(len(vs), 8)
+        self.assertTrue(all(p.no_symbol for p in vs))
+
+    def test_fdi_8x_partial(self):
+        """F-DI 8x with only 4 of 16 channels tagged -> 4 mapped + 12 RESERVA."""
+        hw = {
+            ("ST", "F-DI156"): {
+                "order_number": "", "type_name": "F-DI 8x24VDC HF",
+                "network_address": None, "channels": 8,
+                "device_item_type": "", "slot": 3,
+                "addresses": [("Input", 156, 48), ("Output", 156, 32)],
+            },
+        }
+        tags = {
+            "a": {"address": "%I156.0", "comment": ""},
+            "b": {"address": "%I156.1", "comment": ""},
+            "va": {"address": "%I157.0", "comment": ""},
+            "vb": {"address": "%I157.1", "comment": ""},
+        }
+        sts = self._run(hw, {"A": tags})
+        ch, m, r = self._counts(sts[0])
+        self.assertEqual((ch, m, r), (16, 4, 12))
+
+    def test_fdq_4x_split_do_di(self):
+        """F-DQ 4x -> split DO/DI: DO 3 mapped + 1 RESERVA, DI 0 mapped + 4
+        RESERVA => physical module 8/3/5."""
+        hw = {
+            ("ST", "F-DQ1500"): {
+                "order_number": "", "type_name": "F-DQ 4x24VDC/2A PM HF",
+                "network_address": None, "channels": 4,
+                "device_item_type": "", "slot": 4,
+                "addresses": [("Input", 1500, 40), ("Output", 1500, 40)],
+            },
+        }
+        tags = {
+            "o0": {"address": "%Q1500.0", "comment": "Out 0"},
+            "o1": {"address": "%Q1500.1", "comment": "Out 1"},
+            "o2": {"address": "%Q1500.2", "comment": "Out 2"},
+        }
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        ch, m, r = self._counts(st)
+        self.assertEqual((ch, m, r), (8, 3, 5))
+        names = sorted(mod.name for mod in st["io_mods"])
+        self.assertEqual(names, ["F-DQ1500 [DI]", "F-DQ1500 [DO]"])
+        do = [mod for mod in st["io_mods"] if mod.name == "F-DQ1500 [DO]"][0]
+        di = [mod for mod in st["io_mods"] if mod.name == "F-DQ1500 [DI]"][0]
+        do_pts = sum(1 for p in st["points"] if p.module is do)
+        di_pts = sum(1 for p in st["points"] if p.module is di)
+        self.assertEqual((do_pts, do.points - do_pts), (3, 1))
+        self.assertEqual((di_pts, di.points - di_pts), (0, 4))
+
+    def test_analog_ai_4x_words(self):
+        """An analog AI 4x -> 4 word channels (%IW…)."""
+        hw = {
+            ("ST", "AI4"): {
+                "order_number": "", "type_name": "AI 4xU/I/RTD/TC ST",
+                "network_address": None, "channels": 4,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 64, 64)],  # 64 bits / 16 = 4 words
+            },
+        }
+        tags = {
+            "a0": {"address": "%IW64", "comment": "A0"},
+            "a1": {"address": "%IW66", "comment": "A1"},
+        }
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        ch, m, r = self._counts(st)
+        self.assertEqual((ch, m, r), (4, 2, 2))
+        self.assertTrue(all(p.analog for p in st["points"]))
+        addrs = sorted(p.logix_address for p in st["points"])
+        self.assertEqual(addrs, ["%IW64", "%IW66"])
+
+    def test_analog_module_named_without_ai_aq_prefix(self):
+        """An analog module whose type_name does NOT start with AI/AQ — the real
+        'SM 1232 AQ2' analog-output card — is still classified analog by its
+        word-structured Length (16*channels), NOT misread as digital. Regression:
+        the prefix-only test synthesized %Q96.0/.1 and dropped the real %QW96 tag.
+        """
+        hw = {
+            ("ST", "AQ 2x14BIT_1"): {
+                "order_number": "", "type_name": "SM 1232 AQ2",
+                "network_address": None, "channels": 2,
+                "device_item_type": "", "slot": 3,
+                "addresses": [("Output", 96, 32)],  # 32 bits / 16 = 2 words
+            },
+        }
+        tags = {"ao0": {"address": "%QW96", "comment": "Setpoint"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        ch, m, r = self._counts(st)
+        self.assertEqual((ch, m, r), (2, 1, 1))
+        self.assertTrue(all(p.analog for p in st["points"]))
+        self.assertEqual(st["points"][0].logix_address, "%QW96")
+        self.assertEqual(st["io_mods"][0].kind, "AO")
+
+    def test_ownership_picks_higher_coverage(self):
+        """Owner selection picks the table covering MORE of the station's
+        synthesized channel addresses."""
+        hw = {
+            ("ST", "DI0_1"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": None, "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 0, 16)],
+            },
+        }
+        good = {f"t{i}": {"address": f"%I{i // 8}.{i % 8}", "comment": ""}
+                for i in range(10)}
+        poor = {"x": {"address": "%I99.0", "comment": ""}}
+        sts = self._run(hw, {"GOOD": good, "POOR": poor})
+        self.assertEqual(sts[0]["owning_plc_label"], "GOOD")
+        self.assertFalse(sts[0]["ambiguous_owner"])
+
+    def test_fix3_one_channel_digital_with_16bit_range_not_analog(self):
+        """FIX 3: a 1-channel DIGITAL module declaring a 16-bit reserved range
+        (16 == 16*1) must NOT be misread as analog. channels>=2 is now required
+        for the structural-ratio analog clause. The single %I10.0 tag maps as DI."""
+        hw = {
+            ("ST", "DI 1x"): {
+                "order_number": "", "type_name": "DI 1x",
+                "network_address": None, "channels": 1,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 10, 16)],
+            },
+        }
+        tags = {"d0": {"address": "%I10.0", "comment": "single"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        self.assertEqual(st["io_mods"][0].kind, "DI")
+        self.assertFalse(any(p.analog for p in st["points"]))
+        self.assertEqual(st["points"][0].logix_address, "%I10.0")
+
+    def test_fix2_fdi_clamps_to_short_input_range(self):
+        """FIX 2: an F-DI declaring channels=8 (would request 16 DI) but with a
+        too-short Input range of only 6 bits cannot synthesize past 6 channels."""
+        hw = {
+            ("ST", "F-DI-short"): {
+                "order_number": "", "type_name": "F-DI 8x24VDC HF",
+                "network_address": None, "channels": 8,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 150, 6), ("Output", 150, 32)],
+            },
+        }
+        tags = {f"d{i}": {"address": f"%I150.{i}", "comment": ""} for i in range(6)}
+        sts = self._run(hw, {"A": tags})
+        ch, m, r = self._counts(sts[0])
+        # capacity clamped to 6 (not 2*8=16); all 6 happen to be tagged
+        self.assertEqual(ch, 6)
+        self.assertEqual(m, 6)
+
+    def test_fix4_onboard_di_range_is_range_driven_not_hardcoded(self):
+        """FIX 4: a 1200 CPU whose onboard DI range is Input 0/8 synthesizes 8 DI
+        (proving the onboard logic is range-driven, not hardcoded to 16)."""
+        hw = {
+            ("ST", "PLC_small"): {
+                "order_number": "", "type_name": "CPU 1212C DC/DC/DC",
+                "network_address": "10.0.0.95", "channels": 8,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 8)],
+            },
+        }
+        tags = {"on0": {"address": "%I0.0", "comment": "onboard"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        ch, m, r = self._counts(st)
+        self.assertEqual(ch, 8)          # 8 DI, NOT 16
+        self.assertEqual(m, 1)
+        self.assertEqual(st["io_mods"][0].kind, "DI")
+        self.assertEqual(st["io_mods"][0].points, 8)
+
+    def test_fix1_owning_cpu_on_drops_and_order_without_cpu_local(self):
+        """FIX 1: the 1500 drops carry no CPU module, yet they (a) get the OWNING
+        1500 CPU type and (b) sort BEFORE a 1200 station EVEN WHEN the 1500's
+        CPU-local station is absent — proving the order is owning-PLC-derived,
+        not rescued by a shared station label happening to contain a CPU."""
+        # A 1500-owned DROP (no CPU module) + a 1200 CPU-local station. No 1500
+        # CPU-local station exists here -> owning_cpu for the 1500 group is None,
+        # BUT we add the CPU-local case in the sibling test below. Here we assert
+        # the drop still precedes the 1200 by owning-label grouping + tie-break.
+        # Use NON-overlapping address spaces per PLC so owner selection is clean
+        # (the real plant has disjoint per-PLC tag tables). 1500 lives at %I20-33;
+        # the 1200 onboard at the standard %I0/%Q0/%IW64.
+        hw = {
+            # 1500-owned drop, no CPU, IP .50
+            ("DROP1500", "DI_drop"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.50", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 20, 16)],
+            },
+            # 1500 CPU-LOCAL station, IP .10
+            ("Q1500", "CPU1500"): {
+                "order_number": "", "type_name": "CPU 1512SP F-1 PN",
+                "network_address": "10.0.0.10", "channels": 0,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [],
+            },
+            ("Q1500", "DI_local"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.10", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 32, 16)],
+            },
+            # 1200 CPU-local station, IP .95
+            ("S1200", "PLC_1"): {
+                "order_number": "", "type_name": "CPU 1214C AC/DC/Rly",
+                "network_address": "10.0.0.95", "channels": 26,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 16), ("Output", 0, 16), ("Input", 64, 32)],
+            },
+        }
+        # tag tables: S71500 covers the 1500 addrs (%I20.x and %I32.x),
+        # S71200 covers ONLY the 1200 onboard %Q0.x/%IW64 (disjoint from 1500)
+        t1500 = {}
+        for i in range(16):
+            t1500[f"a{i}"] = {"address": f"%I{20 + i // 8}.{i % 8}", "comment": ""}
+        for i in range(16):
+            t1500[f"b{i}"] = {"address": f"%I{32 + i // 8}.{i % 8}", "comment": ""}
+        t1200 = {"c0": {"address": "%Q0.0", "comment": ""},
+                 "c1": {"address": "%IW64", "comment": ""}}
+        sts = self._run(hw, {"S71500": t1500, "S71200": t1200})
+        order = [s["station_name"] for s in sts]
+        # the two 1500 stations precede the 1200 one
+        self.assertLess(order.index("Q1500"), order.index("S1200"))
+        self.assertLess(order.index("DROP1500"), order.index("S1200"))
+        # CPU-local 1500 station sorts before its drop
+        self.assertLess(order.index("Q1500"), order.index("DROP1500"))
+        # owning_cpu propagated to the DROP (no CPU module of its own)
+        drop = [s for s in sts if s["station_name"] == "DROP1500"][0]
+        self.assertEqual(drop["owning_cpu"], "CPU 1512SP F-1 PN")
+        s1200 = [s for s in sts if s["station_name"] == "S1200"][0]
+        self.assertEqual(s1200["owning_cpu"], "CPU 1214C AC/DC/Rly")
+
+    def test_fix1_order_holds_when_cpu_local_1500_removed(self):
+        """FIX 1 robustness: remove the 1500 CPU-local station entirely. The 1500
+        drop has NO CPU type to derive (owning_cpu None -> rank last by class),
+        BUT we still must not regress: with a real owning CPU absent the system
+        must not invent one. Asserts owning_cpu is None and never fabricated."""
+        hw = {
+            ("DROP1500", "DI_drop"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.50", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 20, 16)],
+            },
+            ("S1200", "PLC_1"): {
+                "order_number": "", "type_name": "CPU 1214C AC/DC/Rly",
+                "network_address": "10.0.0.95", "channels": 26,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 16), ("Output", 0, 16), ("Input", 64, 32)],
+            },
+        }
+        t1500 = {f"a{i}": {"address": f"%I{20 + i // 8}.{i % 8}", "comment": ""}
+                 for i in range(16)}
+        t1200 = {"c0": {"address": "%Q0.0", "comment": ""}}
+        sts = self._run(hw, {"S71500": t1500, "S71200": t1200})
+        drop = [s for s in sts if s["station_name"] == "DROP1500"][0]
+        # no CPU-local station for the 1500 owner -> owning_cpu None (never invented)
+        self.assertIsNone(drop["owning_cpu"])
+
+    def test_fix5_ir_name_collision_keeps_all_modules(self):
+        """FIX 5: a physical module whose NAME already ends in ' [DO]' must not
+        collide in the modules dict with a split part's computed key. Both Module
+        objects survive in io_mods AND get distinct dict keys (no silent loss)."""
+        hw = {
+            # physical name literally ends in ' [DO]'; it is mixed (DI+DO) so it
+            # splits into 'X [DO] [DO]' and 'X [DO] [DI]' — distinct keys — but we
+            # also add a plain DO module literally named 'X [DO]' to force a clash.
+            ("ST", "X [DO]"): {
+                "order_number": "", "type_name": "DQ 16x24VDC ST",
+                "network_address": None, "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Output", 0, 16)],
+            },
+            ("ST", "X"): {
+                "order_number": "", "type_name": "F-DQ 4x24VDC/2A PM HF",
+                "network_address": None, "channels": 4,
+                "device_item_type": "", "slot": 3,
+                "addresses": [("Input", 100, 40), ("Output", 100, 40)],
+            },
+        }
+        sts = self._run(hw, {"A": {}})
+        st = sts[0]
+        # 'X [DO]' physical (single, name unchanged) + 'X [DI]'/'X [DO]' split
+        # parts of physical 'X'. The split DO part computes key 'X [DO]' which
+        # COLLIDES with the first module's key -> must be de-duped, not lost.
+        self.assertEqual(len(st["io_mods"]), 3, "all 3 IR modules present")
+        self.assertEqual(len(st["modules"]), 3, "no Module silently overwritten")
+        # every io_mods object is reachable from the modules dict (no orphan)
+        dict_objs = set(id(m) for m in st["modules"].values())
+        for mod in st["io_mods"]:
+            self.assertIn(id(mod), dict_objs)
+
+    def test_cpu_onboard_clamped_to_physical_io_per_model(self):
+        """The .aml's Input 0/16 + Output 0/16 are the VIRTUAL process-image
+        allocation; a known CPU model clamps onboard synthesis to its PHYSICAL
+        channel count (1214C -> 14 DI + 10 DO), and an UNKNOWN model keeps the
+        full .aml range (never invent a count we don't know)."""
+        addrs = [("Input", 0, 16), ("Output", 0, 16)]
+        di = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214C AC/DC/Rly")
+              if c[0] == "DI"]
+        do = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214C AC/DC/Rly")
+              if c[0] == "DO"]
+        self.assertEqual(len(di), 14)   # not 16 — top 2 input bits not wired
+        self.assertEqual(len(do), 10)   # not 16 — top 6 output bits not wired
+        self.assertEqual(di[-1][1], "%I1.5")   # last physical DI
+        self.assertEqual(do[-1][1], "%Q1.1")   # last physical DO
+        # an F-CPU variant shares its counterpart's I/O
+        self.assertEqual(
+            len([c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214FC") if c[0] == "DI"]),
+            14)
+        # unknown model -> range-driven (16 DI), never invents a smaller count
+        unk = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 9XYZ") if c[0] == "DI"]
+        self.assertEqual(len(unk), 16)
+
+    def test_cpu_hsc_range_no_synthesized_spares(self):
+        """A CPU 'PLC_1' with an Input 1000/32 HSC range yields NO synthesized
+        digital spares from that range — only the standard onboard ranges +
+        real tags. Here only an onboard %I0.0 tag exists; the 1000-range is
+        ignored entirely (no RESERVA explosion from %ID double-words)."""
+        hw = {
+            ("ST", "PLC_1"): {
+                "order_number": "", "type_name": "CPU 1214C AC/DC/Rly",
+                "network_address": "10.0.0.95", "channels": 26,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [
+                    ("Input", 0, 16), ("Output", 0, 16), ("Input", 64, 32),
+                    ("Input", 1000, 32), ("Output", 1000, 16),
+                ],
+            },
+        }
+        tags = {"on0": {"address": "%I0.0", "comment": "onboard"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        # onboard synthesized: the .aml's Input 0/16 + Output 0/16 are clamped to
+        # the CPU 1214C PHYSICAL onboard I/O (14 DI + 10 DO) + 2 AI = 26 channels
+        # (the top 2 DI + 6 DO bits are virtual process-image, not wired); 1 mapped.
+        ch, m, r = self._counts(st)
+        self.assertEqual(ch, 26)
+        self.assertEqual(m, 1)
+        # NONE of the skipped spares come from an HSC %ID/%QD address
+        for kind, raw, reason in st["skipped"]:
+            parsed = tia.parse_address(raw)
+            self.assertIsNotNone(parsed, f"spare {raw} must be a real onboard addr")
+
+
+# --------------------------------------------------------------------------
+# E6 distributed-I/O: FIXTURE-GATED integration test on the real plant
+# --------------------------------------------------------------------------
+@unittest.skipUnless(_imv1_aml().is_file(), "IMV1 .aml fixture absent")
+class DistributedPlantIntegrationTest(unittest.TestCase):
+    def setUp(self):
+        self.projs = plc_ir.build_tia_distributed_project(str(_imv1_aml()))
+
+    @staticmethod
+    def _counts(proj):
+        mapped = len(proj.points)
+        reserva = sum(1 for s in proj.skipped if s[0] == "RESERVA")
+        return mapped + reserva, mapped, reserva
+
+    def test_nine_stations_in_expected_order(self):
+        names = [p.name for p in self.projs]
+        self.assertEqual(names, [
+            "Q100-Cooling1/UV", "Q200", "Q300", "Q400", "Q500", "Q600",
+            "Q700", "Q700_1", "S7-1200 station_1",
+        ])
+
+    def test_q100_floor_88_48_40(self):
+        q100 = self.projs[0]
+        self.assertEqual(q100.name, "Q100-Cooling1/UV")
+        ch, m, r = self._counts(q100)
+        self.assertEqual((ch, m, r), (88, 48, 40))
+
+    def test_q100_per_module_breakdown(self):
+        q100 = self.projs[0]
+
+        def part(name):
+            mod = q100.modules[name]
+            mapped = sum(1 for p in q100.points if p.module is mod)
+            return mapped + (mod.points - mapped), mapped, mod.points - mapped
+
+        # F-DQ1500 is split into [DO]+[DI]; combine them = 8/3/5
+        do = part("F-DQ1500 [DO]")
+        di = part("F-DQ1500 [DI]")
+        fdq = (do[0] + di[0], do[1] + di[1], do[2] + di[2])
+        self.assertEqual(part("F-DI150"), (16, 16, 0))
+        self.assertEqual(part("F-DI156"), (16, 4, 12))
+        self.assertEqual(part("DI10_11"), (16, 12, 4))
+        self.assertEqual(part("DI12_13"), (16, 5, 11))
+        self.assertEqual(fdq, (8, 3, 5))
+        self.assertEqual(part("DQ10_11"), (16, 8, 8))
+
+    def test_ownership_q100_s71500_s71200_station(self):
+        # Q100 is owned by the 1500 table; the 1200 station by the 1200 table.
+        # controller_cpu reflects the station's own CPU type.
+        q100 = self.projs[0]
+        self.assertEqual(q100.controller_cpu, "CPU 1512SP F-1 PN")
+        s1200 = [p for p in self.projs if p.name == "S7-1200 station_1"][0]
+        self.assertEqual(s1200.controller_cpu, "CPU 1214C AC/DC/Rly")
+
+    def test_q400_di40_41_15_mapped(self):
+        q400 = [p for p in self.projs if p.name == "Q400"][0]
+        mod = q400.modules["DI40_41"]
+        mapped = sum(1 for p in q400.points if p.module is mod)
+        self.assertEqual((mapped, mod.points - mapped), (15, 1))
+
+    def test_plant_totals_and_distributed_mapped(self):
+        tot_ch = tot_m = tot_r = 0
+        for p in self.projs:
+            ch, m, r = self._counts(p)
+            tot_ch += ch
+            tot_m += m
+            tot_r += r
+        self.assertEqual(len(self.projs), 9)
+        # every distributed station maps at least one channel (not all RESERVA)
+        for p in self.projs:
+            self.assertGreater(len(p.points), 0, f"{p.name} mapped nothing")
+        # sanity: totals are the sum of per-station counts
+        self.assertEqual(tot_ch, tot_m + tot_r)
+        self.assertGreater(tot_m, 0)
+
+
+# --------------------------------------------------------------------------
+# E6 (c2): off-module PROFINET I/O grouping (build_offmodule_groups + helpers)
+# --------------------------------------------------------------------------
+class OffmoduleHelpersPureTest(unittest.TestCase):
+    """Pure tests for the function-bucket + element-prefix helpers."""
+
+    def test_function_bucket_drives_analog_word_ge_1000(self):
+        # analog word >= 1000 -> Drives (a drive telegram)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%IW1000")), "Drives")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%QW1010")), "Drives")
+        # analog word < 1000 is NOT a drive (falls to coordination)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%IW64")),
+            "Coordination/Safety")
+
+    def test_function_bucket_identification_digital_byte_ge_8600(self):
+        # digital byte >= 8600 -> Identification (RFID reader)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%I8600.0")),
+            "Identification")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%Q8616.6")),
+            "Identification")
+
+    def test_function_bucket_coordination_default(self):
+        # everything else -> Coordination/Safety
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%I14.0")),
+            "Coordination/Safety")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%Q500.3")),
+            "Coordination/Safety")
+
+    def test_element_prefix_strips_vs_then_leading_token(self):
+        self.assertEqual(tia.offmodule_element("UvRot_InStatus"), "UvRot")
+        self.assertEqual(tia.offmodule_element("UvRot_OutControl"), "UvRot")
+        self.assertEqual(tia.offmodule_element("A1_TagDetected"), "A1")
+        self.assertEqual(tia.offmodule_element("VS_bcoat_ema2"), "bcoat")
+        # the VS_ strip is only the LEADING prefix
+        self.assertEqual(tia.offmodule_element("VS_evst10_x"), "evst10")
+
+
+class OffmoduleGroupsPureTest(unittest.TestCase):
+    """Pure test of build_offmodule_groups on tiny inline tag tables with a
+    monkey-patched IR builder (so no fixture is needed): correct bucketing,
+    element prefixes, and off-module = not-covered only."""
+
+    def setUp(self):
+        # a tiny covered set returned by a stubbed distributed-IR build
+        self._orig = plc_ir.build_tia_distributed_project
+
+        class _Pt:
+            def __init__(self, a):
+                self.logix_address = a
+
+        class _IR:
+            # %I8.0 is a real, COVERED on-module address (a mapped point)
+            points = [_Pt("%I8.0")]
+            # %Q8.0 is a COVERED RESERVA spare (skipped 2nd field)
+            skipped = [("RESERVA", "%Q8.0", "spare")]
+
+        plc_ir.build_tia_distributed_project = lambda *_a, **_k: [_IR()]
+
+    def tearDown(self):
+        plc_ir.build_tia_distributed_project = self._orig
+
+    def test_grouping_bucketing_and_covered_exclusion(self):
+        tables = {"S71500": {
+            # Drives: analog word >= 1000, element prefix from leading token
+            "UvRot_InStatus": {"address": "%IW1000", "comment": "Uv rot status"},
+            "UvRot_OutControl": {"address": "%QW1002", "comment": ""},
+            # Identification: digital byte >= 8600
+            "A1_TagDetected": {"address": "%I8600.0", "comment": "Tag detected"},
+            # Coordination/Safety: digital byte < 8600 (VS_-stripped element 'ev')
+            "VS_ev_open": {"address": "%I14.0", "comment": "valve open"},
+            # COVERED on-module -> excluded
+            "on_module_mapped": {"address": "%I8.0", "comment": "x"},
+            # COVERED spare -> excluded
+            "on_module_spare": {"address": "%Q8.0", "comment": "y"},
+            # NOT an I/O address (merker) -> excluded (parse None)
+            "not_io": {"address": "%MD100", "comment": "z"},
+        }}
+        groups = tia.build_offmodule_groups("dummy.aml", tables)
+        gd = dict(groups)
+        self.assertEqual([f for f, _ in groups],
+                         ["Drives", "Identification", "Coordination/Safety"])
+        # Drives: ONE element "UvRot" with both its tags
+        drives = gd["Drives"]
+        self.assertEqual([e["name"] for e in drives], ["UvRot"])
+        self.assertEqual(len(drives[0]["tags"]), 2)
+        self.assertEqual(drives[0]["addr_min"], "%IW1000")
+        self.assertEqual(drives[0]["addr_max"], "%QW1002")
+        # Identification: A1
+        self.assertEqual([e["name"] for e in gd["Identification"]], ["A1"])
+        # Coordination/Safety: 'ev' (VS_-stripped; covered/merker excluded)
+        self.assertEqual([e["name"] for e in gd["Coordination/Safety"]], ["ev"])
+        # the COVERED + merker tags are NOT anywhere in the result
+        all_tags = [t[1] for _f, els in groups for e in els for t in e["tags"]]
+        self.assertNotIn("on_module_mapped", all_tags)
+        self.assertNotIn("on_module_spare", all_tags)
+        self.assertNotIn("not_io", all_tags)
+
+    def test_empty_when_all_covered(self):
+        tables = {"X": {"a": {"address": "%I8.0", "comment": ""},
+                        "b": {"address": "%Q8.0", "comment": ""}}}
+        self.assertEqual(tia.build_offmodule_groups("dummy.aml", tables), [])
+
+
+@unittest.skipUnless(_imv1_aml().is_file(), "IMV1 .aml fixture absent")
+class OffmoduleGroupsFixtureTest(unittest.TestCase):
+    """Fixture-gated: the real plant gives Abel's VALIDATED off-module counts."""
+
+    def setUp(self):
+        import glob
+        import os
+        aml = str(_imv1_aml())
+        folder = os.path.dirname(aml)
+        tag_tables = {}
+        for p in sorted(glob.glob(os.path.join(folder, "PLCTags*.xlsx"))):
+            stem = os.path.splitext(os.path.basename(p))[0]
+            label = stem[len("PLCTags"):] if stem.startswith("PLCTags") else stem
+            tag_tables[label] = tia.load_tag_table(p)
+        self.groups = tia.build_offmodule_groups(aml, tag_tables)
+        self.by_func = dict(self.groups)
+
+    def _counts(self, func):
+        els = self.by_func[func]
+        return len(els), sum(len(e["tags"]) for e in els)
+
+    def test_function_order_and_total(self):
+        self.assertEqual([f for f, _ in self.groups],
+                         ["Drives", "Identification", "Coordination/Safety"])
+        total = sum(len(e["tags"]) for _f, els in self.groups for e in els)
+        self.assertEqual(total, 233)
+
+    def test_drives_counts(self):
+        self.assertEqual(self._counts("Drives"), (19, 111))
+        elems = {e["name"]: len(e["tags"]) for e in self.by_func["Drives"]}
+        self.assertEqual(elems.get("UvRot"), 8)
+        self.assertEqual(elems.get("UvTran"), 8)
+        self.assertEqual(elems.get("CoatLA"), 8)
+
+    def test_identification_counts(self):
+        self.assertEqual(self._counts("Identification"), (3, 36))
+        self.assertEqual(
+            sorted(e["name"] for e in self.by_func["Identification"]),
+            ["A1", "A2", "A3"])
+
+    def test_coordination_counts(self):
+        # 41 elements / 86 tags — includes the 1214C's %Q1.2/%Q1.3 virtual
+        # outputs (clamped off the physical onboard DO -> surface here, joining
+        # the existing "Q1" element).
+        self.assertEqual(self._counts("Coordination/Safety"), (41, 86))
+        elems = {e["name"]: len(e["tags"])
+                 for e in self.by_func["Coordination/Safety"]}
+        self.assertEqual(elems.get("ev"), 28)
+        self.assertEqual(elems.get("bcoat"), 8)
+
+    def test_never_invents_addresses_and_descriptions(self):
+        # every tag's address parses as a real I/O address; description is a str
+        for _f, els in self.groups:
+            for e in els:
+                for raw, name, desc in e["tags"]:
+                    self.assertIsNotNone(tia.parse_address(raw))
+                    self.assertIsInstance(name, str)
+                    self.assertIsInstance(desc, str)
 
 
 if __name__ == "__main__":

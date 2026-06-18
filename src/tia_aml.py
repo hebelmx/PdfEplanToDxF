@@ -168,6 +168,47 @@ def _position_number(module_el: ET.Element) -> int | None:
         return None
 
 
+def _address_ranges(module_el: ET.Element) -> list[tuple[str, int, int]]:
+    """Return the module's I/O address range(s) as (io_type, start_address,
+    length) tuples, in document order.
+
+    Anchors STRICTLY on `<Attribute Name="Address">` element(s) found anywhere in
+    the module subtree (the address block lives on the nested device-item child).
+    Each numbered child (`<Attribute Name="1">`, `"2"`, ...) of an Address block is
+    one range; only DIGIT-named children are read. A module may carry MULTIPLE
+    ranges (an F-module has an Input range AND a PROFIsafe Output range) and may
+    even contain multiple Address blocks — ALL are collected in order, never
+    dedup'd.
+
+    `StartAddress` is a BYTE address; `Length` is in BITS. Both must be present
+    and integer-valued or the entry is SKIPPED (degrade, never guess). `IoType`
+    may be missing -> "" (a well-formed range is still kept). The per-channel
+    `<ExternalInterface Name="Channel_*">` elements ALSO carry Length/IoType but
+    are NEVER read here — only `<Attribute Name="Address">`'s numbered children.
+
+    Empty list when the module declares no Address block — NEVER invented.
+    """
+    ranges: list[tuple[str, int, int]] = []
+    for addr in module_el.iter("Attribute"):
+        if addr.get("Name") != "Address":
+            continue
+        for entry in addr.findall("Attribute"):
+            if not (entry.get("Name") or "").isdigit():
+                continue
+            start = _attr_value(entry, "StartAddress")
+            length = _attr_value(entry, "Length")
+            if start is None or length is None:
+                continue  # incomplete range -> skip, never guess
+            try:
+                start_i = int(start)
+                length_i = int(length)
+            except ValueError:
+                continue  # non-numeric -> skip, never guess
+            io_type = _attr_value(entry, "IoType") or ""
+            ranges.append((io_type, start_i, length_i))
+    return ranges
+
+
 def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
     """Parse a TIA CAx/AML export into a per-module hardware map.
 
@@ -179,6 +220,13 @@ def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
         device_item_type:str  ("CPU"/"HeadModule"/"" — provenance only)
         slot:           int|None  (PositionNumber, the physical slot; None when
                                   absent/non-numeric — NEVER invented)
+        addresses:      list[tuple[str,int,int]]  (per-module I/O address ranges
+                                  as (io_type, start_address, length), one per
+                                  numbered `<Attribute Name="Address">` entry in
+                                  document order — start_address is a BYTE addr,
+                                  length is in BITS; [] when no Address block.
+                                  An F-module carries TWO ranges (Input + a
+                                  PROFIsafe Output). NEVER invented.)
     }
 
     NEVER raises into the caller for a malformed/missing file other than a true
@@ -216,6 +264,7 @@ def parse_aml(aml_path: str) -> dict[tuple[str, str], dict]:
                     "channels": _count_channels(mod),
                     "device_item_type": _attr_value(mod, "DeviceItemType") or "",
                     "slot": _position_number(mod),
+                    "addresses": _address_ranges(mod),
                 }
 
     return hw

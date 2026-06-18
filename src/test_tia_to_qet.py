@@ -293,17 +293,35 @@ class SiemensStderrFloorTest(SiemensRenderTestBase):
 
     def test_floor_match_breakdown_by_type(self):
         """The REAL false-positive guard for the Siemens pipeline: assert the
-        EXACT per-type match breakdown, not just the matched total. The IMV1
-        vocabulary matches only `push_button` today (never-invent: the other tags
-        have no confident symbol) → 2 matched, 46 generic (48 drawn - 2). A future
-        change that mis-classifies a Siemens tag onto a Rockwell symbol turns this
-        red rather than shipping a wrong-type match silently."""
+        EXACT per-type match breakdown, not just the matched total.
+
+        E6: SiemensRenderTestBase._run drives main() from the fixture dir with NO
+        --tags, so coverage-based selection now picks PLCTagsS71500.xlsx (47/48)
+        and REAL English descriptions populate the points. Symbol matching keys
+        off those descriptions, so the IMV1 vocabulary now confidently matches a
+        rich set (door/position -> limit_switch, lamps -> pilot_light, E-stops,
+        NO/NC push-buttons, a horn). Was 2/46 when the wrong S71200 table left
+        every description blank.
+
+        Non-device signals are deliberately EXCLUDED (Abel, 2026-06-17): the 10
+        supply-monitor channels ('VS_'/'Vsupply ...') and the 1 permit
+        ('Permission to Open ...') carry no device symbol (no_symbol -> generic),
+        so the confident set is 19 matched / 29 generic. This is the EXACT
+        breakdown; a future change that mis-classifies a tag (e.g. re-admits a
+        supply monitor as a device) turns it red."""
         _, err = self._run()
         breakdown, generic = _parse_match_breakdown(err)
         self.assertIsNotNone(breakdown, f"no per-type breakdown in summary:\n{err}")
-        self.assertEqual(breakdown, {"push_button": 2})
-        self.assertEqual(sum(breakdown.values()), 2)
-        self.assertEqual(generic, 46)   # 48 drawn - 2 matched, 0 false positives
+        self.assertEqual(breakdown, {
+            "limit_switch": 8,
+            "pilot_light": 5,
+            "emergency_stop": 2,
+            "push_button_nc": 2,
+            "push_button": 1,
+            "horn": 1,
+        })
+        self.assertEqual(sum(breakdown.values()), 19)
+        self.assertEqual(generic, 29)   # 48 drawn - 19 matched, 0 false positives
 
     def test_rockwell_summary_lines_omitted(self):
         _, err = self._run()
@@ -444,7 +462,13 @@ class SiemensRackIndexTest(unittest.TestCase):
 
 
 class TagDiscoveryTest(unittest.TestCase):
-    """Sibling PLCTags*.xlsx auto-discovery prefers the S7-1200 table."""
+    """Sibling PLCTags*.xlsx auto-discovery picks the HIGHER-COVERAGE table.
+
+    E6 fix: selection is coverage-based (the table whose Names cover the
+    station's I/O tags), not alphabetically-first nor a hard-coded S71200
+    preference. For the IMV1 fixture the correct table is PLCTagsS71500.xlsx
+    (47/48 tags matched) even though PLCTagsS71200.xlsx sorts first and matches 0.
+    """
 
     FIXTURE = _imv1_io_channels()
 
@@ -452,16 +476,124 @@ class TagDiscoveryTest(unittest.TestCase):
         if not self.FIXTURE.is_file():
             self.skipTest("IMV1 IO_Channels.xml fixture not present")
 
-    def test_prefers_s71200_table(self):
-        found = tia_to_qet._discover_tags(str(self.FIXTURE))
+    def test_picks_higher_coverage_s71500_table(self):
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            found = tia_to_qet._discover_tags(str(self.FIXTURE))
         self.assertIsNotNone(found, "no PLCTags*.xlsx discovered next to fixture")
-        self.assertIn("S71200", Path(found).name)
+        self.assertIn("S71500", Path(found).name)
+        self.assertNotIn("S71200", Path(found).name)
+        # the stderr note reports the chosen table + its coverage
+        note = buf.getvalue()
+        self.assertRegex(note, r"tags\s*:\s*selected\s+PLCTagsS71500\.xlsx")
+        self.assertRegex(note, r"47/48 tags matched")
 
     def test_absent_dir_returns_none(self):
         with tempfile.TemporaryDirectory() as d:
             xml = Path(d) / "x_IO_Channels.xml"
             xml.write_text("<Project/>", encoding="utf-8")
             self.assertIsNone(tia_to_qet._discover_tags(str(xml)))
+
+
+class CoverageSelectionUnitTest(unittest.TestCase):
+    """Synthetic unit test of the coverage-based selection helper, with no real
+    fixture: builds two tiny PLCTags*.xlsx (one matching the station's tags, one
+    not) in a tempfile dir and asserts the matcher picks the matching one,
+    tie-breaks alphabetically, and that --tags still overrides auto-selection."""
+
+    @staticmethod
+    def _write_xlsx(path: Path, names):
+        """Write a minimal valid .xlsx with a Name+Comment header and rows
+        (inline strings, so no sharedStrings needed)."""
+        import zipfile
+
+        def _esc(s):
+            return (s.replace("&", "&amp;").replace("<", "&lt;")
+                     .replace(">", "&gt;"))
+
+        def _row(cells):
+            cs = "".join(
+                f'<c t="inlineStr"><is><t>{_esc(v)}</t></is></c>' for v in cells)
+            return f"<row>{cs}</row>"
+
+        rows = [_row(["Name", "Comment"])]
+        for n in names:
+            rows.append(_row([n, f"desc {n}"]))
+        sheet = (
+            '<?xml version="1.0"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/'
+            'spreadsheetml/2006/main"><sheetData>'
+            + "".join(rows) + "</sheetData></worksheet>")
+        content_types = (
+            '<?xml version="1.0"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats'
+            '-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType='
+            '"application/vnd.openxmlformats-officedocument.spreadsheetml.'
+            'worksheet+xml"/></Types>')
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("[Content_Types].xml", content_types)
+            zf.writestr("xl/worksheets/sheet1.xml", sheet)
+
+    @staticmethod
+    def _write_io(path: Path, tags):
+        chans = "".join(
+            f"<IOChannel><Address>%I0.{i}</Address><Tag>{t}</Tag></IOChannel>"
+            for i, t in enumerate(tags))
+        path.write_text(
+            f'<Stations><Station Name="S"><Rack Name="R"><Module Name="M">'
+            f'{chans}</Module></Rack></Station></Stations>',
+            encoding="utf-8")
+
+    def test_picks_matching_table_over_nonmatching(self):
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            io_xml = dd / "x_IO_Channels.xml"
+            self._write_io(io_xml, ["alpha", "beta", "gamma"])
+            # 'PLCTags_a' sorts first but matches 0; 'PLCTags_z' matches all 3
+            self._write_xlsx(dd / "PLCTags_a.xlsx", ["none1", "none2"])
+            self._write_xlsx(dd / "PLCTags_z.xlsx", ["alpha", "beta", "gamma"])
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                found = tia_to_qet._discover_tags(str(io_xml))
+            self.assertEqual(Path(found).name, "PLCTags_z.xlsx")
+            self.assertRegex(buf.getvalue(), r"3/3 tags matched")
+
+    def test_tie_breaks_alphabetically(self):
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            io_xml = dd / "x_IO_Channels.xml"
+            self._write_io(io_xml, ["alpha", "beta"])
+            # both match the same number (1); alphabetically-first wins
+            self._write_xlsx(dd / "PLCTags_a.xlsx", ["alpha", "x"])
+            self._write_xlsx(dd / "PLCTags_b.xlsx", ["beta", "y"])
+            with redirect_stderr(io.StringIO()):
+                found = tia_to_qet._discover_tags(str(io_xml))
+            self.assertEqual(Path(found).name, "PLCTags_a.xlsx")
+
+    def test_explicit_tags_flag_overrides_auto_selection(self):
+        # main() uses (args.tags or _discover_tags(...)) — an explicit --tags
+        # short-circuits auto-selection. Verify the override path is taken by
+        # passing a bogus --tags and confirming it reaches the front-end (no
+        # auto-discovery note, descriptions stay "" for the non-matching table).
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            io_xml = dd / "x_IO_Channels.xml"
+            self._write_io(io_xml, ["alpha"])
+            self._write_xlsx(dd / "PLCTags_match.xlsx", ["alpha"])
+            explicit = dd / "PLCTags_explicit.xlsx"
+            self._write_xlsx(explicit, ["other"])
+            out = dd / "out.qet"
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main(
+                    [str(io_xml), "--tags", str(explicit), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            # auto-selection note is NOT emitted when --tags is explicit
+            self.assertNotIn("tags : selected", buf.getvalue())
 
 
 class SiemensNoAmlOmissionTest(unittest.TestCase):
@@ -705,6 +837,351 @@ class SiemensPowerFolioIntegrationTest(unittest.TestCase):
         titles = [d.get("title") or "" for d in diagrams]
         self.assertNotIn(q.POWER_TITLE, titles)
         self.assertRegex(err, r"alim\s*:\s*0\b")
+
+
+class SiemensDescriptionRenderTest(unittest.TestCase):
+    """E6 headline fix end-to-end (gated on BOTH the IMV1 IO_Channels.xml and
+    .aml): with NO --tags, coverage-based selection picks PLCTagsS71500.xlsx, so
+    real descriptions now render on the I/O folios (they were blank when the
+    alphabetically-first S71200 table — 0 matches — was chosen). The Siemens
+    floor (48 drawn / 40 RESERVA) is UNCHANGED — descriptions are additive text."""
+
+    IO = _imv1_io_channels()
+    AML = _imv1_aml()
+
+    def setUp(self):
+        if not (self.IO.is_file() and self.AML.is_file()):
+            self.skipTest("IMV1 IO_Channels.xml or .aml fixture not present")
+
+    def test_descriptions_render_and_floor_unchanged(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "tia.qet"
+            with redirect_stderr(buf):
+                rc = tia_to_qet.main(
+                    [str(self.IO), "--aml", str(self.AML), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        err = buf.getvalue()
+        # coverage-based selection picked the S71500 table
+        self.assertRegex(err, r"tags\s*:\s*selected\s+PLCTagsS71500\.xlsx")
+        # a known description from PLCTagsS71500.xlsx now appears in the .qet
+        self.assertIn("UV Door 1 Open", xml,
+                      "I/O descriptions did not render (tag-table selection bug)")
+        # floor unchanged: descriptions are additive TEXT, not points/spares
+        m_pts = re.search(r"points\s*:\s*(\d+)\s+drawn,\s*(\d+)\s+skipped", err)
+        self.assertIsNotNone(m_pts, f"no points line:\n{err}")
+        self.assertEqual(int(m_pts.group(1)), 48)   # 48 drawn
+        self.assertEqual(int(m_pts.group(2)), 40)   # 40 RESERVA
+
+
+class ControllerCpuTest(unittest.TestCase):
+    """E6 Part B: the IR carries the owning-PLC CPU type, derived from real .aml
+    data (controller PROFINET node whose IP == the station's network_address).
+    Never invented: None without an .aml."""
+
+    IO = _imv1_io_channels()
+    AML = _imv1_aml()
+
+    def test_controller_cpu_populated_for_imv1(self):
+        if not (self.IO.is_file() and self.AML.is_file()):
+            self.skipTest("IMV1 IO_Channels.xml or .aml fixture not present")
+        ir = plc_ir.build_tia_project(str(self.IO), None, str(self.AML))
+        # Q100-Cooling1/UV @ 192.168.10.10 -> CPU 1512SP F-1 PN
+        self.assertEqual(ir.controller_cpu, "CPU 1512SP F-1 PN")
+
+    def test_controller_cpu_none_without_aml(self):
+        if not self.IO.is_file():
+            self.skipTest("IMV1 IO_Channels.xml fixture not present")
+        ir = plc_ir.build_tia_project(str(self.IO), None, None)
+        self.assertIsNone(ir.controller_cpu)   # never invented
+
+    def test_controller_cpu_none_for_rockwell(self):
+        # default field => Rockwell IR is unaffected (None)
+        ir = plc_ir.PlcProject(name="X", source_vendor="rockwell")
+        self.assertIsNone(ir.controller_cpu)
+
+
+# --------------------------------------------------------------------------
+# E6 (c1): whole-plant distributed-I/O renderer (render_plant) — per-station
+# 100-bands. Pure tests for the functional-name helper + fixture-gated
+# structural tests on the real 9-station plant.
+# --------------------------------------------------------------------------
+import render_plant as rp
+
+
+class _FakePoint:
+    def __init__(self, description=""):
+        self.description = description
+
+
+class _FakeStation:
+    def __init__(self, name, points=None, controller_cpu=None):
+        self.name = name
+        self.points = points or []
+        self.controller_cpu = controller_cpu
+        self.io_mods = []
+        self.network_nodes = []
+
+
+class StationFunctionalNameTest(unittest.TestCase):
+    """Pure tests for _station_functional_name (no fixture needed)."""
+
+    def test_real_suffix_from_aml_name(self):
+        st = _FakeStation("Q100-Cooling1/UV")
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "Cooling1/UV")
+        self.assertFalse(derived)   # REAL, from the .aml name suffix
+
+    def test_derived_dominant_theme(self):
+        # a bare station whose descriptions are dominated by "Cooling …"
+        pts = [_FakePoint("Cooling fan run"),
+               _FakePoint("Cooling pump on"),
+               _FakePoint("Cooling valve open"),
+               _FakePoint("Door open")]
+        st = _FakeStation("Q200", points=pts)
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "Cooling")
+        self.assertTrue(derived)
+
+    def test_no_clear_theme_blank(self):
+        # a station with no dominant leading word -> "" (never invented)
+        pts = [_FakePoint("Door open"),
+               _FakePoint("Lamp red"),
+               _FakePoint("Motor fault"),
+               _FakePoint("Valve shut")]
+        st = _FakeStation("Q300", points=pts)
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "")
+        self.assertTrue(derived)
+
+    def test_non_panel_name_does_not_leak_model(self):
+        # a TIA default device name is NOT a Q-panel; its "suffix" (the device
+        # model) must never surface as a function. No descriptions => "".
+        st = _FakeStation("S7-1200 station_1")
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "")
+        self.assertTrue(derived)   # fell through to derivation, not the suffix
+
+    def test_section_label_degrades(self):
+        st = _FakeStation("Q200", controller_cpu="CPU 1512SP F-1 PN")
+        # blank functional -> "<station> — <CPU>" (no empty middle segment)
+        self.assertEqual(rp.station_section_label(st, ""),
+                         "Q200 — CPU 1512SP F-1 PN")
+        self.assertEqual(rp.station_section_label(st, "Cooling"),
+                         "Q200 — Cooling — CPU 1512SP F-1 PN")
+
+
+class PlantRenderTest(unittest.TestCase):
+    """Fixture-gated structural tests on the real 9-station IMV1 plant."""
+
+    AML = _imv1_aml()
+
+    def setUp(self):
+        if not self.AML.is_file():
+            self.skipTest("IMV1 .aml fixture not present")
+        self.irs = plc_ir.build_tia_distributed_project(str(self.AML))
+        if not self.irs:
+            self.skipTest("distributed IR empty (missing tag tables?)")
+        # E6 (c2): build the off-module groups so the rendered plant includes the
+        # new section (the structural checks below then cover its folios too).
+        self.offmodule_groups = tia_to_qet._offmodule_groups(str(self.AML))
+        buf = io.StringIO()
+        self._tmp = tempfile.TemporaryDirectory()
+        out = Path(self._tmp.name) / "plant.qet"
+        with redirect_stderr(buf):
+            rc = rp.render_plant(self.irs, str(out),
+                                 offmodule_groups=self.offmodule_groups)
+        self.assertEqual(rc, 0)
+        self.err = buf.getvalue()
+        self.root = ET.fromstring(out.read_text(encoding="utf-8"))
+        self.orders = [int(d.get("order")) for d in self.root.findall("diagram")]
+        self.titles = [d.get("title") or "" for d in self.root.findall("diagram")]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_nine_stations(self):
+        self.assertEqual(len(self.irs), 9)
+
+    def test_per_station_io_and_bornero_bands_present(self):
+        # first I/O folio of each band at base+1 (101, 201, …, 901) and the
+        # first bornero at base+50 (150, 250, …, 950)
+        for i in range(9):
+            base = (i + 1) * 100
+            self.assertIn(base + 1, self.orders,
+                          f"no I/O folio at band base {base}+1")
+            self.assertIn(base + 50, self.orders,
+                          f"no bornero folio at band base {base}+50")
+
+    def test_no_duplicate_order_warning(self):
+        self.assertNotIn("duplicate diagram order", self.err)
+        # orders are globally unique across the whole plant
+        self.assertEqual(len(self.orders), len(set(self.orders)),
+                         "duplicate folio order across the plant")
+
+    def test_index_enumerates_all_bands(self):
+        # the índice is built LAST; every band's first I/O folio must be listed
+        # (no duplicate warning means none were dropped). Assert the índice folio
+        # exists and the band orders are all on the project.
+        self.assertIn("Índice de planos", self.titles)
+        for i in range(9):
+            self.assertIn((i + 1) * 100 + 1, self.orders)
+
+    def test_portada_lists_nine_stations(self):
+        portada = [d for d in self.root.findall("diagram")
+                   if d.get("title") == "Portada"]
+        self.assertEqual(len(portada), 1)
+        texts = [t.get("text") or "" for t in portada[0].iter("input")]
+        for ir in self.irs:
+            self.assertTrue(any(ir.name in tx for tx in texts),
+                            f"station {ir.name!r} not on the plant cover")
+
+    def test_bom_aggregates_all_stations(self):
+        # BOM row count == sum of each station's own bom_rows. Build per-station
+        # IRs through the single renderer's accumulator path to get the per-
+        # station counts, then compare the plant total.
+        per_station_total = 0
+        for ir in self.irs:
+            rows = []
+            symbols = q.load_symbol_db()
+            rp._build_station_bands(
+                ET.Element("project"), ir, 100,
+                symbols=symbols, sym_counts={}, designations={},
+                wire_scheme="address", wire_counters={}, bom_rows=rows,
+                spare_counter={})
+            per_station_total += len(rows)
+        # the plant's BOM folios carry the aggregated rows; count module/device/
+        # generic/spare rows by re-deriving from the stderr 'bom :' line.
+        m = re.search(r"bom\s*:\s*(\d+)\s+rows", self.err)
+        self.assertIsNotNone(m, "no bom line in stderr")
+        self.assertEqual(int(m.group(1)), per_station_total)
+
+    def test_q100_band_reproduces_six_io_folios(self):
+        # Q100 band (100): the 6 approved I/O card folios — F-DI150, F-DI156, the
+        # F-DQ1500 [DO+DI] split, DI10_11, DI12_13, DQ10_11. They occupy 101..106.
+        q100_io = [d.get("title") or "" for d in self.root.findall("diagram")
+                   if 101 <= int(d.get("order")) <= 106]
+        self.assertEqual(len(q100_io), 6, q100_io)
+        blob = " ".join(q100_io)
+        for needle in ("F-DI150", "F-DI156", "F-DQ1500", "DI10_11",
+                       "DI12_13", "DQ10_11"):
+            self.assertIn(needle, blob, f"{needle} missing from Q100 band")
+        # the split card merged onto one folio ([DO+DI])
+        self.assertTrue(any("F-DQ1500" in t and "[DO+DI]" in t for t in q100_io),
+                        "F-DQ1500 split halves did not merge in the Q100 band")
+
+    def test_iso_titleblock_every_folio_no_raw_tokens(self):
+        diagrams = self.root.findall("diagram")
+        self.assertTrue(diagrams)
+        for d in diagrams:
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro",
+                             f"folio {d.get('title')!r} missing ISO titleblock")
+            props = d.find("properties")
+            self.assertIsNotNone(props)
+            for prop in props.findall("property"):
+                self.assertNotIn("%{", prop.text or "",
+                                 f"raw token in property of {d.get('title')!r}")
+
+    def test_conductors_resolve_and_types_embedded(self):
+        types = set()
+        for d in self.root.findall("diagram"):
+            elements = d.find("elements")
+            conductors = d.find("conductors")
+            if elements is None:
+                continue
+            ids = []
+            for el in elements.findall("element"):
+                types.add(el.get("type"))
+                for t in el.iter("terminal"):
+                    ids.append(t.get("id"))
+            self.assertEqual(len(ids), len(set(ids)),
+                             f"duplicate terminal id in {d.get('title')!r}")
+            idset = set(ids)
+            if conductors is not None:
+                for c in conductors.findall("conductor"):
+                    for end in ("terminal1", "terminal2"):
+                        self.assertIn(c.get(end), idset,
+                                      f"unresolved conductor in {d.get('title')!r}")
+        coll = self.root.find("collection")
+        self.assertIsNotNone(coll)
+        embedded = {el.get("name") for el in coll.iter("element")
+                    if el.find("definition") is not None}
+        for tp in types:
+            self.assertIn(tp.rsplit("/", 1)[-1], embedded,
+                          f"drawn type {tp!r} has no embedded <definition>")
+
+    def test_station_labels_prefix_band_titles(self):
+        # Q100's band I/O folios carry the station section label as a prefix.
+        q100 = [d.get("title") or "" for d in self.root.findall("diagram")
+                if int(d.get("order")) == 101]
+        self.assertTrue(q100)
+        self.assertTrue(q100[0].startswith("Q100-Cooling1/UV — Cooling1/UV"),
+                        f"band title not prefixed: {q100[0]!r}")
+
+    # ── E6 (c2): off-module PROFINET I/O section ─────────────────────────────
+    def test_offmodule_section_present_in_band(self):
+        # the section's folios sit in the 1100..1899 band (after BOM, before the
+        # changelog), titled with the section name.
+        off = [(int(d.get("order")), d.get("title") or "")
+               for d in self.root.findall("diagram")
+               if rp.PLANT_SEC_OFFMODULE <= int(d.get("order"))
+               < rp.PLANT_SEC_CHANGELOG]
+        self.assertTrue(off, "no off-module folios in the 1100.. band")
+        for _o, t in off:
+            self.assertIn(rp.OFFMODULE_SECTION_TITLE, t)
+        # all three functions appear, summary tables AND box folios
+        blob = " ".join(t for _o, t in off)
+        for func in ("Drives", "Identification", "Coordination/Safety"):
+            self.assertIn(func, blob)
+        self.assertIn("resumen", blob)  # the summary-table folios
+
+    def test_offmodule_index_lists_section_no_collision(self):
+        # no duplicate-order warning anywhere, and the índice lists the section's
+        # first folio order (1100).
+        self.assertNotIn("duplicate diagram order", self.err)
+        self.assertIn(rp.PLANT_SEC_OFFMODULE, self.orders)
+        # the section orders are all globally unique
+        self.assertEqual(len(self.orders), len(set(self.orders)))
+
+    def test_offmodule_element_boxes_present(self):
+        # per-element placeholder boxes carry the element name + address range as
+        # a box heading; assert a couple of known element titles appear.
+        texts = []
+        for d in self.root.findall("diagram"):
+            if rp.PLANT_SEC_OFFMODULE <= int(d.get("order")) < rp.PLANT_SEC_CHANGELOG:
+                texts.extend(t.get("text") or "" for t in d.iter("input"))
+        blob = " ".join(texts)
+        for elem in ("-UvRot", "-A1", "-bcoat"):
+            self.assertTrue(any(elem in t for t in texts),
+                            f"element box {elem!r} not drawn")
+        # the box headings carry an address range in brackets
+        self.assertTrue(any("-UvRot" in t and "[" in t and "%IW1000" in t
+                            for t in texts))
+
+    def test_offmodule_folios_have_titleblock_and_no_raw_tokens(self):
+        off = [d for d in self.root.findall("diagram")
+               if rp.PLANT_SEC_OFFMODULE <= int(d.get("order"))
+               < rp.PLANT_SEC_CHANGELOG]
+        self.assertTrue(off)
+        for d in off:
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro",
+                             f"off-module folio {d.get('title')!r} no titleblock")
+            for inp in d.iter("input"):
+                self.assertNotIn("%{", inp.get("text") or "",
+                                 f"raw token in {d.get('title')!r}")
+
+    def test_offmodule_box_terminals_unique_per_folio(self):
+        # every stub is a borne_2 terminal; ids must be unique within each folio.
+        for d in self.root.findall("diagram"):
+            o = int(d.get("order"))
+            if not (rp.PLANT_SEC_OFFMODULE <= o < rp.PLANT_SEC_CHANGELOG):
+                continue
+            elements = d.find("elements")
+            ids = [t.get("id") for el in elements.findall("element")
+                   for t in el.iter("terminal")]
+            self.assertEqual(len(ids), len(set(ids)),
+                             f"duplicate terminal id in {d.get('title')!r}")
 
 
 if __name__ == "__main__":

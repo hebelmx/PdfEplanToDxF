@@ -999,8 +999,8 @@ def build_folio(project: ET.Element, order: int, mod, points,
                                          strip_label, function, ids)
         add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
         # field-device symbol from the semantic match, wired to the terminal
-        sym = None if pt.analog else match_symbol(symbols, pt.tag,
-                                                  pt.description, pt.direction)
+        sym = None if (pt.analog or getattr(pt, "no_symbol", False)) else match_symbol(
+            symbols, pt.tag, pt.description, pt.direction)
         if sym:
             # IEC 81346 designation (e.g. -K3.1, page-prefixed) becomes the
             # symbol label; if the matched entry has no usable "dt" we fall back
@@ -1180,8 +1180,8 @@ def _draw_card_half(diagram_parts, x: int, order: int, mod, points,
         strip_ids = add_terminal_element(elements, x + STRIP_X_OFF, y,
                                          strip_label, function, ids)
         add_text(inputs, x + STRIP_X_OFF - 4, y - 13, strip_label, FONT_SMALL)
-        sym = None if pt.analog else match_symbol(symbols, pt.tag,
-                                                  pt.description, pt.direction)
+        sym = None if (pt.analog or getattr(pt, "no_symbol", False)) else match_symbol(
+            symbols, pt.tag, pt.description, pt.direction)
         if sym:
             designation = next_designation(sym, designations, order) or pt.tag
             pin_ids, west = add_symbol_element(elements, sym, x + SYM_X_OFF, y,

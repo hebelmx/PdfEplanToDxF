@@ -64,8 +64,51 @@ _SYNTHETIC_AML = """<?xml version="1.0" encoding="utf-8"?>
               <Attribute Name="TypeIdentifier"><Value>OrderNumber:6ES7 131-6BH00-0BA0</Value></Attribute>
               <Attribute Name="PositionNumber"><Value>5</Value></Attribute>
               <InternalElement ID="m1c" Name="DI10_11">
-                <ExternalInterface ID="c0" Name="Channel_DI_0"/>
-                <ExternalInterface ID="c1" Name="Channel_DI_1"/>
+                <Attribute Name="Address">
+                  <RefSemantic CorrespondingAttributePath="OrderedListType" />
+                  <Attribute Name="1">
+                    <Attribute Name="StartAddress" AttributeDataType="xs:int"><Value>10</Value></Attribute>
+                    <Attribute Name="Length" AttributeDataType="xs:int"><Value>16</Value></Attribute>
+                    <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  </Attribute>
+                </Attribute>
+                <ExternalInterface ID="c0" Name="Channel_DI_0">
+                  <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  <Attribute Name="Length" AttributeDataType="xs:int"><Value>1</Value></Attribute>
+                </ExternalInterface>
+                <ExternalInterface ID="c1" Name="Channel_DI_1">
+                  <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  <Attribute Name="Length" AttributeDataType="xs:int"><Value>1</Value></Attribute>
+                </ExternalInterface>
+              </InternalElement>
+            </InternalElement>
+            <InternalElement ID="mf" Name="F-DI450">
+              <Attribute Name="TypeName"><Value>F-DI 8x24VDC HF</Value></Attribute>
+              <Attribute Name="TypeIdentifier"><Value>OrderNumber:6ES7 136-6BA00-0CA0</Value></Attribute>
+              <Attribute Name="PositionNumber"><Value>2</Value></Attribute>
+              <InternalElement ID="mfc" Name="F-DI450">
+                <Attribute Name="Address">
+                  <RefSemantic CorrespondingAttributePath="OrderedListType" />
+                  <Attribute Name="1">
+                    <Attribute Name="StartAddress" AttributeDataType="xs:int"><Value>450</Value></Attribute>
+                    <Attribute Name="Length" AttributeDataType="xs:int"><Value>48</Value></Attribute>
+                    <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  </Attribute>
+                  <Attribute Name="2">
+                    <Attribute Name="StartAddress" AttributeDataType="xs:int"><Value>450</Value></Attribute>
+                    <Attribute Name="Length" AttributeDataType="xs:int"><Value>32</Value></Attribute>
+                    <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Output</Value></Attribute>
+                  </Attribute>
+                  <Attribute Name="3">
+                    <Attribute Name="StartAddress" AttributeDataType="xs:int"><Value>NaN</Value></Attribute>
+                    <Attribute Name="Length" AttributeDataType="xs:int"><Value>8</Value></Attribute>
+                    <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  </Attribute>
+                </Attribute>
+                <ExternalInterface ID="fc0" Name="Channel_DI_0">
+                  <Attribute Name="IoType" AttributeDataType="xs:string"><Value>Input</Value></Attribute>
+                  <Attribute Name="Length" AttributeDataType="xs:int"><Value>1</Value></Attribute>
+                </ExternalInterface>
               </InternalElement>
             </InternalElement>
             <InternalElement ID="m2" Name="MASKED1">
@@ -124,9 +167,10 @@ class SyntheticAmlTest(unittest.TestCase):
 
     def test_modules_extracted(self):
         hw = self._parse()
-        # head + DI10_11 + MASKED1 (the Port_1 non-module is skipped)
+        # head + DI10_11 + F-DI450 + MASKED1 (the Port_1 non-module is skipped)
         self.assertEqual(
-            sorted(m for (_st, m) in hw), ["DI10_11", "HeadA", "MASKED1"]
+            sorted(m for (_st, m) in hw),
+            ["DI10_11", "F-DI450", "HeadA", "MASKED1"],
         )
 
     def test_head_module_order_typename_and_profinet(self):
@@ -180,6 +224,98 @@ class SyntheticAmlTest(unittest.TestCase):
         hw = self._parse()
         st = tia_aml.hardware_for_station(hw, "does-not-exist")
         self.assertEqual(st, {})
+
+
+class AddressRangesTest(unittest.TestCase):
+    """_address_ranges + the parse_aml `addresses` field: anchored ONLY on
+    `<Attribute Name="Address">`'s numbered children, multi-range in order,
+    [] when absent, and non-numeric entries skipped (never invented)."""
+
+    def _parse(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.aml"
+            p.write_text(_SYNTHETIC_AML, encoding="utf-8")
+            return tia_aml.parse_aml(str(p))
+
+    def test_single_input_range(self):
+        # DI10_11 declares ONE Input range: byte 10, 16 bits (16 channels)
+        hw = self._parse()
+        self.assertEqual(
+            hw[("StationA", "DI10_11")]["addresses"],
+            [("Input", 10, 16)],
+        )
+
+    def test_fmodule_two_ranges_in_order(self):
+        # F-DI450 carries an Input range AND a PROFIsafe Output range, in order.
+        # (a 3rd entry has a non-numeric StartAddress and must be skipped.)
+        hw = self._parse()
+        self.assertEqual(
+            hw[("StationA", "F-DI450")]["addresses"],
+            [("Input", 450, 48), ("Output", 450, 32)],
+        )
+
+    def test_non_numeric_start_address_entry_skipped(self):
+        # the F-DI450 entry "3" (StartAddress NaN) is dropped, not raised on,
+        # leaving exactly the two well-formed ranges.
+        hw = self._parse()
+        self.assertEqual(len(hw[("StationA", "F-DI450")]["addresses"]), 2)
+        self.assertNotIn(8, [length for (_t, _s, length) in
+                              hw[("StationA", "F-DI450")]["addresses"]])
+
+    def test_module_without_address_block_yields_empty(self):
+        # MASKED1 declares no Address block -> [] (never invented)
+        hw = self._parse()
+        self.assertEqual(hw[("StationA", "MASKED1")]["addresses"], [])
+
+    def test_head_module_without_address_block_yields_empty(self):
+        hw = self._parse()
+        self.assertEqual(hw[("StationA", "HeadA")]["addresses"], [])
+
+    def test_channel_externalinterface_not_picked_up(self):
+        # DI10_11 has per-channel Channel_* ExternalInterface elements that ALSO
+        # carry IoType=Input/Length=1 — those must NOT appear as address ranges.
+        # The module has 2 channels but only ONE real address range.
+        hw = self._parse()
+        addrs = hw[("StationA", "DI10_11")]["addresses"]
+        self.assertEqual(len(addrs), 1)
+        self.assertEqual(addrs[0], ("Input", 10, 16))
+        # the channel Length=1 entries are absent
+        self.assertNotIn(1, [length for (_t, _s, length) in addrs])
+
+    def test_missing_iotype_kept_with_blank(self):
+        # a well-formed range whose IoType is absent keeps the entry, IoType ""
+        tiny = (
+            '<?xml version="1.0" encoding="utf-8"?><CAEXFile><InstanceHierarchy Name="ih">'
+            '<InternalElement Name="P"><InternalElement Name="dev">'
+            '<Attribute Name="TypeIdentifier"><Value>System:Device.ET200SP</Value></Attribute>'
+            '<InternalElement Name="Rack_0">'
+            '<Attribute Name="TypeIdentifier"><Value>System:Rack.ET200SP</Value></Attribute>'
+            '<InternalElement Name="MX"><Attribute Name="TypeName"><Value>X</Value></Attribute>'
+            '<InternalElement Name="MX"><Attribute Name="Address">'
+            '<Attribute Name="1">'
+            '<Attribute Name="StartAddress"><Value>20</Value></Attribute>'
+            '<Attribute Name="Length"><Value>8</Value></Attribute>'
+            '</Attribute></Attribute></InternalElement></InternalElement>'
+            '</InternalElement></InternalElement></InternalElement></InstanceHierarchy></CAEXFile>'
+        )
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.aml"
+            p.write_text(tiny, encoding="utf-8")
+            hw = tia_aml.parse_aml(str(p))
+        self.assertEqual(hw[("dev", "MX")]["addresses"], [("", 20, 8)])
+
+    def test_helper_directly_on_module_element(self):
+        # _address_ranges reads numbered children of an Address block, in order
+        xml = (
+            '<InternalElement Name="m"><InternalElement Name="m">'
+            '<Attribute Name="Address">'
+            '<Attribute Name="1"><Attribute Name="StartAddress"><Value>0</Value></Attribute>'
+            '<Attribute Name="Length"><Value>16</Value></Attribute>'
+            '<Attribute Name="IoType"><Value>Output</Value></Attribute></Attribute>'
+            '</Attribute></InternalElement></InternalElement>'
+        )
+        el = tia_aml.ET.fromstring(xml)
+        self.assertEqual(tia_aml._address_ranges(el), [("Output", 0, 16)])
 
 
 class ProfinetNodesSyntheticTest(unittest.TestCase):
@@ -377,6 +513,34 @@ class Imv1AmlFixtureTest(unittest.TestCase):
         self.assertEqual(fdi["order_number"], "6ES7 136-6BA00-0CA0")
         self.assertEqual(fdi["type_name"], "F-DI 8x24VDC HF")
         self.assertEqual(fdi["network_address"], "192.168.10.10")
+
+    def test_known_module_address_ranges(self):
+        # ground truth from the real .aml:
+        #   F-DI150 -> Input byte 150 len 48 bits + PROFIsafe Output 150 len 32
+        #   DI10_11 -> single Input byte 10 len 16 bits (16 DI channels)
+        #   DQ10_11 -> single Output byte 10 len 16 bits
+        #   F-DQ1500 -> Input 1500 len 40 + Output 1500 len 40
+        #   the CPU head + END server module declare NO Address block -> []
+        hw = tia_aml.parse_aml(str(self.aml))
+        q100 = tia_aml.hardware_for_station(hw, "Q100-Cooling1/UV")
+        self.assertEqual(q100["F-DI150"]["addresses"],
+                         [("Input", 150, 48), ("Output", 150, 32)])
+        self.assertEqual(q100["DI10_11"]["addresses"], [("Input", 10, 16)])
+        self.assertEqual(q100["DQ10_11"]["addresses"], [("Output", 10, 16)])
+        self.assertEqual(q100["F-DQ1500"]["addresses"],
+                         [("Input", 1500, 40), ("Output", 1500, 40)])
+        self.assertEqual(q100["Q100_QUERETARO1"]["addresses"], [])
+        self.assertEqual(q100["END_Q100"]["addresses"], [])
+
+    def test_address_ranges_never_invented(self):
+        # every range across the plant has integer start/length and an IoType
+        # that is "" or a real Input/Output (never a fabricated value)
+        hw = tia_aml.parse_aml(str(self.aml))
+        for info in hw.values():
+            for io_type, start, length in info["addresses"]:
+                self.assertIsInstance(start, int)
+                self.assertIsInstance(length, int)
+                self.assertIn(io_type, ("", "Input", "Output"))
 
     def test_no_invented_order_numbers(self):
         # every extracted order number is either "" or starts with the Siemens

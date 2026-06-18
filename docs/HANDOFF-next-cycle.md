@@ -6,6 +6,21 @@
 > config-driven diagrams), driven by `docs/planning/{brief,prd,epics}.md`. **Live source of truth for
 > the open work = `docs/TIA-tracker.md`** (GitHub issue #2 CLOSED 2026-06-17; surviving low-pri nits → issue #3).
 
+## ⚡ CURRENT STATUS (2026-06-17, branch `feat/e6-s71500-descriptions`) — read `docs/TIA-tracker.md` EPIC E6 for full detail
+The **distributed-I/O build is DONE through c1 and Abel-eyeball-APPROVED.** On the branch (NOT merged):
+- **E6(a)** `6135125` — `parse_aml` carries per-module address ranges.
+- **E6(b)** `f4c1de5` + **(b-fix)** `b8d4afc` — `plc_ir.build_tia_distributed_project(aml)` → ordered
+  `list[PlcProject]`, **9 stations / 776 ch / 549 mapped / 227 RESERVA**; Q100 byte-identical to the
+  approved single-station floor (88/48/40); ownership by tag-table coverage; all stations carry owning
+  CPU. Passed a 3-lens adversarial review (Q100 synthesis = byte-identical to the real IO_Channels).
+- **E6(c1)** `d00e647`/`6db8e91` — `src/render_plant.py` + `tia_to_qet --distributed`: **191-folio**
+  plant set, per-station numeric bands (front 0–50, bands 100–900, back 1000+), 0 collisions/0 leaks,
+  ISO on all. `logix_to_qet.py` UNTOUCHED → Rockwell byte-identical; single-station Siemens unchanged
+  (22/48/40). **Suite 454 green.** Abel: "looks good." Functional names = auto-derived + blanks.
+- **NEXT = E6(c2)**: the off-module PROFINET I/O section grouped by function (drives/RFID/coordination),
+  ~231 non-1:1 tags. Investigation done (no data gap; buckets identified) — see tracker; design gated.
+- Merge of the whole branch to `main` is still Abel's call (hold until c2 + a final eyeball).
+
 ## TL;DR — read this first
 - Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
   - Rockwell: `src/logix_to_qet.py` (renderer + Rockwell folio builders) + `src/logix_to_eplan_csv.py`
