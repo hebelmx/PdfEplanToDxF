@@ -565,10 +565,48 @@ def _synthesize_channels(type_name: str, addresses: list, channels: int,
 
 _ONBOARD_MAX_START = 1000  # ranges at/above this are HSC/pulse double-word telegrams
 
+# PHYSICAL onboard I/O per S7-1200 CPU model {DI, DO, AI, AQ} — transcribed from
+# the Siemens SIMATIC S7-1200 Basic Controller catalog (2017,
+# docs/simatic-s7-1200-basic-controller-...-brochure-2017.pdf p.3) and the
+# 6ES7214-1BG40 datasheet (docs/6ES72141BG400XB0_datasheet_es.pdf). Keyed on the
+# 4-digit model number (the F-CPU variants 121xFC have the SAME onboard I/O as
+# their standard counterpart, so they share the entry).
+#   1211C: DI 6,  DQ 4,  AI 2
+#   1212C: DI 8,  DQ 6,  AI 2          (also 1212FC)
+#   1214C: DI 14, DQ 10, AI 2          (also 1214FC)  <- our plant's CPU (1BG40)
+#   1215C: DI 14, DQ 10, AI 2, AQ 2    (also 1215FC)
+#   1217C: DI 14, DQ 10, AI 2, AQ 2    (DI 10x24V + 4xRS422; DQ 6x24V + 4xRS422)
+# WHY a physical catalog: the .aml declares the PROCESS-IMAGE allocation (a full
+# 2 bytes, e.g. Input 0/16), NOT the wired channel count — the Siemens process
+# image is virtual and the OS refreshes only the real channels. A 1214C's
+# "16-bit" input range physically has 14 DI (%I0.0-1.5); the top 2 bits aren't
+# wired, and likewise only 10 DO (%Q0.0-1.1). Clamping onboard synthesis to these
+# counts stops us drawing non-existent channels (Abel, 2026-06-17); a tag at a
+# clamped-off virtual address surfaces in the off-module section instead. A model
+# NOT in this table keeps the .aml range — NEVER invent a count we don't know.
+_CPU_ONBOARD_PHYSICAL_IO = {
+    "1211": {"DI": 6, "DO": 4, "AI": 2, "AQ": 0},
+    "1212": {"DI": 8, "DO": 6, "AI": 2, "AQ": 0},
+    "1214": {"DI": 14, "DO": 10, "AI": 2, "AQ": 0},
+    "1215": {"DI": 14, "DO": 10, "AI": 2, "AQ": 2},
+    "1217": {"DI": 14, "DO": 10, "AI": 2, "AQ": 2},
+}
 
-def _synthesize_cpu_onboard(addresses: list) -> list[tuple[str, str, int, int]]:
+# "CPU 1214C AC/DC/Rly" / "CPU 1214FC ..." -> "1214" (the F variant shares I/O).
+_CPU_MODEL_RE = re.compile(r"CPU\s+(12\d{2})", re.IGNORECASE)
+
+
+def _cpu_physical_io(type_name: str) -> dict | None:
+    """The PHYSICAL onboard {DI, DO, AI, AQ} counts for a 1200-class CPU TypeName,
+    or None when the model is unknown (caller then keeps the .aml range — never
+    invents a count). Matched on the `CPU 12xx` model number (F variant shared)."""
+    m = _CPU_MODEL_RE.search(type_name or "")
+    return _CPU_ONBOARD_PHYSICAL_IO.get(m.group(1)) if m else None
+
+
+def _synthesize_cpu_onboard(addresses: list, type_name: str = "") -> list[tuple[str, str, int, int]]:
     """Synthesize ONLY the standard low-address onboard I/O of a 1200-class CPU
-    (the 1214C "PLC_1"). Conservative by design — see brief.
+    (the 1214C "PLC_1"). Conservative by design.
 
     Range-driven (NOT hardcoded to specific start/length constants): for each
     declared range whose `start < 1000` (the onboard, non-HSC region) synthesize
@@ -576,14 +614,23 @@ def _synthesize_cpu_onboard(addresses: list) -> list[tuple[str, str, int, int]]:
       * a WORD-structured range (Length a multiple of 16, e.g. Input 64/32) ->
         Length//16 analog channels (%IW/%QW);
       * otherwise a bit-addressed digital range (e.g. Input 0/16) -> Length DI/DO.
-    On the real 1214C this yields 16 DI (%I0.0-1.7) + 16 DO (%Q0.0-1.7) +
-    2 AI (%IW64/66) = 34 channels, exactly as before.
+
+    The synthesized count is CLAMPED to the CPU model's PHYSICAL channel count
+    (`_cpu_physical_io`) when known: the .aml's Input 0/16 / Output 0/16 are the
+    virtual 2-byte process-image allocation, but the 1214C physically has only
+    14 DI / 10 DO / 2 AI — the extra bits are not wired channels (the OS only
+    refreshes the real ones), so drawing them would invent I/O. With the 1214C
+    this yields 14 DI (%I0.0-1.5) + 10 DO (%Q0.0-1.1) + 2 AI (%IW64/66) = 26
+    channels; any tag at a clamped-off virtual address (e.g. %Q1.2) is simply
+    not on a module → it surfaces in the off-module section. An UNKNOWN model
+    keeps the full .aml range (never invent a smaller count).
 
     Ranges with `start >= 1000` are EXCLUDED, NOT swept from tags: those are the
     HSC / pulse %ID/%QD double-word telegram regions that parse_address returns
     None for, and no I/O module ever declares them as bit/word channels. Skipping
     them keeps the never-invent guarantee — there is no separate tag-sweep.
     """
+    phys = _cpu_physical_io(type_name)
     out: list[tuple[str, str, int, int]] = []
     for (io, start, length) in addresses:
         if start >= _ONBOARD_MAX_START:
@@ -594,10 +641,16 @@ def _synthesize_cpu_onboard(addresses: list) -> list[tuple[str, str, int, int]]:
         # words by the IoType convention: the onboard analog ranges start at 64+.
         if length % 16 == 0 and start >= 64:
             skey = "AI" if io == "Input" else "AO"
-            out.extend(_analog_channels(skey, start, length // 16))
+            count = length // 16
+            if phys is not None:
+                count = min(count, phys["AI"] if io == "Input" else phys["AQ"])
+            out.extend(_analog_channels(skey, start, count))
         else:
             skey = "DI" if io == "Input" else "DO"
-            out.extend(_digital_channels(skey, start, length))
+            count = length
+            if phys is not None:
+                count = min(count, phys["DI"] if io == "Input" else phys["DO"])
+            out.extend(_digital_channels(skey, start, count))
     return out
 
 
@@ -668,7 +721,9 @@ def build_distributed_stations(aml_path: str, tag_tables: dict[str, dict]) -> li
             addresses = info.get("addresses") or []
             if info.get("device_item_type") == "CPU":
                 # Only the 1200-class onboard CPU carries real low-address I/O.
-                ch = _synthesize_cpu_onboard(addresses)
+                # Pass the TypeName so the synthesis clamps to the model's
+                # PHYSICAL channel count (the .aml range is the virtual image).
+                ch = _synthesize_cpu_onboard(addresses, info.get("type_name", ""))
                 if ch:
                     per_mod.append((mod, info, ch))
                 continue

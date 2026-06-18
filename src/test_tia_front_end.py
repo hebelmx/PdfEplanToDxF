@@ -663,6 +663,28 @@ class DistributedStationsPureTest(unittest.TestCase):
         for mod in st["io_mods"]:
             self.assertIn(id(mod), dict_objs)
 
+    def test_cpu_onboard_clamped_to_physical_io_per_model(self):
+        """The .aml's Input 0/16 + Output 0/16 are the VIRTUAL process-image
+        allocation; a known CPU model clamps onboard synthesis to its PHYSICAL
+        channel count (1214C -> 14 DI + 10 DO), and an UNKNOWN model keeps the
+        full .aml range (never invent a count we don't know)."""
+        addrs = [("Input", 0, 16), ("Output", 0, 16)]
+        di = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214C AC/DC/Rly")
+              if c[0] == "DI"]
+        do = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214C AC/DC/Rly")
+              if c[0] == "DO"]
+        self.assertEqual(len(di), 14)   # not 16 — top 2 input bits not wired
+        self.assertEqual(len(do), 10)   # not 16 — top 6 output bits not wired
+        self.assertEqual(di[-1][1], "%I1.5")   # last physical DI
+        self.assertEqual(do[-1][1], "%Q1.1")   # last physical DO
+        # an F-CPU variant shares its counterpart's I/O
+        self.assertEqual(
+            len([c for c in tia._synthesize_cpu_onboard(addrs, "CPU 1214FC") if c[0] == "DI"]),
+            14)
+        # unknown model -> range-driven (16 DI), never invents a smaller count
+        unk = [c for c in tia._synthesize_cpu_onboard(addrs, "CPU 9XYZ") if c[0] == "DI"]
+        self.assertEqual(len(unk), 16)
+
     def test_cpu_hsc_range_no_synthesized_spares(self):
         """A CPU 'PLC_1' with an Input 1000/32 HSC range yields NO synthesized
         digital spares from that range — only the standard onboard ranges +
@@ -682,9 +704,11 @@ class DistributedStationsPureTest(unittest.TestCase):
         tags = {"on0": {"address": "%I0.0", "comment": "onboard"}}
         sts = self._run(hw, {"A": tags})
         st = sts[0]
-        # onboard synthesized: 16 DI + 16 DO + 2 AI = 34 channels; 1 mapped.
+        # onboard synthesized: the .aml's Input 0/16 + Output 0/16 are clamped to
+        # the CPU 1214C PHYSICAL onboard I/O (14 DI + 10 DO) + 2 AI = 26 channels
+        # (the top 2 DI + 6 DO bits are virtual process-image, not wired); 1 mapped.
         ch, m, r = self._counts(st)
-        self.assertEqual(ch, 34)
+        self.assertEqual(ch, 26)
         self.assertEqual(m, 1)
         # NONE of the skipped spares come from an HSC %ID/%QD address
         for kind, raw, reason in st["skipped"]:
@@ -903,7 +927,7 @@ class OffmoduleGroupsFixtureTest(unittest.TestCase):
         self.assertEqual([f for f, _ in self.groups],
                          ["Drives", "Identification", "Coordination/Safety"])
         total = sum(len(e["tags"]) for _f, els in self.groups for e in els)
-        self.assertEqual(total, 231)
+        self.assertEqual(total, 233)
 
     def test_drives_counts(self):
         self.assertEqual(self._counts("Drives"), (19, 111))
@@ -919,7 +943,10 @@ class OffmoduleGroupsFixtureTest(unittest.TestCase):
             ["A1", "A2", "A3"])
 
     def test_coordination_counts(self):
-        self.assertEqual(self._counts("Coordination/Safety"), (41, 84))
+        # 41 elements / 86 tags — includes the 1214C's %Q1.2/%Q1.3 virtual
+        # outputs (clamped off the physical onboard DO -> surface here, joining
+        # the existing "Q1" element).
+        self.assertEqual(self._counts("Coordination/Safety"), (41, 86))
         elems = {e["name"]: len(e["tags"])
                  for e in self.by_func["Coordination/Safety"]}
         self.assertEqual(elems.get("ev"), 28)

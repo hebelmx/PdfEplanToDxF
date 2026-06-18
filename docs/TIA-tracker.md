@@ -194,6 +194,19 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
     Q1–Q6 station 90%/24V-alarm). Function bucket = analog `%xW>=1000` (+1214C telegram words) → Drives;
     digital `%x>=8600` → Identification; else → Coordination/Safety. Each element box = address-range
     header + a stub per tag (addr+name+desc); pack several boxes per folio. All real data, never invent.
+- **E6(c2) DONE & EYEBALL-APPROVED (Abel, 2026-06-17) @ `fcc92fb`** — `build_offmodule_groups` +
+  `render_plant.build_offmodule_section`. Plant 191→206 folios, section 1100–1114 (Drives 19/Ident
+  3/Coord 41; tables + per-element boxes), 0 collisions/leaks. Abel: "looks good."
+- **E6(c2-fix) 1214C PHYSICAL onboard I/O (Abel datasheet observation, 2026-06-17).** The `.aml`
+  declares the VIRTUAL process-image allocation (Input 0/16 + Output 0/16), but the CPU 1214C
+  (6ES7 214-1BG40-0XB0) physically has **14 DI / 10 DO / 2 AI** (Siemens S7-1200 catalog p.3 +
+  6ES72141BG40 datasheet, both now in `docs/`). Added `_CPU_ONBOARD_PHYSICAL_IO` (1211/1212/1214/
+  1215/1217 incl. AQ; F-variants share) keyed on `CPU 12xx`; `_synthesize_cpu_onboard` CLAMPS to the
+  model's physical counts (unknown model → keeps the .aml range, never invent). Effect: 1214C station
+  **36→28 ch / 21→19 mapped / 15→9 RESERVA**; the 2 virtual outputs `%Q1.2/%Q1.3` (tagged but not
+  wired) surface in the off-module Coordination/Safety section (231→**233** off-module tags). Plant
+  **776→768 ch / 549→547 mapped / 227→221 RESERVA**. Q100–Q700_1 + Rockwell + single-station Siemens
+  UNCHANGED (22 folios). Suite **471** green.
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
