@@ -186,7 +186,14 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
   * **Function buckets (231 tags):** Drives ~111 (`%IW/%QW>=1000` telegrams + 1214C telegram words);
     Identification 36 (`%I/%O>=8600`, RFID); Plant coordination & safety ~84 (inter-station status
     `%I14/15` "Qx 90%"/"24V Alarm", Coating-zone e-stops `%I556/557`, output coordination `%O100-599`).
-  * c2 design (grouping granularity + render format) is a GATED visual call — pending Abel.
+  * **c2 DESIGN LOCKED (Abel, 2026-06-17): subsection BY FUNCTION → PER ELEMENT; format = BOTH
+    (a summary table per function AND a drawn placeholder box per element).** Element identity =
+    tag-name prefix (strip `VS_`, leading alpha+digits token). VALIDATED grouping: Drives **19
+    elements** (UvRot/UvTran/CoatLA/IRConv… 6–8 telegram words each), Identification **3** (A1/A2/A3 =
+    BIS RFID, 12 each), Coordination/Safety **~41** (`ev*` EX260 valves, `bcoat` coating safety,
+    Q1–Q6 station 90%/24V-alarm). Function bucket = analog `%xW>=1000` (+1214C telegram words) → Drives;
+    digital `%x>=8600` → Identification; else → Coordination/Safety. Each element box = address-range
+    header + a stub per tag (addr+name+desc); pack several boxes per folio. All real data, never invent.
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
