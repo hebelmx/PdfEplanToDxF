@@ -1,4 +1,4 @@
-# Handoff — Phase 2 (TIA + fixes + ALIM on `main`; ⚠️ BIG REFRAME: draw ALL distributed I/O → next: data-layer build)
+# Handoff — Phase 2 (EPIC E6 full-plant distributed I/O ✅ MERGED to `main` @ `f3a3fc5`; next: S7-300 / new vendor work)
 
 > Self-contained handoff so a **fresh agent in a new session** can resume with no prior context.
 > Updated 2026-06-17 (supersedes the "feature-complete on a branch, pending eyeball + merge gate"
@@ -6,20 +6,22 @@
 > config-driven diagrams), driven by `docs/planning/{brief,prd,epics}.md`. **Live source of truth for
 > the open work = `docs/TIA-tracker.md`** (GitHub issue #2 CLOSED 2026-06-17; surviving low-pri nits → issue #3).
 
-## ⚡ CURRENT STATUS (2026-06-17, branch `feat/e6-s71500-descriptions`) — read `docs/TIA-tracker.md` EPIC E6 for full detail
-The **distributed-I/O build is DONE through c1 and Abel-eyeball-APPROVED.** On the branch (NOT merged):
-- **E6(a)** `6135125` — `parse_aml` carries per-module address ranges.
-- **E6(b)** `f4c1de5` + **(b-fix)** `b8d4afc` — `plc_ir.build_tia_distributed_project(aml)` → ordered
-  `list[PlcProject]`, **9 stations / 776 ch / 549 mapped / 227 RESERVA**; Q100 byte-identical to the
-  approved single-station floor (88/48/40); ownership by tag-table coverage; all stations carry owning
-  CPU. Passed a 3-lens adversarial review (Q100 synthesis = byte-identical to the real IO_Channels).
-- **E6(c1)** `d00e647`/`6db8e91` — `src/render_plant.py` + `tia_to_qet --distributed`: **191-folio**
-  plant set, per-station numeric bands (front 0–50, bands 100–900, back 1000+), 0 collisions/0 leaks,
-  ISO on all. `logix_to_qet.py` UNTOUCHED → Rockwell byte-identical; single-station Siemens unchanged
-  (22/48/40). **Suite 454 green.** Abel: "looks good." Functional names = auto-derived + blanks.
-- **NEXT = E6(c2)**: the off-module PROFINET I/O section grouped by function (drives/RFID/coordination),
-  ~231 non-1:1 tags. Investigation done (no data gap; buckets identified) — see tracker; design gated.
-- Merge of the whole branch to `main` is still Abel's call (hold until c2 + a final eyeball).
+## ⚡ CURRENT STATUS (2026-06-17) — EPIC E6 ✅ DONE & MERGED to `main` @ `f3a3fc5` (read `docs/TIA-tracker.md` EPIC E6 for full detail)
+The full-plant distributed-I/O build shipped & Abel-eyeball-approved. **Suite 397→471 green; Rockwell
+byte-identical; single-station Siemens unchanged (22 folios).** What landed:
+- **E6(a)** `parse_aml` carries per-module I/O address ranges.
+- **E6(b)+(b-fix)** `plc_ir.build_tia_distributed_project(aml)` → ordered `list[PlcProject]`,
+  **9 stations / 768 ch / 547 mapped / 221 RESERVA** (range-join; ownership by tag-table coverage;
+  F-DI value+status / F-DQ split; **1214C onboard clamped to the datasheet's physical 14 DI/10 DO/2 AI**
+  — `_CPU_ONBOARD_PHYSICAL_IO` from the S7-1200 catalog in `docs/`). Q100 reproduces the approved
+  single-station floor 88/48/40. Passed a 3-lens adversarial review.
+- **E6(c1)** `src/render_plant.py` + `tia_to_qet --distributed` → per-station numeric bands
+  (front 0–50, bands 100–900, back 1000+). 191 folios.
+- **E6(c2)** off-module PROFINET I/O section (drives/RFID/coordination, by function→per element,
+  summary tables + per-element placeholder boxes). Plant = **206 folios**; off-module 233 non-1:1 tags.
+- **NEXT candidates** (none gating): S7-300 path (fixture in hand, schema in memory
+  `siemens-import-findings`); issue-#3 low-pri nits; a curated Siemens símbología dictionary. The
+  CLI `tia_to_qet --distributed` is the whole-plant entry; single-station `tia_to_qet …` still works.
 
 ## TL;DR — read this first
 - Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
