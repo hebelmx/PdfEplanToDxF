@@ -426,6 +426,24 @@ def _prefix_titles(diagrams, label):
 # every address/name/description is the real tag-table data.
 OFFMODULE_SECTION_TITLE = "E/S PROFINET fuera de módulo"
 
+# The section-title TEMPLATE: the protocol word ("PROFINET") is variable so a
+# vendor whose off-module devices sit on a different bus (e.g. S7-300 servos on
+# PROFIBUS-DP) can title each function with its real bus, while the default
+# (None bus_labels) reproduces OFFMODULE_SECTION_TITLE byte-for-byte.
+_OFFMODULE_TITLE_TEMPLATE = "E/S {bus} fuera de módulo"
+_OFFMODULE_DEFAULT_BUS = "PROFINET"
+
+
+def _offmodule_section_title(func, bus_labels) -> str:
+    """The off-module section title for ONE function. When ``bus_labels`` is None
+    the result is exactly ``OFFMODULE_SECTION_TITLE`` (the E6/TIA plant path —
+    byte-for-byte unchanged). When provided, the protocol word is
+    ``bus_labels.get(func, "PROFINET")`` so each function reads its real bus."""
+    if bus_labels is None:
+        return OFFMODULE_SECTION_TITLE
+    bus = bus_labels.get(func, _OFFMODULE_DEFAULT_BUS)
+    return _OFFMODULE_TITLE_TEMPLATE.format(bus=bus)
+
 # Summary-table folio: reuse the BOM/summary text-grid geometry. Columns laid out
 # left→right inside SUMMARY_PAGE_WIDTH; description gets the widest budget.
 _OFF_SUMMARY_COLUMNS = (
@@ -503,7 +521,8 @@ def _add_offmodule_summary_diagram(project, order, title, page_rows,
     return diagram
 
 
-def _build_offmodule_summary(project, start_order, func, element_list) -> int:
+def _build_offmodule_summary(project, start_order, func, element_list,
+                             bus_labels=None) -> int:
     """Append the paginated summary-table folio(s) for ONE function (every tag in
     that function). Returns the count appended. Orders run start_order .."""
     rows = _offmodule_summary_rows(element_list)
@@ -511,7 +530,7 @@ def _build_offmodule_summary(project, start_order, func, element_list) -> int:
         return 0
     per = lq.SUMMARY_ROWS_PER_PAGE
     pages = [rows[i:i + per] for i in range(0, len(rows), per)]
-    title = f"{OFFMODULE_SECTION_TITLE} · {func} — resumen"
+    title = f"{_offmodule_section_title(func, bus_labels)} · {func} — resumen"
     for n, page_rows in enumerate(pages, start=1):
         _add_offmodule_summary_diagram(project, start_order + n - 1, title,
                                        page_rows, n, len(pages))
@@ -608,7 +627,8 @@ def _add_offmodule_box_diagram(project, order, title, placements):
     return diagram
 
 
-def _build_offmodule_boxes(project, start_order, func, element_list) -> int:
+def _build_offmodule_boxes(project, start_order, func, element_list,
+                           bus_labels=None) -> int:
     """Append the packed per-element box folio(s) for ONE function. Returns the
     count appended. Orders run start_order .."""
     folios = _pack_offmodule_boxes(element_list)
@@ -617,18 +637,24 @@ def _build_offmodule_boxes(project, start_order, func, element_list) -> int:
     total = len(folios)
     for n, placements in enumerate(folios, start=1):
         suffix = f" ({n}/{total})" if total > 1 else ""
-        title = f"{OFFMODULE_SECTION_TITLE} · {func}{suffix}"
+        title = f"{_offmodule_section_title(func, bus_labels)} · {func}{suffix}"
         _add_offmodule_box_diagram(project, start_order + n - 1, title,
                                    placements)
     return total
 
 
-def build_offmodule_section(project, start_order, groups) -> tuple[int, list]:
+def build_offmodule_section(project, start_order, groups,
+                            bus_labels=None) -> tuple[int, list]:
     """Append the WHOLE off-module section to `project`: per function (in the
     Drives, Identification, Coordination/Safety order the data layer yields), a
     summary-table folio block THEN the packed per-element box folios. Orders run
     consecutively from `start_order` (a running counter), so the section never
     collides with the BOM band below it or the changelog above it.
+
+    ``bus_labels`` (optional ``{func: bus}``) makes the section title bus-aware
+    PER FUNCTION: the protocol word becomes ``bus_labels.get(func, "PROFINET")``
+    (e.g. S7-300 Drives -> "PROFIBUS-DP"). When None (the E6/TIA plant caller)
+    every title is the unchanged ``OFFMODULE_SECTION_TITLE`` — byte-for-byte.
 
     Returns ``(n_folios, layout)`` where layout is a per-function report list of
     ``{func, n_elements, n_tags, summary_orders, box_orders}`` for the stderr
@@ -642,10 +668,12 @@ def build_offmodule_section(project, start_order, groups) -> tuple[int, list]:
     for func, element_list in groups:
         n_tags = sum(len(e["tags"]) for e in element_list)
         s0 = order
-        ns = _build_offmodule_summary(project, order, func, element_list)
+        ns = _build_offmodule_summary(project, order, func, element_list,
+                                      bus_labels)
         order += ns
         b0 = order
-        nb = _build_offmodule_boxes(project, order, func, element_list)
+        nb = _build_offmodule_boxes(project, order, func, element_list,
+                                    bus_labels)
         order += nb
         n_folios += ns + nb
         layout.append({
