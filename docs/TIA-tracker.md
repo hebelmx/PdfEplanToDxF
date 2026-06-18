@@ -92,6 +92,34 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
 - **E6 foundation DONE @ `bc0e5b0`** (branch `feat/e6-s71500-descriptions`): per-station tag-table
   selection + descriptions + symbol match/suppression + `controller_cpu` seam. **NOT merged** — hold
   the merge until the distributed-I/O build lands so `main` never ships the misleading single-station set.
+- **E6(a) DONE @ `6135125`** — `parse_aml` carries `addresses` = list[(io_type,start_byte,length_bits)]
+  per module (suite 419). Ordered list entries; F-modules carry 2 ranges; never invented.
+- **GROUND-TRUTH RE-DERIVATION before E6(b) (orchestrator, 2026-06-17 — corrects the prior
+  "feasibility proven" summary, which hid the F-module trap):**
+  * Real stations in the `.aml` (9): `Q100-Cooling1/UV` (1512SP CPU-local) + `Q200 Q300 Q400 Q500
+    Q600 Q700 Q700_1` (IM155-6 drops) + `S7-1200 station_1` (1214C onboard @ .95). NB the names are
+    `Q700_1`, not "Q800".
+  * Tag tables: `PLCTagsS71500.xlsx` 1167 tags (759 parse to I/Q addrs, rich English comments);
+    `PLCTagsS71200.xlsx` 143 tags (21 parse, comments empty, auto-names like "I0.4").
+  * **OWNERSHIP by coverage is unambiguous:** Q100–Q700_1 resolve 100% in S71500 / 0 in S71200;
+    `S7-1200 station_1` resolves in S71200 (21) >> S71500 (10). Zero genuine overlap.
+  * **CAPACITY / channel-count rules (VALIDATED: reproduce Abel's approved Q100 floor 88/48/40 EXACTLY):**
+    - Standard digital DI/DQ Nx: capacity = ExtIf count = `Length` bits; single module.
+    - **F-DI 8x: capacity = 2×ExtIf = 16, ALL in the Input area** (byte = 8 device values, byte+1 =
+      8 `VS_*`/"Vsupply" value-status bits — already suppressed to generic by the foundation). The
+      `.aml` `Length`=48 is PROFIsafe-inflated; do NOT enumerate by Length.
+    - **F-DQ 4x: SPLIT — DO part = ExtIf %Q[start].0..3, DI-readback part = ExtIf %I[start].0..3**
+      (8 total; readback usually all-spare). Matches the existing [DO]+[DI] split.
+    - Analog Nx: capacity = ExtIf words = `Length`/16; addresses %{area}W[start+2i].
+    - **1214C (S7-1200 station_1): conservative** — enumerate only standard onboard low-address I/O
+      (`%I0`/`%Q0` digital, `%IW64` analog); the `%ID1000…` HSC/pulse **double-word** ranges parse to
+      None → emit ONLY real mapped tags there, never synthesize digital spares (never-invent).
+  * **The doc figure "636 ch / 75 modules" was a RAW-ExtIf sum that UNDERCOUNTS F-modules** (it gives
+    Q100=68, but the approved Q100 is 88). The user-facing total (with the F-DI ×2 / F-DQ split) is
+    higher; recompute it from the IR and update the figure when E6(b) lands.
+  * **Spares are a COUNT, not addresses** (CHAN decision): mapped channels carry real tag+address from
+    the tag table; RESERVA = capacity − mapped drawn as anonymous stubs (pin `__`, no address) — this
+    is the "sidesteps F-module per-channel addressing" the design intended.
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
