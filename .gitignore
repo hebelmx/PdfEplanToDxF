@@ -28,15 +28,40 @@ desktop.ini
 # Test data
 test_data/
 
-# Proprietary plant data (PLC programs and exports) — do not publish
+# Proprietary plant data (PLC programs and exports) — do not publish.
+# The Fixtures/ tree carries its own Fixtures/.gitignore (ignores ALL its
+# contents bar that file), so plant data there is already covered; these
+# extension rules are a belt-and-suspenders for plant data ANYWHERE in the repo,
+# in both case variants (git ignore matching is case-sensitive on some
+# platforms).
 *.ACD
+*.acd
 *.L5K
+*.l5k
 *.L5X
+*.l5x
 *.AML
+*.aml
 *.RDF
+*.rdf
+*.xlsx
+*.asc
+*.cfg
 *_eplan.csv
 *_bom.csv
 *.qet
+
+# Purposely-untracked local files (kept out of the repo on purpose; force-add
+# with `git add -f` if one ever genuinely needs to be tracked). Paths are
+# ROOT-anchored (leading /) so they don't shadow same-named dirs elsewhere
+# (e.g. the tracked .claude/skills/**/assets/):
+#   /tools/            — non-stdlib dev helpers (tools/qet_preview.py, matplotlib)
+#   the logo BINARIES in /assets/ — the tracked exxerpro.titleblock and the
+#   .svg logo stay tracked; only the raster + .ai brand logos are ignored.
+/tools/
+/assets/*.bmp
+/assets/*.png
+/assets/*.ai
 
 # Personal files
 spam_blocked.vcf
