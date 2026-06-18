@@ -113,16 +113,38 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
       histogram I=176/Q=139/PIW=4/M=732/FC=82/FB=16/DB=74/T=166 (+VAT/MW/UDT/OB/SFC/QD/SFB/MD),
       **physical_io=319** of 1467; control-off cross-check (.cfg slot4 ch0 == .asc I 0.0) holds.
       37 new tests. (Note: real `.asc` counts replaced the brief's approximate estimate.)
-- [ ] **S7300-2 — front-end → IR (data-only, fully tested).** `src/s7300_front_end.py` +
-      `plc_ir.build_s7300_project(cfg_path, asc_path=None) -> list[PlcProject]` (mirror
-      `build_tia_distributed_project`): one PlcProject per local-rack station + each DP drop;
-      modules+points+RESERVA from inline `.cfg` symbols (primary), `.asc` cross-check; spare
-      rule; servo telegrams collected for the off-module section; `network_nodes` from the two
-      subnets (real mask); `controller_cpu` = CPU 315-2. **RE-DERIVE & LOCK the floor here.**
-- [ ] **S7300-3 — CLI + render + off-module + EYEBALL GATE.** `src/s7300_to_qet.py` (mirror
-      `tia_to_qet --distributed`) → `render_plant` + off-module section. **Visual LAYOUT =
-      GATED to Abel** (per-station bands vs single-station-with-DP-cards; section labels;
-      PROFIBUS network folio). Regenerate `_eyeball_s7300.qet`, launch QET, gate before locking.
+- [x] **S7300-2 — front-end → IR (data-only, fully tested). DONE @ `50e0d3f`.**
+      `src/s7300_front_end.py` + additive `plc_ir.build_s7300_project(cfg, asc) -> list[PlcProject]`
+      (mirrors `build_tia_distributed_project`): per-station decomposition (local CPU 315-2 rack +
+      each wired DP drop its own station), digital channels from inline `.cfg` SYMBOL lines
+      (spare→RESERVA), AI8 via `.asc` PIW, catalog=real order# (masked ? kept), `offmodule_devices()`
+      exposes servos+cameras WITHOUT synthesizing channels, `network_nodes=[]` (topology deferred),
+      `controller_cpu="CPU 315-2 PN/DP"`. **Verified from ground truth:** suite 508→**531** green;
+      only new front-end/test + additive +62/-0 plc_ir (shared renderer untouched → Rockwell
+      byte-identical). **FLOOR LOCKED (re-derived): 7 stations, capacity 256 / mapped 187 /
+      RESERVA 69** (local rack 136=101+35; 5× ET200eco 80=56+24; Festo CPX 40=30+10).
+      **SURPRISE (verified faithful):** the AI8 maps **0** channels (all RESERVA) — the 4 `.asc`
+      PIW words 372/374/736/738 are Keyence camera tags (`Camera_Result`/`Job Status`/`Job Number`),
+      OUTSIDE the AI8 range 352–366; positive-control test proves the PIW join works when in range.
+      Off-module exposed: 3× CMMP-AS servo telegrams (DP 16/17/18 @528+) + 2× Keyence cameras
+      (PROFINET IOADDR 1/2). NEVER invented.
+- [ ] **S7300-3 — CLI + render + off-module + topology + EYEBALL GATE.** `src/s7300_to_qet.py`.
+      **GATED DESIGN LOCKED (Abel, 2026-06-17):**
+      * **Layout = SINGLE STATION, DP drops as remote CARDS** (option 3, the compact view): ONE
+        `S7300` station band — local modules (DI32×2, DO32×2, AI8) + the 5 ET200eco + Festo CPX
+        all drawn as I/O card folios in one sequence, **one bornero strip, one BOM**. So S7300-3
+        renders via the SINGLE-station `render_project` (logix_to_qet) — MERGE the 7-PlcProject
+        list into one IR (concat io_mods/points/skipped) OR add a single-IR builder; NOT
+        `render_plant` bands. (Abel chose compact over nested/flat-bands.)
+      * **Scope = ALL THREE** (Abel selected all): (3a) **core** wired I/O folios + bornero + BOM
+        + portada/símbología/índice/rack; (3b) **off-module section** (E6 c2 analog) for the 3
+        CMMP-AS servo telegrams + 2 Keyence cameras (real ranges, per-element boxes, never
+        synthesized as channels); (3c) **PROFIBUS + PROFINET topology folio** (PROFIBUS-DP line:
+        CPU + 5 ET200eco + CPX + 3 servos; PROFINET Ethernet: CPU PN-IO + 2 cameras — from the
+        real `.cfg` subnets/addresses). Split into 3a/3b/3c sub-cycles, each EYEBALL-gated
+        (regen `_eyeball_s7300.qet`, launch QET) — mirror E6 c1/c2.
+      * **BLOCKED until the data fix cycle lands** (the M1 spare-regex over-drop fix re-locks the
+        floor — don't render on wrong data).
 - [ ] **Adversarial review** at the phase boundary (3 lenses + general) against this tracker
       + the never-invent guardrails. Triage findings back here.
 
