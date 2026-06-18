@@ -142,6 +142,28 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
     SURFACE to Abel at the E6c gate. (So plant addressed I/O = 776 module ch + ~231 off-module telegram.)
   * CLEAN (corroborated): per-station arithmetic, SM1232 analog fix, no wrong-module/cross-station join,
     descriptions all real, `no_symbol` suppression correct, ownership unambiguous, masked-`?`/blanks.
+- **E6(b-fix) DONE @ `b8d4afc`** — ordering/controller_cpu from owner label, digital capacity clamp,
+  analog channels>=2 guard, CPU-onboard range-driven, docstring/collision guards. Suite 439; Q100
+  byte-identical; plant 776/549/227; all 9 stations carry their owning CPU; both render gates held.
+- **E6(c) GATED VISUAL DECISIONS (Abel, 2026-06-17) — LOCKED:**
+  1. **Layout = PER-STATION NUMERIC BANDS.** Each station its own band: I/O 101+/201+/…/9xx (1214C),
+     bornero 12xx/22xx/…, preceded by a station divider. Plant folios: portada 0, símbología 1,
+     Red PROFINET 2, índice 3, rack 4 (per station), then per-station I/O+bornero bands, BOM 300+,
+     changelog 900. índice spans all stations; BOM aggregates all.
+  2. **Q100 = UNIFORM** — build ALL 9 stations (incl. Q100) through the new distributed `.aml` path
+     (proven byte-identical to approved Q100). Single-station IO_Channels CLI stays available.
+  3. **Section label = station + owning-PLC CPU + a FUNCTIONAL "tag name"**, derived from the data when
+     available (the `.aml` device Name carries it: Q100 → "Cooling1/UV"; Q200–Q700_1 are bare), ELSE
+     **semantically derived** from the station's tag descriptions — CONSERVATIVE (a real common token,
+     blank if nothing clear; never invent). Eyeball-gate the derived names.
+  4. **OFF-MODULE PROFINET I/O = a NEW SECTION (chunk c2), grouped by FUNCTION.** The ~231 non-1:1
+     addressed tags (VFD telegrams `%IW>=1000`, RFID, barcode, drive status on SK drives / EX260 valve
+     terminals / BIS RFID) are NOT on a Siemens I/O module → draw them in subsections of a new section
+     grouped by function (drives, RFID, barcode, valves…), each element with its real address range +
+     tags, as a finishable starting point for the user. (Abel also OK with adding an address-range
+     column on the Red PROFINET folio, but PREFERS the new grouped-by-function section.) Needs a data
+     investigation first: link telegram addresses → PROFINET device/function (the `.aml` drives/RFID
+     are devices but their telegram ranges are NOT captured as I/O modules — investigate before design).
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
