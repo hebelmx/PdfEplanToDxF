@@ -197,3 +197,13 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
   from ground truth (suite →538→553 green; Rockwell byte-identical; structural checks via a
   WADDING-comparison that proved the %{/def-count alarms were titleblock-template artifacts).
   Xspare channels confirmed MAPPED (Abel OK). Next: S7300-3b (off-module) → 3c (topology).
+- 2026-06-18: **S7300-3b off-module section DONE @ `354e1e1` + fix @ `e08270a`** (51 folios). Initial
+  build reused `render_plant.build_offmodule_section` via a gated `render_project` param. Orchestrator
+  ground-truth review caught 2 issues → Abel-gated fix: (A) FAITHFUL camera I/O — each camera carries
+  its DATA-LINKED `.cfg` IOSUBSYSTEM slots (real %IW/%QW + names + inline SYMBOLs); the 4 `.asc` PIW
+  words (Camera_Result/Job Status/…) go to a separate "telegramas (sin asignar)" element (no invented
+  camera link); (B) BUS-ACCURATE labels — "PROFIBUS-DP · Drives" + "PROFINET · Identification" via an
+  additive `bus_labels` param (E6/TIA plant title UNCHANGED — re-rendered + verified). Verified from
+  ground truth each step: suite →566→571 green; Rockwell BYTE-EQUIVALENT (re-run twice); wired floor
+  held 214/42. Off-module = Drives 3 servos + Identification 3 (STleftrear/strightrear/unassigned).
+  Next: S7300-3c (PROFIBUS+PROFINET topology folio).
