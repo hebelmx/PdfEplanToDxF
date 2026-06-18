@@ -30,6 +30,7 @@ from pathlib import Path
 
 import plc_ir
 import logix_to_qet
+import render_plant as render_plant_mod
 import power_config as power_config_mod
 
 
@@ -112,6 +113,14 @@ def main(argv=None):
                          "module order numbers + PROFINET addresses (overrides "
                          "the sibling *.aml auto-discovery; absent => catalog/"
                          "network_address stay blank)")
+    ap.add_argument("--distributed", "--plant", dest="distributed",
+                    action="store_true",
+                    help="render the FULL plant (all stations) as ONE .qet with "
+                         "per-station 100-bands, built from the CAx/AML's "
+                         "distributed I/O (build_tia_distributed_project). The "
+                         "io_channels arg is still required for sibling auto-"
+                         "discovery of the .aml / PLCTags, but every station's "
+                         "I/O comes from the .aml, not just the one station.")
     ap.add_argument("--power-config",
                     help="path to a power one-line JSON config (system voltage, "
                          "input/output breakers, power supply, optional "
@@ -129,6 +138,24 @@ def main(argv=None):
     tags_path = args.tags or _discover_tags(args.io_channels)
     aml_path = args.aml or _discover_aml(args.io_channels)
     power_cfg = power_config_mod.load_power_config(args.power_config)
+
+    # E6 (c1): whole-plant distributed-I/O render. The single-station path below
+    # is the unchanged default; --distributed builds EVERY station from the .aml
+    # and composes one .qet with per-station 100-bands via render_plant. The .aml
+    # is REQUIRED here (the distributed I/O lives only in it); without it the IR
+    # is empty ([]) and we degrade to a cover-only plant document, never invent.
+    if args.distributed:
+        station_irs = plc_ir.build_tia_distributed_project(aml_path)
+        if args.output:
+            out_path = args.output
+        else:
+            folder = Path(args.io_channels).resolve().parent
+            out_path = str(folder / "plant.qet")
+        return render_plant_mod.render_plant(
+            station_irs, out_path,
+            no_symbols=args.no_symbols,
+            wire_scheme=args.wire_scheme,
+        )
 
     # Build the vendor-neutral PlcProject IR via the Siemens front end, then hand
     # it to the SAME renderer logix_to_qet uses — only emit_vendor_folios differs.

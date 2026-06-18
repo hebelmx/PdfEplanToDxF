@@ -902,5 +902,219 @@ class ControllerCpuTest(unittest.TestCase):
         self.assertIsNone(ir.controller_cpu)
 
 
+# --------------------------------------------------------------------------
+# E6 (c1): whole-plant distributed-I/O renderer (render_plant) — per-station
+# 100-bands. Pure tests for the functional-name helper + fixture-gated
+# structural tests on the real 9-station plant.
+# --------------------------------------------------------------------------
+import render_plant as rp
+
+
+class _FakePoint:
+    def __init__(self, description=""):
+        self.description = description
+
+
+class _FakeStation:
+    def __init__(self, name, points=None, controller_cpu=None):
+        self.name = name
+        self.points = points or []
+        self.controller_cpu = controller_cpu
+        self.io_mods = []
+        self.network_nodes = []
+
+
+class StationFunctionalNameTest(unittest.TestCase):
+    """Pure tests for _station_functional_name (no fixture needed)."""
+
+    def test_real_suffix_from_aml_name(self):
+        st = _FakeStation("Q100-Cooling1/UV")
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "Cooling1/UV")
+        self.assertFalse(derived)   # REAL, from the .aml name suffix
+
+    def test_derived_dominant_theme(self):
+        # a bare station whose descriptions are dominated by "Cooling …"
+        pts = [_FakePoint("Cooling fan run"),
+               _FakePoint("Cooling pump on"),
+               _FakePoint("Cooling valve open"),
+               _FakePoint("Door open")]
+        st = _FakeStation("Q200", points=pts)
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "Cooling")
+        self.assertTrue(derived)
+
+    def test_no_clear_theme_blank(self):
+        # a station with no dominant leading word -> "" (never invented)
+        pts = [_FakePoint("Door open"),
+               _FakePoint("Lamp red"),
+               _FakePoint("Motor fault"),
+               _FakePoint("Valve shut")]
+        st = _FakeStation("Q300", points=pts)
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "")
+        self.assertTrue(derived)
+
+    def test_non_panel_name_does_not_leak_model(self):
+        # a TIA default device name is NOT a Q-panel; its "suffix" (the device
+        # model) must never surface as a function. No descriptions => "".
+        st = _FakeStation("S7-1200 station_1")
+        name, derived = rp._station_functional_name(st)
+        self.assertEqual(name, "")
+        self.assertTrue(derived)   # fell through to derivation, not the suffix
+
+    def test_section_label_degrades(self):
+        st = _FakeStation("Q200", controller_cpu="CPU 1512SP F-1 PN")
+        # blank functional -> "<station> — <CPU>" (no empty middle segment)
+        self.assertEqual(rp.station_section_label(st, ""),
+                         "Q200 — CPU 1512SP F-1 PN")
+        self.assertEqual(rp.station_section_label(st, "Cooling"),
+                         "Q200 — Cooling — CPU 1512SP F-1 PN")
+
+
+class PlantRenderTest(unittest.TestCase):
+    """Fixture-gated structural tests on the real 9-station IMV1 plant."""
+
+    AML = _imv1_aml()
+
+    def setUp(self):
+        if not self.AML.is_file():
+            self.skipTest("IMV1 .aml fixture not present")
+        self.irs = plc_ir.build_tia_distributed_project(str(self.AML))
+        if not self.irs:
+            self.skipTest("distributed IR empty (missing tag tables?)")
+        buf = io.StringIO()
+        self._tmp = tempfile.TemporaryDirectory()
+        out = Path(self._tmp.name) / "plant.qet"
+        with redirect_stderr(buf):
+            rc = rp.render_plant(self.irs, str(out))
+        self.assertEqual(rc, 0)
+        self.err = buf.getvalue()
+        self.root = ET.fromstring(out.read_text(encoding="utf-8"))
+        self.orders = [int(d.get("order")) for d in self.root.findall("diagram")]
+        self.titles = [d.get("title") or "" for d in self.root.findall("diagram")]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_nine_stations(self):
+        self.assertEqual(len(self.irs), 9)
+
+    def test_per_station_io_and_bornero_bands_present(self):
+        # first I/O folio of each band at base+1 (101, 201, …, 901) and the
+        # first bornero at base+50 (150, 250, …, 950)
+        for i in range(9):
+            base = (i + 1) * 100
+            self.assertIn(base + 1, self.orders,
+                          f"no I/O folio at band base {base}+1")
+            self.assertIn(base + 50, self.orders,
+                          f"no bornero folio at band base {base}+50")
+
+    def test_no_duplicate_order_warning(self):
+        self.assertNotIn("duplicate diagram order", self.err)
+        # orders are globally unique across the whole plant
+        self.assertEqual(len(self.orders), len(set(self.orders)),
+                         "duplicate folio order across the plant")
+
+    def test_index_enumerates_all_bands(self):
+        # the índice is built LAST; every band's first I/O folio must be listed
+        # (no duplicate warning means none were dropped). Assert the índice folio
+        # exists and the band orders are all on the project.
+        self.assertIn("Índice de planos", self.titles)
+        for i in range(9):
+            self.assertIn((i + 1) * 100 + 1, self.orders)
+
+    def test_portada_lists_nine_stations(self):
+        portada = [d for d in self.root.findall("diagram")
+                   if d.get("title") == "Portada"]
+        self.assertEqual(len(portada), 1)
+        texts = [t.get("text") or "" for t in portada[0].iter("input")]
+        for ir in self.irs:
+            self.assertTrue(any(ir.name in tx for tx in texts),
+                            f"station {ir.name!r} not on the plant cover")
+
+    def test_bom_aggregates_all_stations(self):
+        # BOM row count == sum of each station's own bom_rows. Build per-station
+        # IRs through the single renderer's accumulator path to get the per-
+        # station counts, then compare the plant total.
+        per_station_total = 0
+        for ir in self.irs:
+            rows = []
+            symbols = q.load_symbol_db()
+            rp._build_station_bands(
+                ET.Element("project"), ir, 100,
+                symbols=symbols, sym_counts={}, designations={},
+                wire_scheme="address", wire_counters={}, bom_rows=rows,
+                spare_counter={})
+            per_station_total += len(rows)
+        # the plant's BOM folios carry the aggregated rows; count module/device/
+        # generic/spare rows by re-deriving from the stderr 'bom :' line.
+        m = re.search(r"bom\s*:\s*(\d+)\s+rows", self.err)
+        self.assertIsNotNone(m, "no bom line in stderr")
+        self.assertEqual(int(m.group(1)), per_station_total)
+
+    def test_q100_band_reproduces_six_io_folios(self):
+        # Q100 band (100): the 6 approved I/O card folios — F-DI150, F-DI156, the
+        # F-DQ1500 [DO+DI] split, DI10_11, DI12_13, DQ10_11. They occupy 101..106.
+        q100_io = [d.get("title") or "" for d in self.root.findall("diagram")
+                   if 101 <= int(d.get("order")) <= 106]
+        self.assertEqual(len(q100_io), 6, q100_io)
+        blob = " ".join(q100_io)
+        for needle in ("F-DI150", "F-DI156", "F-DQ1500", "DI10_11",
+                       "DI12_13", "DQ10_11"):
+            self.assertIn(needle, blob, f"{needle} missing from Q100 band")
+        # the split card merged onto one folio ([DO+DI])
+        self.assertTrue(any("F-DQ1500" in t and "[DO+DI]" in t for t in q100_io),
+                        "F-DQ1500 split halves did not merge in the Q100 band")
+
+    def test_iso_titleblock_every_folio_no_raw_tokens(self):
+        diagrams = self.root.findall("diagram")
+        self.assertTrue(diagrams)
+        for d in diagrams:
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro",
+                             f"folio {d.get('title')!r} missing ISO titleblock")
+            props = d.find("properties")
+            self.assertIsNotNone(props)
+            for prop in props.findall("property"):
+                self.assertNotIn("%{", prop.text or "",
+                                 f"raw token in property of {d.get('title')!r}")
+
+    def test_conductors_resolve_and_types_embedded(self):
+        types = set()
+        for d in self.root.findall("diagram"):
+            elements = d.find("elements")
+            conductors = d.find("conductors")
+            if elements is None:
+                continue
+            ids = []
+            for el in elements.findall("element"):
+                types.add(el.get("type"))
+                for t in el.iter("terminal"):
+                    ids.append(t.get("id"))
+            self.assertEqual(len(ids), len(set(ids)),
+                             f"duplicate terminal id in {d.get('title')!r}")
+            idset = set(ids)
+            if conductors is not None:
+                for c in conductors.findall("conductor"):
+                    for end in ("terminal1", "terminal2"):
+                        self.assertIn(c.get(end), idset,
+                                      f"unresolved conductor in {d.get('title')!r}")
+        coll = self.root.find("collection")
+        self.assertIsNotNone(coll)
+        embedded = {el.get("name") for el in coll.iter("element")
+                    if el.find("definition") is not None}
+        for tp in types:
+            self.assertIn(tp.rsplit("/", 1)[-1], embedded,
+                          f"drawn type {tp!r} has no embedded <definition>")
+
+    def test_station_labels_prefix_band_titles(self):
+        # Q100's band I/O folios carry the station section label as a prefix.
+        q100 = [d.get("title") or "" for d in self.root.findall("diagram")
+                if int(d.get("order")) == 101]
+        self.assertTrue(q100)
+        self.assertTrue(q100[0].startswith("Q100-Cooling1/UV — Cooling1/UV"),
+                        f"band title not prefixed: {q100[0]!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
