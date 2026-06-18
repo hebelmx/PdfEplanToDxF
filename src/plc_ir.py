@@ -285,6 +285,67 @@ def build_s7300_project(
     return projects
 
 
+def build_s7300_single_project(
+    cfg_path: str,
+    asc_path: str | None = None,
+) -> PlcProject:
+    """Merge the S7-300 multi-project list into ONE single-station PlcProject.
+
+    Abel's LOCKED design renders the S7-300 as a SINGLE station whose I/O-card
+    folios are the local rack modules PLUS every PROFIBUS-DP drop module (the
+    5 ET200eco drops + the Festo CPX sub-modules), in ONE ordered sequence, with
+    ONE bornero and ONE BOM. This helper calls ``build_s7300_project`` and folds
+    its ordered list (local rack first, then DP drops by ascending DP address)
+    into a single ``PlcProject``:
+
+      * ``name``           = the local-rack station name ("S7300")
+      * ``source_vendor``  = "siemens"
+      * ``controller_cpu`` = carried from the projects (all share one CPU)
+      * ``modules``        = merged dict of every project's ``modules``
+      * ``io_mods``        = concatenation, order preserved (local then drops)
+      * ``points``         = concatenation
+      * ``skipped``        = concatenation
+      * ``network_nodes``  = [] (NET folio omitted for this core chunk)
+      * ``controller_tags``/``program_tags`` = {}
+
+    Module names are unique across drops (e.g. "Slot4 DI" vs "DP4 Slot2 DI"), so
+    the merge has no key collisions — that invariant is asserted. An empty build
+    (no/!cfg) degrades to a degenerate empty PlcProject; NEVER crashes, NEVER
+    invents. ADDITIVE seam — mirrors ``build_s7300_project``."""
+    projects = build_s7300_project(cfg_path, asc_path)
+    if not projects:
+        return PlcProject(name="S7300", source_vendor="siemens")
+
+    name = projects[0].name
+    controller_cpu = projects[0].controller_cpu
+
+    merged_modules: dict = {}
+    io_mods: list = []
+    points: list = []
+    skipped: list = []
+    for p in projects:
+        for key, mod in p.modules.items():
+            assert key not in merged_modules, (
+                f"S7-300 single-station merge: module key collision on {key!r}")
+            merged_modules[key] = mod
+        io_mods.extend(p.io_mods)
+        points.extend(p.points)
+        skipped.extend(p.skipped)
+
+    return PlcProject(
+        name=name,
+        source_vendor="siemens",
+        modules=merged_modules,
+        io_mods=io_mods,
+        points=points,
+        skipped=skipped,
+        controller_tags={},
+        program_tags={},
+        network_nodes=[],
+        controller_cpu=controller_cpu,
+    )
+
+
 def _owning_controller_cpu(network_nodes: list, io_mods: list) -> str | None:
     """Identify the CPU TYPE that owns this station from REAL .aml data.
 
