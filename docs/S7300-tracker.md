@@ -207,3 +207,13 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
   ground truth each step: suite →566→571 green; Rockwell BYTE-EQUIVALENT (re-run twice); wired floor
   held 214/42. Off-module = Drives 3 servos + Identification 3 (STleftrear/strightrear/unassigned).
   Next: S7300-3c (PROFIBUS+PROFINET topology folio).
+- 2026-06-18: **S7300-3c two-bus topology folio DONE @ `adbb9b2`** — RENDER PHASE COMPLETE.
+  `build_comm_buses(cfg)` (real data: PROFINET CPU PN-IO 192.168.30.190 + 2 cameras .197/.198 hex→
+  dotted; PROFIBUS-DP CPU DP2 + 9 slaves by DP address, no fake IP) + an additive `topology_buses`
+  param on `render_project` → `build_topology_buses_folio` ("Red de comunicaciones", order 2, 2 buses/
+  13 nodes). Parser gained camera IP/mask/device_name + dp_master_address. Verified from ground truth:
+  suite 571→**587** green; Rockwell BYTE-EQUIVALENT (re-run); E6/TIA NET folio UNCHANGED (still
+  "Red PROFINET"); render_plant untouched. **Full S7-300 set = 52 folios** (portada/símbología/red-
+  comunicaciones/índice/rack + 15 I/O cards + 19 bornero + 7 BOM + off-module 5 + changelog), wired
+  floor 214/42, 0 unresolved conductors. Next: render-phase adversarial review → final eyeball →
+  handoff + merge gate.
