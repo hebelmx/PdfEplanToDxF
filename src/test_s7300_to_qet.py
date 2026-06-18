@@ -284,13 +284,32 @@ class S7300OffmoduleSectionTest(unittest.TestCase):
 
     def test_section_present_drives_and_identification(self):
         root, _ = self._run()
-        import render_plant as rp
         off = self._off_diagrams(root)
         self.assertTrue(off, "no off-module folios rendered")
         titles = " | ".join(d.get("title") or "" for d in off)
-        self.assertIn(rp.OFFMODULE_SECTION_TITLE, titles)
         self.assertIn("Drives", titles)
         self.assertIn("Identification", titles)
+
+    def test_bus_aware_titles(self):
+        # FIX B: the S7-300 servos are PROFIBUS-DP, the cameras are PROFINET.
+        # Each function's off-module title carries its REAL bus word.
+        root, _ = self._run()
+        off = self._off_diagrams(root)
+        by_func = {"Drives": [], "Identification": []}
+        for d in off:
+            t = d.get("title") or ""
+            for func in by_func:
+                if f"· {func}" in t:
+                    by_func[func].append(t)
+        self.assertTrue(by_func["Drives"], "no Drives off-module folio")
+        self.assertTrue(by_func["Identification"],
+                        "no Identification off-module folio")
+        for t in by_func["Drives"]:
+            self.assertIn("PROFIBUS-DP", t)
+            self.assertNotIn("PROFINET", t)
+        for t in by_func["Identification"]:
+            self.assertIn("PROFINET", t)
+            self.assertNotIn("PROFIBUS", t)
 
     def test_off_folios_orders_between_bom_and_changelog(self):
         root, _ = self._run()
@@ -330,6 +349,60 @@ class S7300OffmoduleSectionTest(unittest.TestCase):
         self.assertIsNotNone(m, f"no points line:\n{err}")
         self.assertEqual(int(m.group(1)), 214)
         self.assertEqual(int(m.group(2)), 42)
+
+
+class OffmoduleBusLabelTest(unittest.TestCase):
+    """FIX B unit tests on render_plant.build_offmodule_section's `bus_labels`
+    param — no fixture needed. Default None reproduces the unchanged PROFINET
+    title (the E6/TIA plant path); a provided map titles each function with its
+    real bus."""
+
+    def _groups(self):
+        return [
+            ("Drives", [{"name": "S1", "addr_min": "%IW1",
+                         "addr_max": "%IW1", "tags": [("%IW1", "t", "")]}]),
+            ("Identification", [{"name": "C1", "addr_min": "%QW2",
+                                 "addr_max": "%QW2",
+                                 "tags": [("%QW2", "u", "")]}]),
+        ]
+
+    def _titles(self, bus_labels):
+        import xml.etree.ElementTree as ET
+        import render_plant as rp
+        project = ET.Element("project")
+        rp.build_offmodule_section(project, 1, self._groups(),
+                                   bus_labels=bus_labels)
+        return [d.get("title") or "" for d in project.findall("diagram")]
+
+    def test_default_none_path_is_unchanged_profinet(self):
+        import render_plant as rp
+        titles = self._titles(None)
+        self.assertTrue(titles)
+        # every title carries the unchanged section title (byte-for-byte the E6
+        # plant behaviour) — PROFINET for BOTH functions, no PROFIBUS.
+        for t in titles:
+            self.assertIn(rp.OFFMODULE_SECTION_TITLE, t)
+            self.assertNotIn("PROFIBUS", t)
+
+    def test_bus_labels_titles_per_function(self):
+        titles = self._titles({"Drives": "PROFIBUS-DP",
+                               "Identification": "PROFINET"})
+        drives = [t for t in titles if "· Drives" in t]
+        ident = [t for t in titles if "· Identification" in t]
+        self.assertTrue(drives and ident)
+        for t in drives:
+            self.assertIn("PROFIBUS-DP", t)
+            self.assertNotIn("PROFINET", t)
+        for t in ident:
+            self.assertIn("PROFINET", t)
+            self.assertNotIn("PROFIBUS", t)
+
+    def test_unknown_func_defaults_to_profinet(self):
+        titles = self._titles({"Drives": "PROFIBUS-DP"})  # Identification absent
+        ident = [t for t in titles if "· Identification" in t]
+        self.assertTrue(ident)
+        for t in ident:
+            self.assertIn("PROFINET", t)  # default bus word
 
 
 class RockwellByteEquivalenceTest(unittest.TestCase):

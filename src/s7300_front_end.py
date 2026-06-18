@@ -446,29 +446,71 @@ def _servo_element(dev: dict) -> Optional[dict]:
     }
 
 
-def _piw_clusters(piw_rows: List["A.AscSymbol"]) -> List[List["A.AscSymbol"]]:
-    """Partition the ``.asc`` PIW rows into contiguous address CLUSTERS.
+# The four .asc PIW telegram words are NAMED but carry NO address link to either
+# camera (the cameras' real I/O is their .cfg IOSUBSYSTEM slots, a DIFFERENT
+# address space). We surface them as ONE unassigned element under Identification
+# rather than fabricate a camera↔PIW link we cannot prove.
+OFFMODULE_UNASSIGNED_TELEGRAMS_NAME = "Cámaras — telegramas (sin asignar)"
 
-    The S7-300 fixture's PIW rows sit in two tight clusters (372/374 and
-    736/738). They are PROCESS-IMAGE peripheral word addresses the programmer
-    chose, NOT the camera IOADDRESS bytes the ``.cfg`` records (1146.. / 1300..),
-    so a literal 'PIW address inside the camera's .cfg byte range' test matches
-    NOTHING. The faithful, deterministic link is by ORDER: ascending PIW clusters
-    map to the cameras in ascending IOADDRESS order (lower cluster -> first
-    camera). A 'cluster' is a run of rows whose word addresses are within
-    ``gap`` of each other. NEVER invents an address — only groups real rows."""
-    rows = sorted((s for s in piw_rows
+
+def _word_range_addr(area_letter: str, start_byte: int, length_bytes: int) -> str:
+    """A faithful Siemens WORD-range address string for a real ``.cfg`` slot:
+    ``%{area}W{start}..%{area}W{start+len-1}`` (collapses to a single
+    ``%{area}W{start}`` when ``len`` <= 1). ``area_letter`` is 'I' (input) or
+    'Q' (output) — the REAL direction of the slot's address block. NEVER
+    invents — every number is the slot's parsed start byte + length."""
+    if length_bytes and length_bytes > 1:
+        return (f"%{area_letter}W{start_byte}.."
+                f"%{area_letter}W{start_byte + length_bytes - 1}")
+    return f"%{area_letter}W{start_byte}"
+
+
+def _camera_slot_tags(cfg: "C.CfgData", io_address: int) -> List[Tuple]:
+    """The DATA-LINKED ``.cfg`` IOSUBSYSTEM slot tags for the camera at
+    ``io_address`` — the camera's REAL I/O.
+
+    One tag per slot that carries a real WIRED range (an address block whose
+    ``length_bytes`` > 0): ``(word_range_addr, slot_name, "")`` using the slot's
+    real start byte + length and real name (e.g. ``("%QW1148..%QW1159",
+    "Command Control", "")``). PLUS any inline ``.cfg`` ``SYMBOL`` rows on the
+    camera at their real ``%I/%Q{byte}.{bit}`` bit address + real comment (e.g.
+    ``("%Q1301.0", "trigger", "")``).
+
+    The head / interface / port slots carry a high diagnostic-style address with
+    ``length_bytes == 0`` (no wired I/O) so they are skipped — never drawn as a
+    fake range. NEVER invents: every address/name/comment is parser data."""
+    tags: List[Tuple] = []
+    for dev in cfg.io_devices:
+        if dev.io_address != io_address:
+            continue
+        for blk in (dev.in_addr, dev.out_addr):
+            if not blk:
+                continue
+            area = "I" if blk.direction == "in" else "Q"
+            # (a) the slot itself, when it carries a real wired range
+            if blk.length_bytes and blk.length_bytes > 0:
+                # the device head/interface/port sub-records share the camera
+                # name; a real I/O slot has its own slot name (e.g. "Command
+                # Control") on the SLOT record. dev.name is the slot name here.
+                tags.append((_word_range_addr(area, blk.start_byte,
+                                              blk.length_bytes),
+                             dev.name, ""))
+            # (b) inline SYMBOL rows on the slot (real bit address + comment)
+            for sym in blk.symbols:
+                raw = f"%{area}{blk.start_byte + sym.ch // 8}.{sym.ch % 8}"
+                tags.append((raw, sym.name, sym.comment or ""))
+    return tags
+
+
+def _unassigned_telegram_tags(asc: Optional[List["A.AscSymbol"]]) -> List[Tuple]:
+    """The four ``.asc`` PIW telegram words as faithful ``(%PIW{addr}, name,
+    comment)`` tags, in ascending address order. These are NAMED but NOT
+    address-linked to either camera, so they live in their own unassigned
+    element — never fabricated onto a specific camera. NEVER invents."""
+    rows = sorted((s for s in (asc or [])
                    if s.area == "PIW" and s.addr.isdigit()),
                   key=lambda s: int(s.addr))
-    clusters: List[List["A.AscSymbol"]] = []
-    gap = 64  # words: 372..374 and 736..738 are far apart (>>64) -> 2 clusters
-    for s in rows:
-        w = int(s.addr)
-        if clusters and w - int(clusters[-1][-1].addr) <= gap:
-            clusters[-1].append(s)
-        else:
-            clusters.append([s])
-    return clusters
+    return [(f"%{s.area}{s.addr}", s.name, s.comment or "") for s in rows]
 
 
 def build_offmodule_groups_s7300(cfg: "C.CfgData",
@@ -480,15 +522,18 @@ def build_offmodule_groups_s7300(cfg: "C.CfgData",
     ``{"name", "addr_min", "addr_max", "tags": [(raw_addr, name, desc), ...]}``.
 
     Drives = the CMMP-AS servos (one telegram tag per range; no channel names
-    invented). Identification = the Keyence PROFINET cameras: each camera's tags
-    are the REAL symbols that belong to it — (a) its ``.asc`` PIW rows (joined by
-    address cluster, see :func:`_piw_clusters` — the .cfg byte ranges and .asc
-    PIW addresses are different address spaces, so the link is by order, NOT a
-    range-containment test) AND (b) the camera's inline ``.cfg`` ``SYMBOL O`` rows
-    at their real ``%Q{byte}.{bit}`` address with the real comment.
+    invented). Identification = the Keyence PROFINET cameras, FAITHFUL (never
+    invents a camera↔PIW link the data does not contain):
+      * one element per camera, identified by its REAL ``.cfg`` name; its tags
+        are the camera's DATA-LINKED ``.cfg`` IOSUBSYSTEM slots (real word-range
+        address + slot name) PLUS any inline ``.cfg`` ``SYMBOL`` rows (real bit
+        address + comment). See :func:`_camera_slot_tags`.
+      * ONE separate ``"Cámaras — telegramas (sin asignar)"`` element carrying
+        the four ``.asc`` PIW telegram words (named, but NOT address-linked to a
+        specific camera — so never assigned to one).
 
-    PURE over the parsed inputs; NEVER invents (a device/range with no symbol
-    still carries a faithful real-address tag, no fabricated names)."""
+    PURE over the parsed inputs; NEVER invents (a camera with no wired slot still
+    carries a faithful real-range tag, no fabricated names)."""
     devices = offmodule_devices(cfg)
     servos = [d for d in devices if d.get("kind") == "servo"]
     cameras = [d for d in devices if d.get("kind") == "camera"]
@@ -501,32 +546,13 @@ def build_offmodule_groups_s7300(cfg: "C.CfgData",
             drive_elements.append(el)
 
     # ── Identification ─────────────────────────────────────────────────────
-    # PIW clusters (real .asc rows) -> cameras in IOADDRESS order. Inline .cfg
-    # SYMBOL O rows -> their own camera (by io_address). Both faithful.
-    piw_clusters = _piw_clusters(asc or [])
-    # map io_address -> the camera's inline SYMBOL rows (real %Q address + comment)
-    inline_by_ioaddr: dict = {}
-    for dev in cfg.io_devices:
-        for blk in (dev.in_addr, dev.out_addr):
-            if not blk or not blk.symbols:
-                continue
-            area = "I" if blk.direction == "in" else "Q"
-            for sym in blk.symbols:
-                raw = f"%{area}{blk.start_byte + sym.ch // 8}.{sym.ch % 8}"
-                inline_by_ioaddr.setdefault(dev.io_address, []).append(
-                    (raw, sym.name, sym.comment or ""))
-
+    # Each camera carries its OWN data-linked .cfg slots (the real I/O). The 4
+    # .asc PIW words are unassigned (no camera link in the data) -> own element.
     ident_elements = []
-    for i, dev in enumerate(cameras):
-        tags: List[Tuple] = []
-        # (a) the PIW cluster for THIS camera (by order), if present
-        if i < len(piw_clusters):
-            for s in piw_clusters[i]:
-                tags.append((f"%{s.area}{s.addr}", s.name, s.comment or ""))
-        # (b) this camera's inline SYMBOL O rows (real addresses)
-        tags.extend(inline_by_ioaddr.get(dev.get("address"), []))
+    for dev in cameras:
+        tags = _camera_slot_tags(cfg, dev.get("address"))
         if not tags:
-            # never invent: a camera with no joined symbol still gets a faithful
+            # never invent: a camera with no wired slot still gets a faithful
             # range tag from its real .cfg ranges so it is represented, not dropped
             ranges = dev.get("ranges") or []
             for (d, st, ln) in ranges:
@@ -537,6 +563,17 @@ def build_offmodule_groups_s7300(cfg: "C.CfgData",
             "addr_min": addrs[0] if addrs else "",
             "addr_max": addrs[-1] if addrs else "",
             "tags": tags,
+        })
+
+    # the unassigned .asc PIW telegram words (NEVER linked to a specific camera)
+    unassigned_tags = _unassigned_telegram_tags(asc)
+    if unassigned_tags:
+        addrs = [t[0] for t in unassigned_tags]
+        ident_elements.append({
+            "name": OFFMODULE_UNASSIGNED_TELEGRAMS_NAME,
+            "addr_min": addrs[0],
+            "addr_max": addrs[-1],
+            "tags": unassigned_tags,
         })
 
     groups = []

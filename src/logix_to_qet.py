@@ -3112,7 +3112,8 @@ def main(argv=None):
 
 def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
                    wire_scheme="address", emit_vendor_folios=True,
-                   power_config=None, offmodule_groups=None):
+                   power_config=None, offmodule_groups=None,
+                   offmodule_bus_labels=None):
     """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
     write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
     and the Siemens command (tia_to_qet); the only difference between vendors is
@@ -3329,7 +3330,8 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     if offmodule_groups:
         import render_plant
         offmodule_folios, offmodule_layout = render_plant.build_offmodule_section(
-            project, SECTION_OFFMODULE, offmodule_groups)
+            project, SECTION_OFFMODULE, offmodule_groups,
+            bus_labels=offmodule_bus_labels)
     # IDX (Siemens, Story 2.2): drawing index / table of contents. Built LAST so
     # it enumerates EVERY folio already on the project (including its own entry at
     # SECTION_INDEX). Siemens-only — the Rockwell path never reaches here. The

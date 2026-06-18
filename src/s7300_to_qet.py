@@ -111,6 +111,11 @@ def main(argv=None):
         stem = _safe_stem(project_ir.name) or Path(args.cfg).stem
         out_path = str(folder / f"{stem}.qet")
 
+    # Bus-aware off-module titles: for the S7-300 the servos are PROFIBUS-DP and
+    # the cameras are PROFINET, so title each function with its real bus (the
+    # default None path keeps the E6/TIA plant titles unchanged at "PROFINET").
+    offmodule_bus_labels = {"Drives": "PROFIBUS-DP", "Identification": "PROFINET"}
+
     return logix_to_qet.render_project(
         project_ir, out_path,
         no_symbols=args.no_symbols,
@@ -118,6 +123,7 @@ def main(argv=None):
         emit_vendor_folios=False,
         power_config=None,
         offmodule_groups=offmodule_groups,
+        offmodule_bus_labels=offmodule_bus_labels,
     )
 
 

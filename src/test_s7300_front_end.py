@@ -503,47 +503,74 @@ class TestOffmoduleGroups(unittest.TestCase):
                 # a REAL word-range address span, nothing invented
                 self.assertRegex(raw, r"^%[IQ]W\d+")
 
-    def test_identification_two_camera_elements(self):
+    def test_identification_three_elements_two_cameras_plus_unassigned(self):
+        # FIX A (faithful): 2 cameras (each carrying its OWN .cfg slots) PLUS one
+        # separate "unassigned telegrams" element for the 4 .asc PIW words. The
+        # PIW words are NEVER assigned to a specific camera (no data link).
         ident = self._func("Identification")
-        self.assertEqual(len(ident), 2)
+        self.assertEqual(len(ident), 3)
         self.assertEqual([e["name"] for e in ident],
-                         ["STleftrear", "strightrear"])
+                         ["STleftrear", "strightrear",
+                          F.OFFMODULE_UNASSIGNED_TELEGRAMS_NAME])
 
-    def test_camera_pi_w_rows_join_correct_camera(self):
+    def test_camera_tags_are_real_cfg_slots(self):
+        # FIX A: each camera's tags are its DATA-LINKED .cfg IOSUBSYSTEM slots
+        # (real word-range address + real slot name), NOT a guessed PIW link.
         ident = {e["name"]: e for e in self._func("Identification")}
         left = {raw: name for raw, name, _ in ident["STleftrear"]["tags"]}
-        right = {raw: name for raw, name, _ in ident["strightrear"]["tags"]}
-        # STleftrear carries the LOWER PIW cluster (372/374); strightrear the
-        # HIGHER cluster (736/738) — the real .asc rows joined by address cluster.
-        self.assertEqual(left.get("%PIW372"), "Camera_Result")
-        self.assertEqual(left.get("%PIW374"), "currrent_job_numb")
-        self.assertEqual(right.get("%PIW736"), "Job Status")
-        self.assertEqual(right.get("%PIW738"), "Job Number")
-        # cross-check: Camera_Result is NOT on strightrear
-        self.assertNotIn("%PIW372", right)
+        # STleftrear's real slots: Command Control is an OUTPUT @ byte 1148 len 12
+        # -> %QW1148..%QW1159 (faithful direction + real byte span).
+        self.assertEqual(left.get("%QW1148..%QW1159"), "Command Control")
+        # input slots at their real bytes (Command Status Bits @ 1146 len 4)
+        self.assertEqual(left.get("%IW1146..%IW1149"), "Command Status Bits")
+        self.assertEqual(left.get("%IW1150..%IW1153"), "Device Result Bits")
+        self.assertEqual(left.get("%IW1200..%IW1215"), "Device Status Words")
+        # NEVER invent: no PIW telegram word is attached to a camera
+        for raw in left:
+            self.assertNotIn("PIW", raw)
 
-    def test_camera_inline_cfg_symbols_present(self):
+    def test_strightrear_inline_cfg_symbols_present(self):
+        # FIX A: strightrear's inline .cfg SYMBOL O rows at their real %Q address.
         ident = {e["name"]: e for e in self._func("Identification")}
         right = {raw: name for raw, name, _ in ident["strightrear"]["tags"]}
-        # the inline .cfg SYMBOL O rows on strightrear (ioaddr 2), real %Q address
         self.assertEqual(right.get("%Q1300.0"), "Np")
         self.assertEqual(right.get("%Q1301.0"), "trigger")
         self.assertEqual(right.get("%Q1302.0"), "Reset_Camaras")
+        # and its real slot ranges too (e.g. Result Data 128Byte @ 1312 len 128)
+        names = {name for _, name, _ in ident["strightrear"]["tags"]}
+        self.assertIn("Result Data 128Byte", names)
+        # NEVER invent: no PIW telegram word attached to this camera either
+        for raw in right:
+            self.assertNotIn("PIW", raw)
 
-    def test_never_invent_no_asc_servos_still_have_ranges(self):
-        # Without the .asc the cameras lose their PIW rows but the servos are
-        # unaffected (telegram ranges come from the .cfg) and NOTHING is invented:
-        # a camera with no joined symbol falls back to its faithful .cfg ranges.
+    def test_unassigned_telegrams_carry_the_four_piw_words(self):
+        # FIX A (never-invent): the 4 .asc PIW words live in their OWN element,
+        # not on any camera; faithful name + address, ascending order.
+        ident = {e["name"]: e for e in self._func("Identification")}
+        unassigned = ident[F.OFFMODULE_UNASSIGNED_TELEGRAMS_NAME]
+        tags = {raw: name for raw, name, _ in unassigned["tags"]}
+        self.assertEqual(len(unassigned["tags"]), 4)
+        self.assertEqual(tags.get("%PIW372"), "Camera_Result")
+        self.assertEqual(tags.get("%PIW374"), "currrent_job_numb")
+        self.assertEqual(tags.get("%PIW736"), "Job Status")
+        self.assertEqual(tags.get("%PIW738"), "Job Number")
+        # this element is NOT a camera (its name is the unassigned label)
+        self.assertNotIn(unassigned["name"], ("STleftrear", "strightrear"))
+
+    def test_never_invent_no_asc_cameras_keep_cfg_slots(self):
+        # Without the .asc the unassigned-telegrams element disappears (no PIW
+        # rows to carry) but the cameras keep their .cfg slot tags and the servos
+        # are unaffected. NOTHING is invented.
         groups = F.build_offmodule_groups_s7300(self.cfg, [])
         funcs = dict(groups)
         self.assertEqual(len(funcs["Drives"]), 3)
         for e in funcs["Drives"]:
             self.assertTrue(e["tags"])
-        # cameras still present (the strightrear inline SYMBOL O rows survive;
-        # STleftrear has no inline rows -> faithful .cfg range tags, not dropped)
         ident = {e["name"]: e for e in funcs["Identification"]}
-        self.assertIn("STleftrear", ident)
-        self.assertTrue(ident["STleftrear"]["tags"])  # never empty/nameless
+        # only the two cameras now (no unassigned-telegrams element without .asc)
+        self.assertEqual(set(ident), {"STleftrear", "strightrear"})
+        self.assertTrue(ident["STleftrear"]["tags"])  # real .cfg slots, not empty
+        self.assertTrue(ident["strightrear"]["tags"])
 
     def test_empty_inputs_yield_empty_groups(self):
         empty = C.parse_cfg("/no/such/file.cfg") \
