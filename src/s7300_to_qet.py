@@ -16,11 +16,11 @@ DP drops + 1 Festo CPX drop) is MERGED into ONE PlcProject and rendered as a
 single station — its I/O-card folios are the local modules (DI32×2, DO32×2, AI8)
 PLUS every DP-drop module, in one sequence, with ONE bornero and ONE BOM.
 
-Folio scope (CORE only for this chunk): cover (portada), símbología, índice,
-rack, the per-card I/O folios (all 256 channels incl. RESERVA), bornero, BOM
-(summary) and changelog, with the ISO 7200 title block. It GRACEFULLY OMITS the
-off-module section (servos + cameras) and the network/topology folio — those are
-later chunks; ``network_nodes`` stays empty so the NET folio is omitted.
+Folio scope: cover (portada), símbología, índice, rack, the per-card I/O folios
+(all 256 channels incl. RESERVA), bornero, BOM (summary), the OFF-MODULE section
+(servos + PROFINET cameras NOT on an I/O card — S7300-3b) and changelog, with the
+ISO 7200 title block. The network/topology folio is a later chunk;
+``network_nodes`` stays empty so the NET folio is omitted.
 
 STANDARD LIBRARY ONLY.
 """
@@ -89,6 +89,19 @@ def main(argv=None):
     # non-empty (kept empty here so it is omitted gracefully).
     project_ir = plc_ir.build_s7300_single_project(args.cfg, asc_path)
 
+    # Off-module section (servos + PROFINET cameras NOT on a Siemens I/O card):
+    # parse the cfg/asc once more for the device-level data and adapt it into the
+    # render_plant `groups` shape, so render_project draws the by-function section
+    # (Drives + Identification) AFTER the core folios. Reuses the E6 renderer. When
+    # there are no off-module devices the helper returns [] and the section is
+    # gated OFF (never an empty section). NEVER invents.
+    import s7300_cfg as _C
+    import s7300_asc as _A
+    import s7300_front_end as _FE
+    _cfg = _C.parse_cfg(args.cfg)
+    _asc = _A.parse_asc(asc_path) if asc_path else []
+    offmodule_groups = _FE.build_offmodule_groups_s7300(_cfg, _asc)
+
     # default output: <cfg-dir>/<station>.qet (station name from the IR; fall
     # back to the cfg file stem when the station name is empty/unsafe).
     if args.output:
@@ -104,6 +117,7 @@ def main(argv=None):
         wire_scheme=args.wire_scheme,
         emit_vendor_folios=False,
         power_config=None,
+        offmodule_groups=offmodule_groups,
     )
 
 

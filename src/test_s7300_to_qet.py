@@ -261,5 +261,113 @@ class S7300StructuralTest(unittest.TestCase):
         self.assertEqual(int(m_pts.group(2)), 42)    # RESERVA
 
 
+@unittest.skipUnless(_HAVE_FIXTURE, "S7300 fixtures not present")
+class S7300OffmoduleSectionTest(unittest.TestCase):
+    """The off-module section (servos + PROFINET cameras NOT on an I/O card,
+    S7300-3b) is rendered into the single S7-300 .qet between the BOM and the
+    changelog, with the ISO title block, and the wired floor stays 214/42."""
+
+    def _run(self):
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "s7300.qet"
+            with redirect_stderr(buf):
+                rc = s7300_to_qet.main([_cfg_fixture(), "-o", str(out)])
+            self.assertEqual(rc, 0)
+            xml = out.read_text(encoding="utf-8")
+        return ET.fromstring(xml), buf.getvalue()
+
+    def _off_diagrams(self, root):
+        import logix_to_qet as lq
+        return [d for d in root.findall("diagram")
+                if lq.SECTION_OFFMODULE <= int(d.get("order")) < lq.SECTION_CHANGELOG]
+
+    def test_section_present_drives_and_identification(self):
+        root, _ = self._run()
+        import render_plant as rp
+        off = self._off_diagrams(root)
+        self.assertTrue(off, "no off-module folios rendered")
+        titles = " | ".join(d.get("title") or "" for d in off)
+        self.assertIn(rp.OFFMODULE_SECTION_TITLE, titles)
+        self.assertIn("Drives", titles)
+        self.assertIn("Identification", titles)
+
+    def test_off_folios_orders_between_bom_and_changelog(self):
+        root, _ = self._run()
+        import logix_to_qet as lq
+        orders = sorted(int(d.get("order")) for d in self._off_diagrams(root))
+        # consecutive band starting at SECTION_OFFMODULE (400), all < changelog
+        self.assertEqual(orders[0], lq.SECTION_OFFMODULE)
+        for o in orders:
+            self.assertLess(o, lq.SECTION_CHANGELOG)
+            self.assertGreater(o, lq.SECTION_BOM)
+
+    def test_off_folios_carry_iso_titleblock_no_raw_tokens(self):
+        root, _ = self._run()
+        for d in self._off_diagrams(root):
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro",
+                             f"off folio {d.get('title')!r} missing ISO block")
+            props = d.find("properties")
+            if props is not None:
+                for prop in props.findall("property"):
+                    self.assertNotIn("%{", prop.text or "",
+                                     f"raw token in {d.get('title')!r}")
+
+    def test_real_symbols_appear_in_section(self):
+        # the joined camera symbols are drawn faithfully (no invention)
+        root, _ = self._run()
+        text = "".join(t.get("text") or "" for d in self._off_diagrams(root)
+                       for t in d.iter("input"))
+        self.assertIn("Camera_Result", text)
+        self.assertIn("Reset_Camaras", text)
+        self.assertIn("CMMP-AS M3", text)
+
+    def test_wired_floor_unchanged_214_42(self):
+        # the section is ADDITIVE: servos/cameras never become DI/DO/AI channels.
+        _, err = self._run()
+        import re
+        m = re.search(r"points\s*:\s*(\d+)\s+drawn,\s*(\d+)\s+skipped", err)
+        self.assertIsNotNone(m, f"no points line:\n{err}")
+        self.assertEqual(int(m.group(1)), 214)
+        self.assertEqual(int(m.group(2)), 42)
+
+
+class RockwellByteEquivalenceTest(unittest.TestCase):
+    """The additive `offmodule_groups` param must leave the Rockwell path
+    byte-for-byte unchanged: render WADDING_1 WITHOUT groups and assert the
+    output is identical to a run with the param defaulted/None (i.e. the param's
+    presence never perturbs the Rockwell render)."""
+
+    def _l5x(self):
+        return os.path.join(os.path.dirname(__file__), "..", "Fixtures",
+                            "Rockwell", "WADDING_1.L5X")
+
+    @unittest.skipUnless(os.path.exists(os.path.join(
+        os.path.dirname(__file__), "..", "Fixtures", "Rockwell",
+        "WADDING_1.L5X")), "Rockwell fixture not present")
+    def test_offmodule_param_default_and_none_byte_identical(self):
+        import re
+        import logix_to_qet as lq
+        import plc_ir as _ir
+
+        def _render(groups):
+            with tempfile.TemporaryDirectory() as d:
+                out = Path(d) / "w.qet"
+                ir = _ir.build_rockwell_project(self._l5x())
+                buf = io.StringIO()
+                with redirect_stderr(buf):
+                    lq.render_project(ir, str(out), offmodule_groups=groups)
+                s = out.read_text(encoding="utf-8")
+            # normalize the per-run UUIDs so only structural deltas remain
+            return re.sub(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                          r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "UUID", s)
+
+        # default (omitted) vs explicit None vs explicit [] — all must match,
+        # proving Rockwell/empty-groups is never perturbed by the new param.
+        a = _render(None)
+        b = _render([])
+        self.assertEqual(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

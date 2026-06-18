@@ -398,3 +398,150 @@ def offmodule_devices(cfg: "C.CfgData") -> List[dict]:
         out.append(cams[ioaddr])
 
     return out
+
+
+# --------------------------------------------------------------------------
+# Off-module SECTION groups (adapt the devices into render_plant's `groups`
+# shape so build_offmodule_section can draw them) — REUSES the E6 renderer.
+# --------------------------------------------------------------------------
+# Reuse the EXACT function labels the TIA off-module path uses, so the S7-300
+# section reads identically. Only Drives + Identification have S7-300 devices
+# (servos / cameras); Coordination/Safety has none and is omitted.
+OFFMODULE_FUNC_DRIVES = "Drives"
+OFFMODULE_FUNC_IDENT = "Identification"
+
+
+def _servo_range_tag(direction: str, start_byte: int, length_bytes: int) -> Tuple:
+    """One faithful telegram-range tag for a servo range ``(dir, start, len)``.
+
+    Servos carry NO per-channel symbols, so we never invent a channel name: the
+    tag's "address" is the REAL byte span as a Siemens word range
+    (``%IW{start}..%IW{start+len-1}`` for inputs, ``%QW…`` for outputs — when
+    ``len`` is 1 the span collapses to a single ``%IW{start}``); the tag's name
+    is the real telegram label ('FHPP telegram', the CMMP-AS profile); the
+    description is "" (none in the source). NEVER invents."""
+    letter = "IW" if direction == "in" else "QW"
+    if length_bytes and length_bytes > 1:
+        addr = f"%{letter}{start_byte}..%{letter}{start_byte + length_bytes - 1}"
+    else:
+        addr = f"%{letter}{start_byte}"
+    return (addr, "FHPP telegram", "")
+
+
+def _servo_element(dev: dict) -> Optional[dict]:
+    """Adapt one servo device dict into a `groups` element. ``name`` is a faithful
+    identity ('CMMP-AS M3 (DP16)'); one telegram tag per range; addr_min/addr_max
+    span the ranges. Returns None when the servo has no ranges (never an empty,
+    nameless box). NEVER invents."""
+    ranges = dev.get("ranges") or []
+    if not ranges:
+        return None
+    tags = [_servo_range_tag(d, s, l) for (d, s, l) in ranges]
+    addrs = [t[0] for t in tags]
+    return {
+        "name": f"{dev.get('type', '')} (DP{dev.get('address')})".strip(),
+        "addr_min": addrs[0],
+        "addr_max": addrs[-1],
+        "tags": tags,
+    }
+
+
+def _piw_clusters(piw_rows: List["A.AscSymbol"]) -> List[List["A.AscSymbol"]]:
+    """Partition the ``.asc`` PIW rows into contiguous address CLUSTERS.
+
+    The S7-300 fixture's PIW rows sit in two tight clusters (372/374 and
+    736/738). They are PROCESS-IMAGE peripheral word addresses the programmer
+    chose, NOT the camera IOADDRESS bytes the ``.cfg`` records (1146.. / 1300..),
+    so a literal 'PIW address inside the camera's .cfg byte range' test matches
+    NOTHING. The faithful, deterministic link is by ORDER: ascending PIW clusters
+    map to the cameras in ascending IOADDRESS order (lower cluster -> first
+    camera). A 'cluster' is a run of rows whose word addresses are within
+    ``gap`` of each other. NEVER invents an address — only groups real rows."""
+    rows = sorted((s for s in piw_rows
+                   if s.area == "PIW" and s.addr.isdigit()),
+                  key=lambda s: int(s.addr))
+    clusters: List[List["A.AscSymbol"]] = []
+    gap = 64  # words: 372..374 and 736..738 are far apart (>>64) -> 2 clusters
+    for s in rows:
+        w = int(s.addr)
+        if clusters and w - int(clusters[-1][-1].addr) <= gap:
+            clusters[-1].append(s)
+        else:
+            clusters.append([s])
+    return clusters
+
+
+def build_offmodule_groups_s7300(cfg: "C.CfgData",
+                                 asc: Optional[List["A.AscSymbol"]] = None):
+    """Adapt the S7-300 NON-channel devices into render_plant's off-module
+    ``groups`` shape: an ordered ``list[(func, element_list)]`` (Drives then
+    Identification, matching ``OFFMODULE_FUNCTIONS``; a function with no element
+    is OMITTED — never an empty section). Each element is
+    ``{"name", "addr_min", "addr_max", "tags": [(raw_addr, name, desc), ...]}``.
+
+    Drives = the CMMP-AS servos (one telegram tag per range; no channel names
+    invented). Identification = the Keyence PROFINET cameras: each camera's tags
+    are the REAL symbols that belong to it — (a) its ``.asc`` PIW rows (joined by
+    address cluster, see :func:`_piw_clusters` — the .cfg byte ranges and .asc
+    PIW addresses are different address spaces, so the link is by order, NOT a
+    range-containment test) AND (b) the camera's inline ``.cfg`` ``SYMBOL O`` rows
+    at their real ``%Q{byte}.{bit}`` address with the real comment.
+
+    PURE over the parsed inputs; NEVER invents (a device/range with no symbol
+    still carries a faithful real-address tag, no fabricated names)."""
+    devices = offmodule_devices(cfg)
+    servos = [d for d in devices if d.get("kind") == "servo"]
+    cameras = [d for d in devices if d.get("kind") == "camera"]
+
+    # ── Drives ───────────────────────────────────────────────────────────────
+    drive_elements = []
+    for dev in servos:
+        el = _servo_element(dev)
+        if el is not None:
+            drive_elements.append(el)
+
+    # ── Identification ─────────────────────────────────────────────────────
+    # PIW clusters (real .asc rows) -> cameras in IOADDRESS order. Inline .cfg
+    # SYMBOL O rows -> their own camera (by io_address). Both faithful.
+    piw_clusters = _piw_clusters(asc or [])
+    # map io_address -> the camera's inline SYMBOL rows (real %Q address + comment)
+    inline_by_ioaddr: dict = {}
+    for dev in cfg.io_devices:
+        for blk in (dev.in_addr, dev.out_addr):
+            if not blk or not blk.symbols:
+                continue
+            area = "I" if blk.direction == "in" else "Q"
+            for sym in blk.symbols:
+                raw = f"%{area}{blk.start_byte + sym.ch // 8}.{sym.ch % 8}"
+                inline_by_ioaddr.setdefault(dev.io_address, []).append(
+                    (raw, sym.name, sym.comment or ""))
+
+    ident_elements = []
+    for i, dev in enumerate(cameras):
+        tags: List[Tuple] = []
+        # (a) the PIW cluster for THIS camera (by order), if present
+        if i < len(piw_clusters):
+            for s in piw_clusters[i]:
+                tags.append((f"%{s.area}{s.addr}", s.name, s.comment or ""))
+        # (b) this camera's inline SYMBOL O rows (real addresses)
+        tags.extend(inline_by_ioaddr.get(dev.get("address"), []))
+        if not tags:
+            # never invent: a camera with no joined symbol still gets a faithful
+            # range tag from its real .cfg ranges so it is represented, not dropped
+            ranges = dev.get("ranges") or []
+            for (d, st, ln) in ranges:
+                tags.append(_servo_range_tag(d, st, ln))
+        addrs = [t[0] for t in tags]
+        ident_elements.append({
+            "name": dev.get("type", "") or f"camera{dev.get('address')}",
+            "addr_min": addrs[0] if addrs else "",
+            "addr_max": addrs[-1] if addrs else "",
+            "tags": tags,
+        })
+
+    groups = []
+    if drive_elements:
+        groups.append((OFFMODULE_FUNC_DRIVES, drive_elements))
+    if ident_elements:
+        groups.append((OFFMODULE_FUNC_IDENT, ident_elements))
+    return groups

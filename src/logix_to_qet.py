@@ -2979,6 +2979,8 @@ SECTION_SUPPLY = 100       # 'Alimentación' rail folio
 SECTION_DRAWINGS = 101     # card drawings: 101 .. 101+N-1 (designation prefix)
 SECTION_BORNERO = 200      # terminal-strip (bornero) folios, grouped
 SECTION_BOM = 300          # BOM / device-index summary folios
+SECTION_OFFMODULE = 400    # off-module section (servos + cameras), between BOM
+#                            and changelog; ADDITIVE, gated on offmodule_groups
 SECTION_CHANGELOG = 900    # revision-history folio, LAST
 
 
@@ -3110,7 +3112,7 @@ def main(argv=None):
 
 def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
                    wire_scheme="address", emit_vendor_folios=True,
-                   power_config=None):
+                   power_config=None, offmodule_groups=None):
     """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
     write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
     and the Siemens command (tia_to_qet); the only difference between vendors is
@@ -3122,6 +3124,14 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     Rockwell-only data that would be INVENTED for a Siemens panel. The Siemens
     command passes emit_vendor_folios=False; it is also auto-forced off for any
     non-rockwell IR (belt and suspenders), so the Rockwell path is untouched.
+
+    `offmodule_groups` (default None) is an ADDITIVE, GATED hook mirroring
+    render_plant's parameter: when truthy it is a render_plant-shaped
+    ``list[(func, element_list)]`` of off-module devices (servos / cameras NOT on
+    an I/O card), and render_project appends the SAME off-module section
+    render_plant draws (summary table + per-element boxes) between the BOM and the
+    changelog, at SECTION_OFFMODULE. When None/empty (the Rockwell path NEVER
+    passes it) NOTHING is appended and the document is byte-for-byte unchanged.
 
     Returns 0. `include_hmi` is accepted for signature symmetry with the front
     ends (the IR is already built when this is called, so it has no effect here).
@@ -3306,6 +3316,20 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # carries a traceability sheet.
     revisions = normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = build_changelog_folios(project, SECTION_CHANGELOG, revisions)
+    # OFF-MODULE section (S7300-3b): ADDITIVE, gated on `offmodule_groups`. The
+    # Siemens S7-300 command passes the servos + PROFINET cameras (devices NOT on
+    # an I/O card) so the drawing set represents ALL the I/O; reuses the SAME
+    # builder render_plant uses (import is LAZY to avoid a module-level import
+    # cycle — render_plant imports this module). Sits between the BOM (300) and the
+    # changelog (900) at SECTION_OFFMODULE (400); built BEFORE the índice so the
+    # índice enumerates it. Rockwell never passes groups => nothing appended =>
+    # byte-equivalent.
+    offmodule_folios = 0
+    offmodule_layout: list = []
+    if offmodule_groups:
+        import render_plant
+        offmodule_folios, offmodule_layout = render_plant.build_offmodule_section(
+            project, SECTION_OFFMODULE, offmodule_groups)
     # IDX (Siemens, Story 2.2): drawing index / table of contents. Built LAST so
     # it enumerates EVERY folio already on the project (including its own entry at
     # SECTION_INDEX). Siemens-only — the Rockwell path never reaches here. The
@@ -3406,6 +3430,11 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     if is_siemens:
         print(f"alim       : {power_folios} '{POWER_TITLE}' one-line folio "
               f"(order {SECTION_ALIM})", file=err)
+    if offmodule_folios:
+        n_off = sum(e["n_elements"] for e in offmodule_layout)
+        funcs = ", ".join(f"{e['func']} {e['n_elements']}" for e in offmodule_layout)
+        print(f"off-módulo : {offmodule_folios} folio(s) (order "
+              f"{SECTION_OFFMODULE}..), {n_off} element(s) [{funcs}]", file=err)
     if index_folios:
         print(f"índice     : {index_folios} '{INDEX_TITLE}' folio(s) "
               f"(order {SECTION_INDEX})", file=err)

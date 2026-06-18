@@ -460,5 +460,100 @@ class TestSeam(unittest.TestCase):
         self.assertEqual(len(ai_points), 0)  # no asc -> AI8 all RESERVA
 
 
+@unittest.skipUnless(_HAVE_FIXTURE, "S7300 fixtures not present")
+class TestOffmoduleGroups(unittest.TestCase):
+    """build_offmodule_groups_s7300 adapts the NON-channel devices (servos +
+    PROFINET cameras) into render_plant's `groups` shape — faithfully, never
+    inventing. Drives = 3 CMMP-AS servos; Identification = 2 Keyence cameras
+    carrying their REAL .asc PIW rows + inline .cfg SYMBOL O rows."""
+
+    @classmethod
+    def setUpClass(cls):
+        import s7300_asc as A
+        cls.cfg = C.parse_cfg(_cfg_fixture())
+        cls.asc = A.parse_asc(_asc_fixture())
+        cls.groups = F.build_offmodule_groups_s7300(cls.cfg, cls.asc)
+
+    def _func(self, name):
+        for f, els in self.groups:
+            if f == name:
+                return els
+        return None
+
+    def test_two_functions_in_order(self):
+        funcs = [f for f, _ in self.groups]
+        # Drives then Identification (match OFFMODULE_FUNCTIONS order); no
+        # Coordination/Safety (no off-module S7-300 devices fall there).
+        self.assertEqual(funcs, ["Drives", "Identification"])
+
+    def test_drives_three_servo_elements_with_ranges(self):
+        drives = self._func("Drives")
+        self.assertEqual(len(drives), 3)
+        # each servo is a faithful identity + telegram range tags (no invented
+        # channel names; the label is the real CMMP-AS FHPP profile).
+        names = [e["name"] for e in drives]
+        self.assertEqual(names,
+                         ["CMMP-AS M3 (DP16)", "CMMP-AS M3 (DP17)",
+                          "CMMP-AS M3 (DP18)"])
+        for e in drives:
+            self.assertTrue(e["tags"], "servo element has no range tag")
+            for raw, name, desc in e["tags"]:
+                self.assertEqual(name, "FHPP telegram")
+                self.assertEqual(desc, "")
+                # a REAL word-range address span, nothing invented
+                self.assertRegex(raw, r"^%[IQ]W\d+")
+
+    def test_identification_two_camera_elements(self):
+        ident = self._func("Identification")
+        self.assertEqual(len(ident), 2)
+        self.assertEqual([e["name"] for e in ident],
+                         ["STleftrear", "strightrear"])
+
+    def test_camera_pi_w_rows_join_correct_camera(self):
+        ident = {e["name"]: e for e in self._func("Identification")}
+        left = {raw: name for raw, name, _ in ident["STleftrear"]["tags"]}
+        right = {raw: name for raw, name, _ in ident["strightrear"]["tags"]}
+        # STleftrear carries the LOWER PIW cluster (372/374); strightrear the
+        # HIGHER cluster (736/738) — the real .asc rows joined by address cluster.
+        self.assertEqual(left.get("%PIW372"), "Camera_Result")
+        self.assertEqual(left.get("%PIW374"), "currrent_job_numb")
+        self.assertEqual(right.get("%PIW736"), "Job Status")
+        self.assertEqual(right.get("%PIW738"), "Job Number")
+        # cross-check: Camera_Result is NOT on strightrear
+        self.assertNotIn("%PIW372", right)
+
+    def test_camera_inline_cfg_symbols_present(self):
+        ident = {e["name"]: e for e in self._func("Identification")}
+        right = {raw: name for raw, name, _ in ident["strightrear"]["tags"]}
+        # the inline .cfg SYMBOL O rows on strightrear (ioaddr 2), real %Q address
+        self.assertEqual(right.get("%Q1300.0"), "Np")
+        self.assertEqual(right.get("%Q1301.0"), "trigger")
+        self.assertEqual(right.get("%Q1302.0"), "Reset_Camaras")
+
+    def test_never_invent_no_asc_servos_still_have_ranges(self):
+        # Without the .asc the cameras lose their PIW rows but the servos are
+        # unaffected (telegram ranges come from the .cfg) and NOTHING is invented:
+        # a camera with no joined symbol falls back to its faithful .cfg ranges.
+        groups = F.build_offmodule_groups_s7300(self.cfg, [])
+        funcs = dict(groups)
+        self.assertEqual(len(funcs["Drives"]), 3)
+        for e in funcs["Drives"]:
+            self.assertTrue(e["tags"])
+        # cameras still present (the strightrear inline SYMBOL O rows survive;
+        # STleftrear has no inline rows -> faithful .cfg range tags, not dropped)
+        ident = {e["name"]: e for e in funcs["Identification"]}
+        self.assertIn("STleftrear", ident)
+        self.assertTrue(ident["STleftrear"]["tags"])  # never empty/nameless
+
+    def test_empty_inputs_yield_empty_groups(self):
+        empty = C.parse_cfg("/no/such/file.cfg") \
+            if False else None
+        # a cfg with no devices -> [] (gated off, never an empty section)
+        class _Empty:
+            dp_slaves = []
+            io_devices = []
+        self.assertEqual(F.build_offmodule_groups_s7300(_Empty(), []), [])
+
+
 if __name__ == "__main__":
     unittest.main()
