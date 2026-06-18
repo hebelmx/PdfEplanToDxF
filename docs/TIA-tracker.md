@@ -120,6 +120,28 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
   * **Spares are a COUNT, not addresses** (CHAN decision): mapped channels carry real tag+address from
     the tag table; RESERVA = capacity − mapped drawn as anonymous stubs (pin `__`, no address) — this
     is the "sidesteps F-module per-channel addressing" the design intended.
+- **E6(b) DONE @ `f4c1de5`** — `build_tia_distributed_project(aml)` → ordered `list[PlcProject]`,
+  9 stations / 776 ch / 549 mapped / 227 RESERVA; Q100 reproduces approved 88/48/40 (suite 433).
+  Existing single-station path untouched; Rockwell floor untouched.
+- **E6(b) ADVERSARIAL REVIEW (3 lenses, 2026-06-17) — triage.** Strongest +evidence: Q100 synthesis is
+  BYTE-IDENTICAL to the real `IO_Channels.xml` point source (faithful). No BLOCKERs. Findings:
+  * [FIX] MAJOR — ordering + `controller_cpu` for the 7 drops derive from the wrong key (drops get
+    `cpu_rank(None)`, rescued only because Q100 is present; remove Q100 → 1200 sorts ahead of 1500
+    drops). Derive owning-PLC CPU/class from the OWNER LABEL's CPU-local station; populate the drops'
+    `controller_cpu` (needed for E6c labeling). Data-driven, never-invented.
+  * [FIX] MAJOR(latent) — digital capacity uses `range(channels)`, ignores range `Length`; clamp so a
+    garbage `channels` can't synthesize addresses past the declared range.
+  * [FIX] MAJOR(latent) — analog heuristic `Length==16*channels` false-positives a 1-ch digital w/ a
+    16-bit range; guard `channels>=2` (keeps real `SM 1232 AQ2`, channels=2).
+  * [FIX] MINOR — `_synthesize_cpu_onboard` hardcodes `(start,length)` triples (fails silently for other
+    1200 CPUs); drive from declared ranges `start<1000`. + MINOR modules-dict collision guard; docstring
+    "tag-sweep" correction; missing-file docstring/guard.
+  * [SCOPE, not a bug] 231 S71500 tags (`%IW>=1000` VFD telegrams, RFID, drive status on mixed-brand
+    PROFINET nodes) map to NO I/O module → correctly NOT drawn as wired I/O (design pt 5: stay on the
+    NET folio; never invent a module). Document scope + add a transparent per-station off-module count;
+    SURFACE to Abel at the E6c gate. (So plant addressed I/O = 776 module ch + ~231 off-module telegram.)
+  * CLEAN (corroborated): per-station arithmetic, SM1232 analog fix, no wrong-module/cross-station join,
+    descriptions all real, `no_symbol` suppression correct, ownership unambiguous, masked-`?`/blanks.
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
