@@ -513,6 +513,82 @@ def _unassigned_telegram_tags(asc: Optional[List["A.AscSymbol"]]) -> List[Tuple]
     return [(f"%{s.area}{s.addr}", s.name, s.comment or "") for s in rows]
 
 
+# --------------------------------------------------------------------------
+# Comms / topology buses (S7300-3c) — the two real networks the CPU bridges
+# --------------------------------------------------------------------------
+def _hex_to_dotted(hex_str: Optional[str]) -> Optional[str]:
+    """Convert a STEP-7 32-bit hex address ('C0A81EBE') to dotted decimal
+    ('192.168.30.190'). This is a REAL byte-for-byte transform of the stored
+    value (C0=192, A8=168, 1E=30, BE=190) — NOT invention. Returns None for an
+    absent/malformed value (never fabricates an address)."""
+    s = (hex_str or "").strip()
+    if len(s) != 8:
+        return None
+    try:
+        b = bytes.fromhex(s)
+    except ValueError:
+        return None
+    return ".".join(str(x) for x in b)
+
+
+def build_comm_buses(cfg: "C.CfgData") -> List[Tuple[str, List[Tuple]]]:
+    """The two real communication buses the S7-300 CPU 315-2 PN/DP bridges, as
+    an ordered ``list[(bus_label, [node, ...])]`` where each ``node`` reuses the
+    renderer's 5-tuple shape ``(address, name, type, subnet_mask, is_controller)``.
+
+    PROFINET first, then PROFIBUS-DP. Within a bus the CONTROLLER (the CPU) is
+    first, the rest by ascending address.
+
+    PROFINET nodes carry a REAL dotted IP (hex→dotted transform of the stored
+    IPADDRESS) and the dotted subnet mask; PROFIBUS-DP nodes carry their DP node
+    address string ('DP 4') and ``subnet_mask=None`` (PROFIBUS has no IP/mask —
+    one is NEVER fabricated). Only REAL nodes from the parsed cfg are emitted."""
+    buses: List[Tuple[str, List[Tuple]]] = []
+
+    # ── PROFINET (Industrial Ethernet) ───────────────────────────────────────
+    # the Ethernet subnet carries the CPU PN-IO IP + real mask
+    eth = next((s for s in cfg.subnets if s.kind == "INDUSTRIAL_ETHERNET"), None)
+    pn_nodes: List[Tuple] = []
+    if eth is not None and eth.ip_address:
+        cpu_ip = _hex_to_dotted(eth.ip_address)
+        cpu_mask = _hex_to_dotted(eth.subnet_mask)
+        if cpu_ip:
+            pn_nodes.append((cpu_ip, "PN-IO", "CPU 315-2 PN/DP", cpu_mask, True))
+    # the PROFINET-IO devices (Keyence cameras): IP lives on the SLOT 0 record
+    cams: List[Tuple] = []
+    for dev in cfg.io_devices:
+        if not dev.ip_address:
+            continue
+        ip = _hex_to_dotted(dev.ip_address)
+        if ip is None:
+            continue
+        mask = _hex_to_dotted(dev.subnet_mask)
+        cams.append((ip, dev.name or "", dev.name or "", mask, False))
+    # de-dup cameras by IP (the SLOT 0 record is unique per device) keeping order
+    seen_ip = set()
+    for node in cams:
+        if node[0] in seen_ip:
+            continue
+        seen_ip.add(node[0])
+        pn_nodes.append(node)
+    if pn_nodes:
+        buses.append(("PROFINET", pn_nodes))
+
+    # ── PROFIBUS-DP ──────────────────────────────────────────────────────────
+    # the CPU is the DP master (controller); slaves follow by ascending address.
+    dp_nodes: List[Tuple] = []
+    if cfg.dp_master_address is not None:
+        dp_nodes.append((f"DP {cfg.dp_master_address}", "DP master",
+                         "CPU 315-2 PN/DP", None, True))
+    for slave in sorted(cfg.dp_slaves, key=lambda s: s.dp_address):
+        dp_nodes.append((f"DP {slave.dp_address}", slave.type_str or "",
+                         slave.type_str or "", None, False))
+    if dp_nodes:
+        buses.append(("PROFIBUS-DP", dp_nodes))
+
+    return buses
+
+
 def build_offmodule_groups_s7300(cfg: "C.CfgData",
                                  asc: Optional[List["A.AscSymbol"]] = None):
     """Adapt the S7-300 NON-channel devices into render_plant's off-module

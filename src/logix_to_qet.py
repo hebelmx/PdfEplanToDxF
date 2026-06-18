@@ -2461,6 +2461,15 @@ def _node_field(node, i, default=None):
     return node[i] if len(node) > i else default
 
 
+def _is_dotted_ipv4(addr) -> bool:
+    """True when `addr` is a dotted IPv4 string ('192.168.30.190'). Used to decide
+    whether a node's address line is an IP (prefixed 'IP ') or a non-IP bus
+    address (a PROFIBUS-DP node address, shown verbatim). Tolerant: False for
+    None/empty/non-IP — never raises."""
+    parts = (addr or "").split(".")
+    return len(parts) == 4 and all(p.isdigit() for p in parts)
+
+
 def _subnet_label(nodes) -> str:
     """Derive the subnet label from the REAL SubnetMask carried in the .aml, e.g.
     'PROFINET — 192.168.10.0/24'.
@@ -2536,8 +2545,12 @@ def _add_network_node_box(shapes, inputs, x, y, ip, name, type_name, controller)
     if controller:
         header = f"{header}  (CONTROLADOR)"
     add_text(inputs, tx, y + 6, _fit_text(header, PN_HEADER_CHARS), FONT_TEXT)
-    # IP line (always present — it is the node's defining datum)
-    add_text(inputs, tx, y + 24, _fit_text(f"IP {ip}", PN_LINE_CHARS), FONT_SMALL)
+    # address line (always present — it is the node's defining datum). A dotted
+    # IPv4 prefixes "IP " (the PROFINET case, byte-identical to the E6 render); a
+    # non-IP address (a PROFIBUS-DP node address like 'DP 4') is shown verbatim so
+    # it never reads as a fake 'IP DP 4'. NEVER invents.
+    addr_line = f"IP {ip}" if _is_dotted_ipv4(ip) else (ip or "")
+    add_text(inputs, tx, y + 24, _fit_text(addr_line, PN_LINE_CHARS), FONT_SMALL)
     # type line — only when known (never invented); kept clear of the bottom edge
     if type_name:
         add_text(inputs, tx, y + 42, _fit_text(type_name, PN_LINE_CHARS),
@@ -2615,6 +2628,126 @@ def build_network_folio(project: ET.Element, start_order: int, nodes) -> int:
         return 0
     _add_network_diagram(project, start_order, nodes)
     return 1
+
+
+# ── MULTI-BUS comms topology folio (S7300-3c) ────────────────────────────────
+# Some stations bridge MORE than one network (the S7-300 CPU 315-2 PN/DP joins a
+# PROFINET subnet AND a PROFIBUS-DP master system). This folio draws BOTH buses
+# on ONE sheet: one labelled bus block per (bus_label, nodes), stacked top-to-
+# bottom — a bus bar + the same node-box grid build_network_folio uses (REUSING
+# _add_network_node_box), the controller boxed + tagged (CONTROLADOR). VISUAL-
+# only (text + shape primitives, empty <elements>/<conductors>), so it inherits
+# the ISO title block with zero floor impact. DATA-DRIVEN / never-invent: only
+# the real nodes/addresses handed in (PROFINET dotted IPs from the hex transform,
+# PROFIBUS-DP node addresses — no fabricated IP for a PROFIBUS node).
+# Shares the comms-topology folio title (the Rockwell single-tree topology folio
+# uses the same heading); the two never co-occur (Rockwell never passes
+# topology_buses; the S7-300 runs with emit_vendor_folios=False) so there is no
+# double-draw — they are the same KIND of folio (a comms/topology overview).
+MULTIBUS_TITLE = TOPOLOGY_TITLE   # "Red de comunicaciones"
+MB_BLOCK_LABEL_H = 22       # vertical room for a bus block's label line
+MB_BLOCK_GAP = 24           # gap between stacked bus blocks
+
+
+def _bus_block_height(node_count: int) -> int:
+    """Pixel height of one bus block for `node_count` nodes: the label line, the
+    bus bar + its drop, then the node-box grid (PN_COLS per row)."""
+    rows = (node_count + PN_COLS - 1) // PN_COLS if node_count else 0
+    grid = rows * PN_BOX_H + max(0, rows - 1) * PN_ROW_GAP
+    drop = PN_GRID_Y - PN_BUS_Y          # bus bar + drop lead to first row
+    return MB_BLOCK_LABEL_H + PN_BUS_H + drop + grid
+
+
+def _add_bus_block(shapes, inputs, top_y: int, bus_label: str, nodes) -> int:
+    """Draw one labelled bus block whose top is at `top_y`: a label line, a
+    horizontal bus bar spanning the page, a per-column drop lead, then the node
+    grid (REUSING _add_network_node_box). Returns the block's bottom y."""
+    label_y = top_y + 14
+    add_text(inputs, PN_X_MARGIN, label_y, bus_label, FONT_HEADER)
+    bus_y = top_y + MB_BLOCK_LABEL_H
+    bus_x1, bus_x2 = PN_X_MARGIN, PN_PAGE_W - PN_X_MARGIN
+    add_rect(shapes, bus_x1, bus_y, bus_x2, bus_y + PN_BUS_H)
+    grid_y = bus_y + (PN_GRID_Y - PN_BUS_Y)   # same bus→grid offset as the NET folio
+    col_pitch = PN_BOX_W + PN_COL_GAP
+    row_pitch = PN_BOX_H + PN_ROW_GAP
+    bottom = grid_y
+    for i, node in enumerate(nodes):
+        addr = _node_field(node, 0, "")
+        name = _node_field(node, 1, "")
+        type_name = _node_field(node, 2, "")
+        col = i % PN_COLS
+        row = i // PN_COLS
+        x = PN_X_MARGIN + col * col_pitch
+        y = grid_y + row * row_pitch
+        drop_x = x + PN_BOX_W // 2
+        if row == 0:
+            add_rect(shapes, drop_x, bus_y + PN_BUS_H, drop_x + PN_LEAD_W, y)
+        else:
+            add_rect(shapes, drop_x, y - PN_ROW_GAP, drop_x + PN_LEAD_W, y)
+        controller = _is_controller_node(node)
+        _add_network_node_box(shapes, inputs, x, y, addr, name, type_name,
+                              controller)
+        bottom = max(bottom, y + PN_BOX_H)
+    return bottom
+
+
+def build_topology_buses_folio(project: ET.Element, start_order: int,
+                               buses) -> int:
+    """Append a MULTI-BUS comms topology folio at `start_order` (S7300-3c). VISUAL-
+    only (text + shape primitives, empty <elements>/<conductors>), one labelled
+    bus block per (bus_label, nodes) entry, stacked top-to-bottom. Returns 1 when
+    any bus has nodes, else 0 (graceful — no buses => no folio, never invented).
+
+    `buses` is an ordered ``list[(bus_label, [node, ...])]`` where each node reuses
+    the network 5-tuple ``(address, name, type, subnet_mask, is_controller)``; a
+    PROFINET node's address is its dotted IP, a PROFIBUS-DP node's is its DP node
+    address. Each bus label is enriched with the real subnet (PROFINET shows the
+    network/prefix from the real mask; PROFIBUS-DP shows the bus name) — derived,
+    never fabricated."""
+    blocks = [(lbl, list(nodes)) for (lbl, nodes) in (buses or []) if nodes]
+    if not blocks:
+        return 0
+
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(start_order), "title": MULTIBUS_TITLE,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    add_text(inputs, PN_X_MARGIN, 30, MULTIBUS_TITLE.upper(), FONT_HEADER)
+
+    # stack the bus blocks below the folio title; each block self-labels with its
+    # bus + real subnet so the sheet documents both networks at a glance.
+    top_y = 48
+    for label, nodes in blocks:
+        block_label = _bus_block_label(label, nodes)
+        bottom = _add_bus_block(shapes, inputs, top_y, block_label, nodes)
+        top_y = bottom + MB_BLOCK_GAP
+    return 1
+
+
+def _bus_block_label(bus_label: str, nodes) -> str:
+    """The per-block heading: the bus name plus its real subnet detail. PROFINET
+    appends the network/prefix derived from the real uniform mask (e.g.
+    'PROFINET — 192.168.30.0/24'); PROFIBUS-DP appends nothing extra (no IP/mask
+    exists). Never fabricates a subnet for a maskless bus."""
+    if bus_label.upper().startswith("PROFINET"):
+        sub = _subnet_label(nodes)
+        # _subnet_label returns the PROFINET title when no uniform real mask;
+        # use its richer 'PROFINET — net/prefix' form, else the bare bus label.
+        if sub != PROFINET_TITLE:
+            return sub
+    return bus_label
 
 
 # ── RACK: rack/chassis layout overview (Siemens, Story 2.3) ──────────────────
@@ -3113,7 +3246,7 @@ def main(argv=None):
 def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
                    wire_scheme="address", emit_vendor_folios=True,
                    power_config=None, offmodule_groups=None,
-                   offmodule_bus_labels=None):
+                   offmodule_bus_labels=None, topology_buses=None):
     """Render a vendor-neutral PlcProject IR to a .qet (the folio pipeline + .qet
     write + stderr summary). Shared by both the Rockwell command (logix_to_qet)
     and the Siemens command (tia_to_qet); the only difference between vendors is
@@ -3133,6 +3266,16 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     render_plant draws (summary table + per-element boxes) between the BOM and the
     changelog, at SECTION_OFFMODULE. When None/empty (the Rockwell path NEVER
     passes it) NOTHING is appended and the document is byte-for-byte unchanged.
+
+    `topology_buses` (default None) is an ADDITIVE, GATED hook for a MULTI-BUS
+    comms topology folio (S7300-3c): when truthy it is an ordered
+    ``list[(bus_label, [node, ...])]`` (each node the network 5-tuple) and
+    render_project draws ONE multi-bus folio at SECTION_TOPOLOGY via
+    build_topology_buses_folio INSTEAD of the single-subnet build_network_folio.
+    When None (the Rockwell + E6/TIA paths NEVER pass it) the single
+    build_network_folio(network_nodes) path runs unchanged, so those renders are
+    byte-for-byte identical. The S7-300 keeps network_nodes empty and passes
+    topology_buses, so it never double-draws.
 
     Returns 0. `include_hmi` is accepted for signature symmetry with the front
     ends (the IR is already built when this is called, so it has no effect here).
@@ -3287,7 +3430,17 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
     # nodes => never invented). Shares the SECTION_TOPOLOGY page (2): the Siemens
     # set has no Rockwell topology folio, so the two never collide.
     network_nodes = getattr(project_ir, "network_nodes", None) or []
-    network_folios = build_network_folio(project, SECTION_TOPOLOGY, network_nodes)
+    # MULTI-BUS topology (S7300-3c): when topology_buses is provided (S7-300, two
+    # buses) draw the multi-bus folio at SECTION_TOPOLOGY INSTEAD of the single-
+    # subnet network folio. The default-None path runs the EXACT existing
+    # build_network_folio(network_nodes) call, so E6/TIA + Rockwell are unchanged.
+    # The S7-300 keeps network_nodes empty so the two never double-draw.
+    if topology_buses:
+        network_folios = build_topology_buses_folio(
+            project, SECTION_TOPOLOGY, topology_buses)
+    else:
+        network_folios = build_network_folio(project, SECTION_TOPOLOGY,
+                                             network_nodes)
     # RACK (Siemens, Story 2.3): rack/chassis layout overview, one box per module
     # in slot order (slot #, name, order#, kind+points). Siemens-only and gated on
     # the IR having actual slot/.aml data (any module carrying a slot from the
@@ -3422,9 +3575,15 @@ def render_project(project_ir, out_path, *, include_hmi=False, no_symbols=False,
               f"(order {SECTION_TOPOLOGY}), {len(modules)} module(s) in tree",
               file=err)
     if network_folios:
-        print(f"red PN     : {network_folios} '{PROFINET_TITLE}' folio(s) "
-              f"(order {SECTION_TOPOLOGY}), {len(network_nodes)} PROFINET node(s)",
-              file=err)
+        if topology_buses:
+            n_bus_nodes = sum(len(nodes) for (_lbl, nodes) in topology_buses)
+            print(f"red com    : {network_folios} '{MULTIBUS_TITLE}' folio(s) "
+                  f"(order {SECTION_TOPOLOGY}), {len(topology_buses)} bus(es), "
+                  f"{n_bus_nodes} node(s)", file=err)
+        else:
+            print(f"red PN     : {network_folios} '{PROFINET_TITLE}' folio(s) "
+                  f"(order {SECTION_TOPOLOGY}), {len(network_nodes)} PROFINET "
+                  f"node(s)", file=err)
     if rack_folios:
         print(f"rack       : {rack_folios} '{RACK_TITLE}' folio(s) "
               f"(order {SECTION_RACK}), {len(io_mods)} module(s) in slot order",

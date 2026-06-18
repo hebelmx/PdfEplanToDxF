@@ -240,6 +240,12 @@ class IoSubslot:
     name: str
     in_addr: Optional[AddrBlock] = None
     out_addr: Optional[AddrBlock] = None
+    # PROFINET addressing carried on the device's SLOT 0 record (the cameras'
+    # real IP lives there, NOT on the head). Hex as found, e.g. "C0A81EC5";
+    # None when the record carries none. NEVER invented.
+    ip_address: Optional[str] = None
+    subnet_mask: Optional[str] = None
+    device_name: Optional[str] = None
 
     @property
     def symbols(self) -> List[Symbol]:
@@ -261,6 +267,11 @@ class CfgData:
     dp_slaves: List[DpSlave] = field(default_factory=list)
     io_devices: List[IoSubslot] = field(default_factory=list)
     fileversion: Optional[str] = None
+    # The CPU's PROFIBUS-DP MASTER node address (the "MASTER DPSUBSYSTEM 1,
+    # ..., DPADDRESS 2" line on the CPU MPI/DP sub-slot record). The master is
+    # the bus controller; this is its DP node address. None when absent (no DP
+    # master on the station). NEVER invented.
+    dp_master_address: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +561,12 @@ def parse_cfg(path: str) -> CfgData:
                 ipm = re.match(r'IPADDRESS\s+"([^"]*)"', s)
                 if ipm:
                     ip = ipm.group(1)
+                # The CPU MPI/DP sub-slot declares the DP MASTER node address on a
+                # "MASTER DPSUBSYSTEM 1, ..., DPADDRESS <a>" line in its body.
+                # Capture it once (the real master DP address, e.g. 2).
+                msm = re.match(r'MASTER\s+DPSUBSYSTEM.*\bDPADDRESS\s+(\d+)', s)
+                if msm and data.dp_master_address is None:
+                    data.dp_master_address = int(msm.group(1))
             if mask or ip:
                 for sn in data.subnets:
                     if sn.kind == "INDUSTRIAL_ETHERNET":
@@ -609,8 +626,24 @@ def parse_cfg(path: str) -> CfgData:
             gsdml = tokens[0] if len(tokens) >= 1 else ""
             name = tokens[1] if len(tokens) >= 2 else ""
             in_blk, out_blk = _collect_addr_blocks(body)
+            # The camera SLOT 0 record carries the device IPADDRESS / SUBNETMASK
+            # (and CPUs a DEVICE_NAME); capture them verbatim (hex as found). The
+            # head record carries none, so these stay None there. NEVER invented.
+            ip = mask = dev_name = None
+            for raw in body:
+                s = raw.strip()
+                im = re.match(r'IPADDRESS\s+"([^"]*)"', s)
+                if im:
+                    ip = im.group(1)
+                mm = re.match(r'SUBNETMASK\s+"([^"]*)"', s)
+                if mm:
+                    mask = mm.group(1)
+                dm = re.match(r'DEVICE_NAME\s+"([^"]*)"', s)
+                if dm:
+                    dev_name = dm.group(1)
             data.io_devices.append(IoSubslot(
                 io_address=io_addr, slot=slot, subslot=subslot,
-                gsdml=gsdml, name=name, in_addr=in_blk, out_addr=out_blk))
+                gsdml=gsdml, name=name, in_addr=in_blk, out_addr=out_blk,
+                ip_address=ip, subnet_mask=mask, device_name=dev_name))
 
     return data

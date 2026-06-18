@@ -275,6 +275,30 @@ class TestCfgFixture(unittest.TestCase):
         names = {d.name for d in self.d.io_devices}
         self.assertTrue(any("rear" in n.lower() for n in names))
 
+    def test_camera_ip_subnetmask_captured_on_slot0(self):
+        # The camera SLOT 0 record carries the device IPADDRESS / SUBNETMASK
+        # (hex as found, never invented); the head record carries none.
+        ip_by_addr = {}
+        for dev in self.d.io_devices:
+            if dev.ip_address:
+                ip_by_addr[dev.io_address] = (dev.ip_address, dev.subnet_mask)
+        # camera 1 (IOADDRESS 1) = C0A81EC5; camera 2 (IOADDRESS 2) = C0A81EC6
+        self.assertEqual(ip_by_addr.get(1), ("C0A81EC5", "FFFFFF00"))
+        self.assertEqual(ip_by_addr.get(2), ("C0A81EC6", "FFFFFF00"))
+
+    def test_dp_master_address_captured(self):
+        # The CPU MPI/DP sub-slot declares "MASTER DPSUBSYSTEM 1, ..., DPADDRESS
+        # 2" — the real DP master node address. NEVER invented.
+        self.assertEqual(self.d.dp_master_address, 2)
+
+    def test_cpu_pnio_ip_on_ethernet_subnet(self):
+        # The CPU PN-IO controller IP/mask fold onto the Ethernet subnet (the
+        # real .190 host, FFFFFF00 mask).
+        eth = next(s for s in self.d.subnets
+                   if s.kind == "INDUSTRIAL_ETHERNET")
+        self.assertEqual(eth.ip_address, "C0A81EBE")
+        self.assertEqual(eth.subnet_mask, "FFFFFF00")
+
 
 if __name__ == "__main__":
     unittest.main()

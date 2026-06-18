@@ -582,5 +582,81 @@ class TestOffmoduleGroups(unittest.TestCase):
         self.assertEqual(F.build_offmodule_groups_s7300(_Empty(), []), [])
 
 
+# ---------------------------------------------------------------------------
+# build_comm_buses (S7300-3c) — the two real buses (PROFINET + PROFIBUS-DP)
+# ---------------------------------------------------------------------------
+class TestHexToDotted(unittest.TestCase):
+    """Pure hex->dotted-decimal transform — no fixture."""
+
+    def test_real_transform(self):
+        # C0=192, A8=168, 1E=30, BE=190 — a real byte transform, not invention
+        self.assertEqual(F._hex_to_dotted("C0A81EBE"), "192.168.30.190")
+        self.assertEqual(F._hex_to_dotted("C0A81EC5"), "192.168.30.197")
+        self.assertEqual(F._hex_to_dotted("C0A81EC6"), "192.168.30.198")
+        # the mask is the same transform
+        self.assertEqual(F._hex_to_dotted("FFFFFF00"), "255.255.255.0")
+
+    def test_absent_or_malformed_is_none(self):
+        # never fabricate an address from absent/odd input
+        self.assertIsNone(F._hex_to_dotted(None))
+        self.assertIsNone(F._hex_to_dotted(""))
+        self.assertIsNone(F._hex_to_dotted("C0A81E"))    # too short
+        self.assertIsNone(F._hex_to_dotted("ZZZZZZZZ"))  # not hex
+
+
+@unittest.skipUnless(_HAVE_FIXTURE, "S7-300 fixture absent")
+class TestCommBuses(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cfg = C.parse_cfg(_cfg_fixture())
+        cls.buses = F.build_comm_buses(cls.cfg)
+
+    def test_two_buses_profinet_first(self):
+        labels = [b[0] for b in self.buses]
+        self.assertEqual(labels, ["PROFINET", "PROFIBUS-DP"])
+
+    def test_profinet_three_real_nodes(self):
+        nodes = dict(self.buses)["PROFINET"]
+        self.assertEqual(len(nodes), 3)
+        # CPU PN-IO is the controller, real dotted IP .190, real mask
+        cpu = nodes[0]
+        self.assertEqual(cpu[0], "192.168.30.190")
+        self.assertEqual(cpu[3], "255.255.255.0")
+        self.assertTrue(cpu[4])  # is_controller
+        # the two cameras, real IPs, NOT controllers
+        ips = [n[0] for n in nodes]
+        self.assertEqual(ips, ["192.168.30.190", "192.168.30.197",
+                               "192.168.30.198"])
+        for cam in nodes[1:]:
+            self.assertFalse(cam[4])
+
+    def test_profibus_ten_nodes_by_dp_address(self):
+        nodes = dict(self.buses)["PROFIBUS-DP"]
+        self.assertEqual(len(nodes), 10)
+        # CPU DP master (DP 2) is the controller, first
+        master = nodes[0]
+        self.assertEqual(master[0], "DP 2")
+        self.assertTrue(master[4])
+        # the 9 slaves by ascending DP address, never controllers
+        addrs = [n[0] for n in nodes]
+        self.assertEqual(addrs, ["DP 2", "DP 4", "DP 5", "DP 6", "DP 7",
+                                 "DP 8", "DP 12", "DP 16", "DP 17", "DP 18"])
+        for slave in nodes[1:]:
+            self.assertFalse(slave[4])
+
+    def test_never_invent_no_fake_ip_for_profibus(self):
+        # a PROFIBUS-DP node carries NO IP/mask — the 4th field is None and the
+        # address is a 'DP n' string, never a fabricated dotted IP
+        nodes = dict(self.buses)["PROFIBUS-DP"]
+        for n in nodes:
+            self.assertIsNone(n[3])               # no mask
+            self.assertTrue(n[0].startswith("DP "))  # DP node address, not an IP
+            # not a fabricated dotted IPv4
+            self.assertFalse(
+                len(n[0].split(".")) == 4 and
+                all(p.isdigit() for p in n[0].split(".")))
+
+
 if __name__ == "__main__":
     unittest.main()

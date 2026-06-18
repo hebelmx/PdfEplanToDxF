@@ -19,8 +19,10 @@ PLUS every DP-drop module, in one sequence, with ONE bornero and ONE BOM.
 Folio scope: cover (portada), símbología, índice, rack, the per-card I/O folios
 (all 256 channels incl. RESERVA), bornero, BOM (summary), the OFF-MODULE section
 (servos + PROFINET cameras NOT on an I/O card — S7300-3b) and changelog, with the
-ISO 7200 title block. The network/topology folio is a later chunk;
-``network_nodes`` stays empty so the NET folio is omitted.
+ISO 7200 title block. The TWO-BUS comms/topology folio (PROFINET + PROFIBUS-DP,
+S7300-3c) is drawn at SECTION_TOPOLOGY via ``topology_buses`` (built by
+``s7300_front_end.build_comm_buses``); ``network_nodes`` stays empty so the
+single-subnet PROFINET folio is NOT also drawn.
 
 STANDARD LIBRARY ONLY.
 """
@@ -102,6 +104,16 @@ def main(argv=None):
     _asc = _A.parse_asc(asc_path) if asc_path else []
     offmodule_groups = _FE.build_offmodule_groups_s7300(_cfg, _asc)
 
+    # TWO-BUS comms/topology folio (S7300-3c): the CPU 315-2 PN/DP bridges a
+    # PROFINET subnet (CPU PN-IO + 2 Keyence cameras, real dotted IPs) AND a
+    # PROFIBUS-DP master system (CPU DP master + 9 slaves, by DP node address).
+    # Build both buses from the real cfg and pass them as topology_buses so
+    # render_project draws ONE multi-bus folio at SECTION_TOPOLOGY (the S7-300 IR
+    # keeps network_nodes empty, so the single PROFINET folio is not drawn).
+    # NEVER invents — only real addresses (hex→dotted is a real transform; a
+    # PROFIBUS node carries its DP address, never a fabricated IP).
+    topology_buses = _FE.build_comm_buses(_cfg)
+
     # default output: <cfg-dir>/<station>.qet (station name from the IR; fall
     # back to the cfg file stem when the station name is empty/unsafe).
     if args.output:
@@ -124,6 +136,7 @@ def main(argv=None):
         power_config=None,
         offmodule_groups=offmodule_groups,
         offmodule_bus_labels=offmodule_bus_labels,
+        topology_buses=topology_buses,
     )
 
 
