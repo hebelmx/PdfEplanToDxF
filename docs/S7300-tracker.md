@@ -88,13 +88,31 @@ computes the exact capacity / mapped / RESERVA from the IR and the tracker locks
   vendor branch. **NEVER `git add` under `Fixtures/`** or any `*.cfg`/`*.asc`/`*.qet`/personal file.
 - One focused commit per item; feature branch → **Abel's merge gate**.
 
+## ⚠️ SCOPE CORRECTION (S7300-1, orchestrator-verified 2026-06-17) — the station has a PROFINET side too
+The initial analysis read only the PROFIBUS-DP half (first ~1340 lines). The `.cfg` ALSO has a
+**`CONTROLLER IOSUBSYSTEM 100, "Ethernet(1)"` (PROFINET-IO)** with **2 Keyence vision cameras**:
+`STleftrear` (IV-series, IOADDRESS 1) + `strightrear` (CV-X400, IOADDRESS 2), each with
+Command Control / Status Bits / Result Bits / Status Words slots (some carry `SYMBOL O` lines like
+`trigger`, `Reset_Camaras`). Captured faithfully in `CfgData.io_devices` (kept separate from
+`modules`/`dp_slaves`). **Implication for S7300-2/3:** the cameras are another off-module/PROFINET
+element (E6 c2 analog) + PROFINET nodes on the network folio — draw real addressed I/O where it
+exists, else leave on the network/off-module overview; NEVER invent. Also: **the AI8 has NO inline
+`.cfg` symbols** (only an ADDRESS) → analog channels MUST join via the `.asc` PIW rows, not inline.
+
 ## Build chunks (recommended order — data first, visual LAYOUT gated at render per E6)
-- [ ] **S7300-1 — parsers (data-only, fully tested).** `src/s7300_cfg.py` (station/subnets/
-      local rack modules w/ catalog+type→kind/points+address+inline symbols; PROFIBUS DP slaves
-      w/ sub-slots+address+inline symbols; masked `?` kept) + `src/s7300_asc.py` (filter to
-      I/Q/PIW → {address:(name,comment)}; drop M/FC/FB/DB/T/C). Pure parse, no IR, no render.
-      Tests assert REAL fixture numbers (module counts, address ranges, slave counts, symbol
-      counts, M-row filtering, masked-? preservation). Suite stays green; Rockwell byte-equiv.
+- [x] **S7300-1 — parsers (data-only, fully tested). DONE @ `1a4ceee`.** `src/s7300_cfg.py`
+      (`parse_cfg -> CfgData`: Station, Subnets w/ real mask, local CfgModules w/ catalog/fw/
+      type→(kind,points)/addr + inline SYMBOL channels, PROFIBUS DpSlaves+subslots, PROFINET
+      Keyence `io_devices`; masked `?` kept) + `src/s7300_asc.py` (`parse_asc`/`physical_io`/
+      `area_histogram`). **Verified from ground truth:** suite 471→**508** green (1 skip); only
+      4 new files (shared renderer untouched → Rockwell byte-identical). Measured truth:
+      station S7300/"SIMATIC 300(1)"; 2 subnets (Ethernet mask FFFFFF00 + PROFIBUS); local I/O
+      slots 4,5=DI32 (32 sym each), 6,7=DO32 (32 sym each), 10=AI8 (0 inline sym → .asc);
+      slots 8,9=CP340 comms (0 sym); DP: 5×ET200eco-16DI (16 sym each), Festo CPX (5×8DO banks,
+      8 sym each + status), 3×CMMP-AS servo (telegram @528+, 0 channel sym); `.asc` area
+      histogram I=176/Q=139/PIW=4/M=732/FC=82/FB=16/DB=74/T=166 (+VAT/MW/UDT/OB/SFC/QD/SFB/MD),
+      **physical_io=319** of 1467; control-off cross-check (.cfg slot4 ch0 == .asc I 0.0) holds.
+      37 new tests. (Note: real `.asc` counts replaced the brief's approximate estimate.)
 - [ ] **S7300-2 — front-end → IR (data-only, fully tested).** `src/s7300_front_end.py` +
       `plc_ir.build_s7300_project(cfg_path, asc_path=None) -> list[PlcProject]` (mirror
       `build_tia_distributed_project`): one PlcProject per local-rack station + each DP drop;
@@ -111,3 +129,6 @@ computes the exact capacity / mapped / RESERVA from the IR and the tracker locks
 ## Status log
 - 2026-06-17: Tracker created; branch `feat/s7300-import` cut off `main` @ `f3a3fc5` (E6 merged,
   suite 471 green). Ground truth derived from the fixture (above). S7300-1 delegating next.
+- 2026-06-17: **S7300-1 DONE & committed @ `1a4ceee`** (delegated to an isolated subagent,
+  orchestrator-verified from ground truth: suite 471→508 green, only 4 new files). Subagent
+  surfaced the PROFINET/Keyence scope correction (above) — recorded. Next: S7300-2 (IR front-end).
