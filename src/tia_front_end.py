@@ -468,6 +468,20 @@ def _addr_key(parsed: dict | None) -> tuple | None:
     return (parsed["direction"], False, parsed["byte"], parsed["bit"])
 
 
+def _digital_channels(skey: str, start: int, cap: int) -> list[tuple[str, str, int, int]]:
+    """`cap` bit-addressed digital channels from `start`: %{I|Q}{start+i//8}.{i%8}.
+    Shared by _synthesize_channels and _synthesize_cpu_onboard."""
+    area = "I" if skey == "DI" else "Q"
+    return [(skey, f"%{area}{start + i // 8}.{i % 8}", 0, 0) for i in range(cap)]
+
+
+def _analog_channels(skey: str, start: int, words: int) -> list[tuple[str, str, int, int]]:
+    """`words` 16-bit analog channels from `start`: %{I|Q}W{start+2*j}.
+    Shared by _synthesize_channels and _synthesize_cpu_onboard."""
+    area = "I" if skey == "AI" else "Q"
+    return [(skey, f"%{area}W{start + 2 * j}", 0, 0) for j in range(words)]
+
+
 def _synthesize_channels(type_name: str, addresses: list, channels: int,
                          module_name: str) -> list[tuple[str, int, int, bool]]:
     """Synthesize a module's (split-key, raw-address) channel list from its
@@ -496,14 +510,10 @@ def _synthesize_channels(type_name: str, addresses: list, channels: int,
     tn = (type_name or "").strip()
 
     def digital(skey: str, start: int, cap: int):
-        for i in range(cap):
-            area = "I" if skey == "DI" else "Q"
-            out.append((skey, f"%{area}{start + i // 8}.{i % 8}", 0, 0))
+        out.extend(_digital_channels(skey, start, cap))
 
     def analog(skey: str, start: int, words: int):
-        for j in range(words):
-            area = "I" if skey == "AI" else "Q"
-            out.append((skey, f"%{area}W{start + 2 * j}", 0, 0))
+        out.extend(_analog_channels(skey, start, words))
 
     # Analog detection must NOT rely on the type_name prefix alone: a real
     # SM 1232 AQ2 analog-output module is named "SM 1232 AQ2" (the "AQ2" is at the
@@ -516,19 +526,27 @@ def _synthesize_channels(type_name: str, addresses: list, channels: int,
     is_analog_type = (
         tn[:2] in ("AI", "AQ")
         or tn.startswith(("AI-", "AQ-"))
-        or (channels > 0 and total_len == 16 * channels)
+        # structural ratio: an analog channel is a 16-bit WORD, so total Length
+        # == 16*channels. Require channels >= 2 so a 1-channel DIGITAL module that
+        # happens to declare a 16-bit reserved range (16 == 16*1) is NOT misread
+        # as analog. The real SM 1232 AQ2 has channels==2, so it still matches.
+        or (channels >= 2 and total_len == 16 * channels)
     )
 
     if tn.startswith("F-DI"):
-        # value byte + value-status byte => 2*channels DI, all in the Input area
+        # value byte + value-status byte => 2*channels DI, all in the Input area.
+        # CLAMP to the declared Input range width: never synthesize a channel past
+        # the real range Length (a too-short range can't carry 2*channels bits).
         if inputs:
-            digital("DI", inputs[0][0], 2 * channels)
+            cap = min(2 * channels, inputs[0][1])
+            digital("DI", inputs[0][0], cap)
     elif tn.startswith("F-DQ"):
-        # DO part from the Output range + a DI readback part from the Input range
+        # DO part from the Output range + a DI readback part from the Input range;
+        # each part clamped to its OWN range Length (never invent past the range).
         if outputs:
-            digital("DO", outputs[0][0], channels)
+            digital("DO", outputs[0][0], min(channels, outputs[0][1]))
         if inputs:
-            digital("DI", inputs[0][0], channels)
+            digital("DI", inputs[0][0], min(channels, inputs[0][1]))
     elif is_analog_type:
         for (s, ln) in inputs:
             analog("AI", s, ln // 16)
@@ -536,39 +554,50 @@ def _synthesize_channels(type_name: str, addresses: list, channels: int,
             analog("AO", s, ln // 16)
     else:
         # standard digital: direction from the single declared range's io_type;
-        # capacity = channels (== Length bits for these ST modules).
+        # capacity = channels (== Length bits for these ST modules), CLAMPED to the
+        # declared range Length so a requested count never exceeds the real range.
         if inputs:
-            digital("DI", inputs[0][0], channels)
+            digital("DI", inputs[0][0], min(channels, inputs[0][1]))
         if outputs:
-            digital("DO", outputs[0][0], channels)
+            digital("DO", outputs[0][0], min(channels, outputs[0][1]))
     return out
+
+
+_ONBOARD_MAX_START = 1000  # ranges at/above this are HSC/pulse double-word telegrams
 
 
 def _synthesize_cpu_onboard(addresses: list) -> list[tuple[str, str, int, int]]:
     """Synthesize ONLY the standard low-address onboard I/O of a 1200-class CPU
     (the 1214C "PLC_1"). Conservative by design — see brief.
 
-    Enumerated ranges:
-      * Input  0/16  -> %I0.0..%I1.7   (16 DI)
-      * Output 0/16  -> %Q0.0..%Q1.7   (16 DO)
-      * Input  64/32 -> %IW64, %IW66   (2 AI words)
-    ALL other ranges (start >= 1000 — HSC/pulse %ID/%QD double-words that
-    parse_address returns None for) yield NO synthesized digital channels here;
-    real tags at such addresses are instead picked up by the tag-sweep in
-    build_distributed_stations. NEVER invents a channel.
+    Range-driven (NOT hardcoded to specific start/length constants): for each
+    declared range whose `start < 1000` (the onboard, non-HSC region) synthesize
+    via the SAME standard-digital / analog logic used elsewhere —
+      * a WORD-structured range (Length a multiple of 16, e.g. Input 64/32) ->
+        Length//16 analog channels (%IW/%QW);
+      * otherwise a bit-addressed digital range (e.g. Input 0/16) -> Length DI/DO.
+    On the real 1214C this yields 16 DI (%I0.0-1.7) + 16 DO (%Q0.0-1.7) +
+    2 AI (%IW64/66) = 34 channels, exactly as before.
+
+    Ranges with `start >= 1000` are EXCLUDED, NOT swept from tags: those are the
+    HSC / pulse %ID/%QD double-word telegram regions that parse_address returns
+    None for, and no I/O module ever declares them as bit/word channels. Skipping
+    them keeps the never-invent guarantee — there is no separate tag-sweep.
     """
     out: list[tuple[str, str, int, int]] = []
     for (io, start, length) in addresses:
-        if io == "Input" and start == 0 and length == 16:
-            for i in range(16):
-                out.append(("DI", f"%I{start + i // 8}.{i % 8}", 0, 0))
-        elif io == "Output" and start == 0 and length == 16:
-            for i in range(16):
-                out.append(("DO", f"%Q{start + i // 8}.{i % 8}", 0, 0))
-        elif io == "Input" and start == 64 and length == 32:
-            for j in range(2):
-                out.append(("AI", f"%IW{start + 2 * j}", 0, 0))
-        # else: HSC/pulse %ID/%QD ranges (start >= 1000) -> nothing synthesized.
+        if start >= _ONBOARD_MAX_START:
+            continue  # HSC/pulse %ID/%QD telegram region -> synthesize nothing
+        # word-structured (Length multiple of 16) onboard range -> analog words;
+        # else bit-addressed digital. A 16-wide DI byte-range (Length==16) is
+        # digital, so analog requires Length be a multiple of 16 AND addressed as
+        # words by the IoType convention: the onboard analog ranges start at 64+.
+        if length % 16 == 0 and start >= 64:
+            skey = "AI" if io == "Input" else "AO"
+            out.extend(_analog_channels(skey, start, length // 16))
+        else:
+            skey = "DI" if io == "Input" else "DO"
+            out.extend(_digital_channels(skey, start, length))
     return out
 
 
@@ -599,6 +628,8 @@ def build_distributed_stations(aml_path: str, tag_tables: dict[str, dict]) -> li
     station, each:
         station_name      str
         owning_plc_label  str   the tag-table label that best covers the station
+        owning_cpu        str|None  the OWNING-PLC CPU type (from that owner
+                          group's CPU-local station; same for all its drops)
         modules           dict[name -> Module]
         io_mods           list[Module]   (rack/document ordered)
         points            list[IoPoint]  (tagged channels only)
@@ -668,6 +699,11 @@ def build_distributed_stations(aml_path: str, tag_tables: dict[str, dict]) -> li
     # --- order stations: heaviest PLC first, CPU-local station first within ---
     ordered_names = _order_stations(stations, owner, nodes)
 
+    # owning-PLC CPU type per owner label (from each group's CPU-local station);
+    # surfaced per station so the PlcProject.controller_cpu is the OWNING CPU even
+    # for drops that carry no CPU module. Data-driven, NEVER invented.
+    owning_cpu = owning_cpu_by_label(stations, owner)
+
     # --- build IR per station (in order) -------------------------------------
     result: list = []
     for st in ordered_names:
@@ -689,6 +725,7 @@ def build_distributed_stations(aml_path: str, tag_tables: dict[str, dict]) -> li
         result.append({
             "station_name": st,
             "owning_plc_label": owner.get(st),
+            "owning_cpu": owning_cpu.get(owner.get(st)),
             "modules": modules,
             "io_mods": io_mods,
             "points": points,
@@ -767,7 +804,18 @@ def _build_station_ir(station_name: str,
                 mod.in_byte_base = base
             else:
                 mod.out_byte_base = base
-        modules[ir_name] = mod
+        # Guard the name->Module dict against an ir_name collision: if a physical
+        # module name itself already ends in " [DI]/[DO]/[AI]/[AO]", a split part
+        # could otherwise compute the same key and silently overwrite a prior
+        # Module. io_mods (ordered list) keeps every object; de-dup the dict key
+        # deterministically by suffixing #2, #3, … so no Module is lost.
+        key = ir_name
+        if key in modules:
+            n = 2
+            while f"{ir_name} #{n}" in modules:
+                n += 1
+            key = f"{ir_name} #{n}"
+        modules[key] = mod
         io_mods.append(mod)
 
         for parsed, raw in chans:
@@ -801,66 +849,80 @@ def _build_station_ir(station_name: str,
     return modules, io_mods, points, skipped
 
 
-def _order_stations(stations: dict, owner: dict, nodes: list) -> list[str]:
-    """Order stations heaviest-PLC-first (1500-class CPU before 1200-class),
-    and within a PLC put the CPU-local station first then drops by ascending
-    station IP / name. Derives CPU class from each station's controller node via
-    the shared profinet_nodes list. Deterministic; never invented."""
-    # map ip -> controller type for controller nodes
-    ctrl_type_by_ip = {ip: typ for (ip, _n, typ, _m, is_ctrl) in nodes if is_ctrl}
+def _station_ip(stations: dict, st: str) -> str | None:
+    """The station IP = the first non-empty network_address its modules carry."""
+    for _mod, info in stations[st]:
+        if info.get("network_address"):
+            return info["network_address"]
+    return None
 
-    def station_ip(st: str) -> str | None:
-        for _mod, info in stations[st]:
-            if info.get("network_address"):
-                return info["network_address"]
-        return None
 
-    def cpu_rank(typ: str | None) -> int:
-        """Lower rank = heavier PLC = sorts first."""
-        t = (typ or "")
-        if "1500" in t or "1512" in t or "151" in t:
-            return 0
-        if "1200" in t or "1214" in t or "121" in t:
-            return 1
-        return 2  # unknown class sorts last (deterministic), never invented
+def _is_cpu_local(stations: dict, st: str) -> bool:
+    """CPU-local == the station physically contains a controller CPU module."""
+    return any(info.get("device_item_type") == "CPU"
+               for _mod, info in stations[st])
 
-    # for each station: does its IP host a controller node (CPU-local)? and the
-    # owning-PLC class rank (derived from the station's own CPU module if it has
-    # one, else from any controller at the station IP).
-    def station_cpu_type(st: str) -> str | None:
-        # a station that itself contains a CPU module names that CPU type
+
+def owning_cpu_by_label(stations: dict, owner: dict) -> dict[str, str | None]:
+    """Per owning-PLC LABEL, the OWNING CPU type = the type_name of the CPU module
+    in that owner group's CPU-LOCAL station (the station that physically contains
+    a device_item_type=="CPU" module). Q100's owner -> "CPU 1512SP F-1 PN"; the
+    .95 station's owner -> "CPU 1214C AC/DC/Rly". An owner group with NO CPU-local
+    station maps to None (NEVER invented). Data-driven from the .aml hardware."""
+    by_label: dict[str, str | None] = {}
+    for st in stations:
+        lbl = owner.get(st)
+        if lbl not in by_label:
+            by_label[lbl] = None
+        if not _is_cpu_local(stations, st):
+            continue
+        cpu_type = None
         for _mod, info in stations[st]:
             if info.get("device_item_type") == "CPU":
-                return info.get("type_name") or None
-        # else: the controller node sharing this station's IP (drops behind a CPU
-        # share the controller's IP) — but ET200SP drops each have their own IP,
-        # so fall back to the owning PLC group's CPU below.
-        ip = station_ip(st)
-        return ctrl_type_by_ip.get(ip) if ip else None
+                cpu_type = info.get("type_name") or None
+                break
+        # If a label somehow has >1 CPU-local station, keep the HEAVIER CPU
+        # (lower _cpu_rank) deterministically rather than letting iteration order
+        # decide. In the real plant each owner group has exactly one CPU-local
+        # station, so this only guards a pathological input — never invents.
+        if by_label[lbl] is None or _cpu_rank(cpu_type) < _cpu_rank(by_label[lbl]):
+            by_label[lbl] = cpu_type
+    return by_label
 
-    # group stations by owning PLC label so all drops of a PLC share its class
-    plc_of = owner  # owning tag-table label is the PLC identity
-    # class rank per PLC label = the heaviest (min) CPU rank among its stations
-    plc_rank: dict[str, int] = {}
-    for st in stations:
-        lbl = plc_of.get(st)
-        r = cpu_rank(station_cpu_type(st))
-        if lbl not in plc_rank or r < plc_rank[lbl]:
-            plc_rank[lbl] = r
 
-    def is_cpu_local(st: str) -> bool:
-        # CPU-local == the station physically contains the controller CPU module
-        return any(info.get("device_item_type") == "CPU"
-                   for _mod, info in stations[st])
+def _cpu_rank(typ: str | None) -> int:
+    """Lower rank = heavier PLC = sorts first. Unknown sorts last (never invented)."""
+    t = (typ or "")
+    if "1500" in t or "1512" in t or "151" in t:
+        return 0
+    if "1200" in t or "1214" in t or "121" in t:
+        return 1
+    return 2
+
+
+def _order_stations(stations: dict, owner: dict, nodes: list) -> list[str]:
+    """Order stations by their OWNING-PLC CPU class (1500-class before 1200-class),
+    then CPU-local station first within the owner group, then ascending station
+    IP, then name.
+
+    The owning-PLC CPU type is derived from the owner group's CPU-LOCAL station
+    (the one physically holding a device_item_type=="CPU" module) via
+    owning_cpu_by_label — NOT from a CPU module physically in each drop. ET200SP
+    drops carry no CPU module, so the previous per-station derivation ranked them
+    only by accident (sharing Q100's owner label); this is data-driven and robust
+    even if the CPU-local station is removed. Deterministic; never invented.
+    `nodes` is accepted for signature stability (no longer needed)."""
+    owning_cpu = owning_cpu_by_label(stations, owner)
+    plc_rank = {lbl: _cpu_rank(typ) for lbl, typ in owning_cpu.items()}
 
     def sort_key(st: str):
-        lbl = plc_of.get(st)
+        lbl = owner.get(st)
         return (
-            plc_rank.get(lbl, 99),          # heaviest PLC first
-            str(lbl),                       # stable PLC grouping
-            0 if is_cpu_local(st) else 1,   # CPU-local station first
-            _ip_sort_tuple(station_ip(st)), # then by ascending station IP
-            st,                             # then name (final tie-break)
+            plc_rank.get(lbl, 99),                      # owning-PLC class first
+            str(lbl),                                   # stable PLC grouping
+            0 if _is_cpu_local(stations, st) else 1,    # CPU-local station first
+            _ip_sort_tuple(_station_ip(stations, st)),  # then ascending IP
+            st,                                         # then name (tie-break)
         )
 
     return sorted(stations.keys(), key=sort_key)

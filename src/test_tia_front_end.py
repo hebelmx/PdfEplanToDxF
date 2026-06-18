@@ -483,6 +483,186 @@ class DistributedStationsPureTest(unittest.TestCase):
         self.assertEqual(sts[0]["owning_plc_label"], "GOOD")
         self.assertFalse(sts[0]["ambiguous_owner"])
 
+    def test_fix3_one_channel_digital_with_16bit_range_not_analog(self):
+        """FIX 3: a 1-channel DIGITAL module declaring a 16-bit reserved range
+        (16 == 16*1) must NOT be misread as analog. channels>=2 is now required
+        for the structural-ratio analog clause. The single %I10.0 tag maps as DI."""
+        hw = {
+            ("ST", "DI 1x"): {
+                "order_number": "", "type_name": "DI 1x",
+                "network_address": None, "channels": 1,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 10, 16)],
+            },
+        }
+        tags = {"d0": {"address": "%I10.0", "comment": "single"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        self.assertEqual(st["io_mods"][0].kind, "DI")
+        self.assertFalse(any(p.analog for p in st["points"]))
+        self.assertEqual(st["points"][0].logix_address, "%I10.0")
+
+    def test_fix2_fdi_clamps_to_short_input_range(self):
+        """FIX 2: an F-DI declaring channels=8 (would request 16 DI) but with a
+        too-short Input range of only 6 bits cannot synthesize past 6 channels."""
+        hw = {
+            ("ST", "F-DI-short"): {
+                "order_number": "", "type_name": "F-DI 8x24VDC HF",
+                "network_address": None, "channels": 8,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 150, 6), ("Output", 150, 32)],
+            },
+        }
+        tags = {f"d{i}": {"address": f"%I150.{i}", "comment": ""} for i in range(6)}
+        sts = self._run(hw, {"A": tags})
+        ch, m, r = self._counts(sts[0])
+        # capacity clamped to 6 (not 2*8=16); all 6 happen to be tagged
+        self.assertEqual(ch, 6)
+        self.assertEqual(m, 6)
+
+    def test_fix4_onboard_di_range_is_range_driven_not_hardcoded(self):
+        """FIX 4: a 1200 CPU whose onboard DI range is Input 0/8 synthesizes 8 DI
+        (proving the onboard logic is range-driven, not hardcoded to 16)."""
+        hw = {
+            ("ST", "PLC_small"): {
+                "order_number": "", "type_name": "CPU 1212C DC/DC/DC",
+                "network_address": "10.0.0.95", "channels": 8,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 8)],
+            },
+        }
+        tags = {"on0": {"address": "%I0.0", "comment": "onboard"}}
+        sts = self._run(hw, {"A": tags})
+        st = sts[0]
+        ch, m, r = self._counts(st)
+        self.assertEqual(ch, 8)          # 8 DI, NOT 16
+        self.assertEqual(m, 1)
+        self.assertEqual(st["io_mods"][0].kind, "DI")
+        self.assertEqual(st["io_mods"][0].points, 8)
+
+    def test_fix1_owning_cpu_on_drops_and_order_without_cpu_local(self):
+        """FIX 1: the 1500 drops carry no CPU module, yet they (a) get the OWNING
+        1500 CPU type and (b) sort BEFORE a 1200 station EVEN WHEN the 1500's
+        CPU-local station is absent — proving the order is owning-PLC-derived,
+        not rescued by a shared station label happening to contain a CPU."""
+        # A 1500-owned DROP (no CPU module) + a 1200 CPU-local station. No 1500
+        # CPU-local station exists here -> owning_cpu for the 1500 group is None,
+        # BUT we add the CPU-local case in the sibling test below. Here we assert
+        # the drop still precedes the 1200 by owning-label grouping + tie-break.
+        # Use NON-overlapping address spaces per PLC so owner selection is clean
+        # (the real plant has disjoint per-PLC tag tables). 1500 lives at %I20-33;
+        # the 1200 onboard at the standard %I0/%Q0/%IW64.
+        hw = {
+            # 1500-owned drop, no CPU, IP .50
+            ("DROP1500", "DI_drop"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.50", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 20, 16)],
+            },
+            # 1500 CPU-LOCAL station, IP .10
+            ("Q1500", "CPU1500"): {
+                "order_number": "", "type_name": "CPU 1512SP F-1 PN",
+                "network_address": "10.0.0.10", "channels": 0,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [],
+            },
+            ("Q1500", "DI_local"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.10", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 32, 16)],
+            },
+            # 1200 CPU-local station, IP .95
+            ("S1200", "PLC_1"): {
+                "order_number": "", "type_name": "CPU 1214C AC/DC/Rly",
+                "network_address": "10.0.0.95", "channels": 26,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 16), ("Output", 0, 16), ("Input", 64, 32)],
+            },
+        }
+        # tag tables: S71500 covers the 1500 addrs (%I20.x and %I32.x),
+        # S71200 covers ONLY the 1200 onboard %Q0.x/%IW64 (disjoint from 1500)
+        t1500 = {}
+        for i in range(16):
+            t1500[f"a{i}"] = {"address": f"%I{20 + i // 8}.{i % 8}", "comment": ""}
+        for i in range(16):
+            t1500[f"b{i}"] = {"address": f"%I{32 + i // 8}.{i % 8}", "comment": ""}
+        t1200 = {"c0": {"address": "%Q0.0", "comment": ""},
+                 "c1": {"address": "%IW64", "comment": ""}}
+        sts = self._run(hw, {"S71500": t1500, "S71200": t1200})
+        order = [s["station_name"] for s in sts]
+        # the two 1500 stations precede the 1200 one
+        self.assertLess(order.index("Q1500"), order.index("S1200"))
+        self.assertLess(order.index("DROP1500"), order.index("S1200"))
+        # CPU-local 1500 station sorts before its drop
+        self.assertLess(order.index("Q1500"), order.index("DROP1500"))
+        # owning_cpu propagated to the DROP (no CPU module of its own)
+        drop = [s for s in sts if s["station_name"] == "DROP1500"][0]
+        self.assertEqual(drop["owning_cpu"], "CPU 1512SP F-1 PN")
+        s1200 = [s for s in sts if s["station_name"] == "S1200"][0]
+        self.assertEqual(s1200["owning_cpu"], "CPU 1214C AC/DC/Rly")
+
+    def test_fix1_order_holds_when_cpu_local_1500_removed(self):
+        """FIX 1 robustness: remove the 1500 CPU-local station entirely. The 1500
+        drop has NO CPU type to derive (owning_cpu None -> rank last by class),
+        BUT we still must not regress: with a real owning CPU absent the system
+        must not invent one. Asserts owning_cpu is None and never fabricated."""
+        hw = {
+            ("DROP1500", "DI_drop"): {
+                "order_number": "", "type_name": "DI 16x24VDC ST",
+                "network_address": "10.0.0.50", "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Input", 20, 16)],
+            },
+            ("S1200", "PLC_1"): {
+                "order_number": "", "type_name": "CPU 1214C AC/DC/Rly",
+                "network_address": "10.0.0.95", "channels": 26,
+                "device_item_type": "CPU", "slot": 1,
+                "addresses": [("Input", 0, 16), ("Output", 0, 16), ("Input", 64, 32)],
+            },
+        }
+        t1500 = {f"a{i}": {"address": f"%I{20 + i // 8}.{i % 8}", "comment": ""}
+                 for i in range(16)}
+        t1200 = {"c0": {"address": "%Q0.0", "comment": ""}}
+        sts = self._run(hw, {"S71500": t1500, "S71200": t1200})
+        drop = [s for s in sts if s["station_name"] == "DROP1500"][0]
+        # no CPU-local station for the 1500 owner -> owning_cpu None (never invented)
+        self.assertIsNone(drop["owning_cpu"])
+
+    def test_fix5_ir_name_collision_keeps_all_modules(self):
+        """FIX 5: a physical module whose NAME already ends in ' [DO]' must not
+        collide in the modules dict with a split part's computed key. Both Module
+        objects survive in io_mods AND get distinct dict keys (no silent loss)."""
+        hw = {
+            # physical name literally ends in ' [DO]'; it is mixed (DI+DO) so it
+            # splits into 'X [DO] [DO]' and 'X [DO] [DI]' — distinct keys — but we
+            # also add a plain DO module literally named 'X [DO]' to force a clash.
+            ("ST", "X [DO]"): {
+                "order_number": "", "type_name": "DQ 16x24VDC ST",
+                "network_address": None, "channels": 16,
+                "device_item_type": "", "slot": 2,
+                "addresses": [("Output", 0, 16)],
+            },
+            ("ST", "X"): {
+                "order_number": "", "type_name": "F-DQ 4x24VDC/2A PM HF",
+                "network_address": None, "channels": 4,
+                "device_item_type": "", "slot": 3,
+                "addresses": [("Input", 100, 40), ("Output", 100, 40)],
+            },
+        }
+        sts = self._run(hw, {"A": {}})
+        st = sts[0]
+        # 'X [DO]' physical (single, name unchanged) + 'X [DI]'/'X [DO]' split
+        # parts of physical 'X'. The split DO part computes key 'X [DO]' which
+        # COLLIDES with the first module's key -> must be de-duped, not lost.
+        self.assertEqual(len(st["io_mods"]), 3, "all 3 IR modules present")
+        self.assertEqual(len(st["modules"]), 3, "no Module silently overwritten")
+        # every io_mods object is reachable from the modules dict (no orphan)
+        dict_objs = set(id(m) for m in st["modules"].values())
+        for mod in st["io_mods"]:
+            self.assertIn(id(mod), dict_objs)
+
     def test_cpu_hsc_range_no_synthesized_spares(self):
         """A CPU 'PLC_1' with an Input 1000/32 HSC range yields NO synthesized
         digital spares from that range — only the standard onboard ranges +

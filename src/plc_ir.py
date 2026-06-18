@@ -161,7 +161,9 @@ def build_tia_distributed_project(
     Returns an ORDERED `list[PlcProject]` (heaviest-PLC-first; see
     tia_front_end.build_distributed_stations), one per station, each with
     source_vendor="siemens", modules/io_mods/points/skipped filled, the shared
-    plant `network_nodes`, and `controller_cpu` set from the station's IP.
+    plant `network_nodes`, and `controller_cpu` set to the OWNING-PLC CPU type
+    (derived from the owner group's CPU-local station, so distributed drops that
+    carry no CPU module still show their owning 1512SP / 1214C).
 
     NEVER raises on a missing/!aml or missing tag tables — returns [] (mirroring
     the existing path's graceful degradation of optional inputs). NEVER invents.
@@ -198,7 +200,12 @@ def build_tia_distributed_project(
 
     projects: list[PlcProject] = []
     for s in stations:
-        controller_cpu = _owning_controller_cpu(network_nodes, s["io_mods"])
+        # controller_cpu = the OWNING-PLC CPU type, derived data-driven from the
+        # owner group's CPU-local station (so ET200SP drops that carry no CPU
+        # module still show their owning 1512SP/1214C). Falls back to the
+        # IP-matched controller node only if the front-end didn't surface one.
+        controller_cpu = s.get("owning_cpu") or _owning_controller_cpu(
+            network_nodes, s["io_mods"])
         projects.append(
             PlcProject(
                 name=s["station_name"],
