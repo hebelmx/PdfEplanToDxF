@@ -164,6 +164,14 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
      column on the Red PROFINET folio, but PREFERS the new grouped-by-function section.) Needs a data
      investigation first: link telegram addresses → PROFINET device/function (the `.aml` drives/RFID
      are devices but their telegram ranges are NOT captured as I/O modules — investigate before design).
+- **E6(c1) DONE & EYEBALL-APPROVED (Abel, 2026-06-17) @ `6db8e91`.** `src/render_plant.py` +
+  `tia_to_qet --distributed`. 191 folios (76 I/O + 86 bornero + matter), 9 per-station bands
+  (front 0–50, bands 100–900, back BOM 1000+/changelog 1900 — moved off 300/900 to clear the
+  Q300/1214C bands), 0 order collisions / 0 token leaks / 0 unresolved conductors, ISO on all.
+  `logix_to_qet.py` untouched → Rockwell byte-identical; single-station Siemens unchanged (22/48/40).
+  Suite 454. **Abel: "looks good — proceed to c2."** Functional-name decision: **keep auto-derived +
+  blanks** (Q100 Cooling1/UV real; Q200 Infrareds, Q300 Coating derived; rest blank — never invent;
+  non-device VS_/Vsupply points excluded from derivation).
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
