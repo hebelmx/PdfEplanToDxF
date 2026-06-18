@@ -657,6 +657,23 @@ class TestCommBuses(unittest.TestCase):
                 len(n[0].split(".")) == 4 and
                 all(p.isdigit() for p in n[0].split(".")))
 
+    def test_cpu_type_derived_from_cfg_not_literal(self):
+        # the CPU node type on BOTH buses comes from the real local-rack CPU
+        # module (controller_cpu_type), NOT a hardcoded "CPU 315-2" literal — so
+        # a sibling S7-300/400 with a different CPU is labelled correctly.
+        import copy
+        real = F.controller_cpu_type(self.cfg)
+        self.assertEqual(dict(self.buses)["PROFINET"][0][2], real)
+        self.assertEqual(dict(self.buses)["PROFIBUS-DP"][0][2], real)
+        # mutate the CPU type -> the buses MUST reflect it (proves derivation)
+        cfg2 = copy.deepcopy(self.cfg)
+        for m in cfg2.modules:
+            if m.kind == "cpu":
+                m.type_str = "CPU 317-2 PN/DP"
+        buses2 = F.build_comm_buses(cfg2)
+        self.assertEqual(dict(buses2)["PROFINET"][0][2], "CPU 317-2 PN/DP")
+        self.assertEqual(dict(buses2)["PROFIBUS-DP"][0][2], "CPU 317-2 PN/DP")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -217,3 +217,15 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
   comunicaciones/índice/rack + 15 I/O cards + 19 bornero + 7 BOM + off-module 5 + changelog), wired
   floor 214/42, 0 unresolved conductors. Next: render-phase adversarial review → final eyeball →
   handoff + merge gate.
+- 2026-06-18: **Full 52-folio set Abel EYEBALL-APPROVED** ("looks good — proceed to merge gate").
+- 2026-06-18: **RENDER-PHASE adversarial review (3a/3b/3c) DONE.** Faithfulness lens CLEAN (no
+  never-invent: hex→dotted IPs byte-exact, camera cfg-slot directions %IW/%QW correct, servos/merge/
+  labels faithful; bonus — parsed ROUTERADDRESS correctly NOT emitted as a node). Acceptance/
+  extendability lens ran by the orchestrator (the delegated agent hung → killed → did it inline):
+  byte-equiv/E6-unchanged/suite/floor/structural all re-confirmed; tests pin real content (not
+  proxies). ONE finding → fixed inline:
+  * **R1 [FIXED] (extendability/never-invent-adjacent).** `build_comm_buses` HARDCODED the literal
+    `"CPU 315-2 PN/DP"` for the CPU node on both buses (a sibling 314/317 would be mislabeled). Now
+    derives it via `controller_cpu_type(cfg)` (blank if absent). **Output BYTE-IDENTICAL for the
+    fixture** (real CPU is a 315-2) → no re-eyeball; + a regression test that MUTATES the CPU type
+    and asserts the buses reflect it (proves derivation, not literal). Suite +1.

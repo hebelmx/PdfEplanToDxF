@@ -544,6 +544,10 @@ def build_comm_buses(cfg: "C.CfgData") -> List[Tuple[str, List[Tuple]]]:
     address string ('DP 4') and ``subnet_mask=None`` (PROFIBUS has no IP/mask —
     one is NEVER fabricated). Only REAL nodes from the parsed cfg are emitted."""
     buses: List[Tuple[str, List[Tuple]]] = []
+    # the CPU type shown on both buses comes from the REAL local-rack CPU module
+    # (e.g. 'CPU 315-2 PN/DP'); blank when absent — NEVER a hardcoded literal, so
+    # a sibling S7-300/400 with a different CPU is labelled correctly.
+    cpu_type = controller_cpu_type(cfg) or ""
 
     # ── PROFINET (Industrial Ethernet) ───────────────────────────────────────
     # the Ethernet subnet carries the CPU PN-IO IP + real mask
@@ -553,7 +557,7 @@ def build_comm_buses(cfg: "C.CfgData") -> List[Tuple[str, List[Tuple]]]:
         cpu_ip = _hex_to_dotted(eth.ip_address)
         cpu_mask = _hex_to_dotted(eth.subnet_mask)
         if cpu_ip:
-            pn_nodes.append((cpu_ip, "PN-IO", "CPU 315-2 PN/DP", cpu_mask, True))
+            pn_nodes.append((cpu_ip, "PN-IO", cpu_type, cpu_mask, True))
     # the PROFINET-IO devices (Keyence cameras): IP lives on the SLOT 0 record
     cams: List[Tuple] = []
     for dev in cfg.io_devices:
@@ -579,7 +583,7 @@ def build_comm_buses(cfg: "C.CfgData") -> List[Tuple[str, List[Tuple]]]:
     dp_nodes: List[Tuple] = []
     if cfg.dp_master_address is not None:
         dp_nodes.append((f"DP {cfg.dp_master_address}", "DP master",
-                         "CPU 315-2 PN/DP", None, True))
+                         cpu_type, None, True))
     for slave in sorted(cfg.dp_slaves, key=lambda s: s.dp_address):
         dp_nodes.append((f"DP {slave.dp_address}", slave.type_str or "",
                          slave.type_str or "", None, False))
