@@ -420,3 +420,457 @@ def _physical_name(ir_name: str) -> str:
     trailing split-kind suffix ('F-DQ1500 [DI]' -> 'F-DQ1500'). Names without a
     suffix pass through unchanged."""
     return _SPLIT_SUFFIX_RE.sub("", ir_name).strip()
+
+
+# ==========================================================================
+# E6: full-plant DISTRIBUTED I/O front-end (NEW path; the single-station
+# build_modules_and_points above is left UNTOUCHED).
+#
+# This path synthesizes each module's real channel addresses from the FULL
+# .aml hardware map (parse_aml) — there is NO per-station IO_Channels.xml for
+# the drops — then joins channels -> tags by parsed address against the
+# owning PLC's tag table. The output mirrors the approved Q100 floor exactly
+# (88 ch / 48 mapped / 40 RESERVA), so it reuses every convention of
+# build_modules_and_points: lowest-byte/word base, index math, raw address in
+# logix_address, comment-or-"" description, _is_nondevice_signal, RESERVA
+# spares appended to skipped, and the " [KIND]" split-name suffix.
+# ==========================================================================
+
+
+def index_tag_table_by_address(tag_table: dict[str, dict]) -> dict[tuple, tuple]:
+    """Pre-index a {Name: {address, comment}} tag table by PARSED address.
+
+    Returns {key -> (name, comment)} where key is the parse_address-normalized
+    identity of the tag's address:
+        digital -> (direction, False, byte, bit)
+        analog  -> (direction, True,  word, None)
+    Tags whose address does not parse as an I/O channel (merker, datablock,
+    %ID/%QD double-words, blank) are dropped from the index — they can never
+    match a synthesized channel. On a (rare) duplicate address the FIRST tag in
+    iteration order wins (deterministic for a given table); never invented.
+    """
+    index: dict[tuple, tuple] = {}
+    for name, meta in tag_table.items():
+        key = _addr_key(parse_address((meta or {}).get("address", "")))
+        if key is None:
+            continue
+        if key not in index:
+            index[key] = (name, (meta or {}).get("comment", ""))
+    return index
+
+
+def _addr_key(parsed: dict | None) -> tuple | None:
+    """Normalize a parse_address result to a hashable identity key, or None."""
+    if parsed is None:
+        return None
+    if parsed["analog"]:
+        return (parsed["direction"], True, parsed["word"], None)
+    return (parsed["direction"], False, parsed["byte"], parsed["bit"])
+
+
+def _synthesize_channels(type_name: str, addresses: list, channels: int,
+                         module_name: str) -> list[tuple[str, int, int, bool]]:
+    """Synthesize a module's (split-key, raw-address) channel list from its
+    .aml type_name + address ranges.
+
+    Returns a list of (skey, raw_address, _ord, _ord2) tuples — actually
+    (skey, raw_address) pairs carried as (skey, raw, 0, 0) for a uniform shape;
+    callers only use skey + raw. Each entry is ONE synthesized channel slot at a
+    REAL address; mapping/spare is decided later by the tag join. NEVER invents
+    an address outside the declared ranges.
+
+    Layout rules (VALIDATED against Abel's approved Q100 — see module header):
+      * Standard digital  (DI/DQ, not F-): one part, capacity = channels (== Length
+        bits), addresses %{I|Q}{start + i//8}.{i%8} from the matching io_type range.
+      * F-DI…             : one DI part, capacity = 2*channels (value + value-status
+        byte), ALL %I{Instart + i//8}.{i%8}; the Output (PROFIsafe control) range
+        is ignored.
+      * F-DQ…             : DO part (capacity = channels, %Q from the Output range)
+        PLUS a DI-readback part (capacity = channels, %I from the Input range).
+      * Analog            : per range, capacity = Length//16 words,
+        %{I|Q}W{start + 2*j}.
+    """
+    out: list[tuple[str, int, int, bool]] = []
+    inputs = [(s, ln) for (io, s, ln) in addresses if io == "Input"]
+    outputs = [(s, ln) for (io, s, ln) in addresses if io == "Output"]
+    tn = (type_name or "").strip()
+
+    def digital(skey: str, start: int, cap: int):
+        for i in range(cap):
+            area = "I" if skey == "DI" else "Q"
+            out.append((skey, f"%{area}{start + i // 8}.{i % 8}", 0, 0))
+
+    def analog(skey: str, start: int, words: int):
+        for j in range(words):
+            area = "I" if skey == "AI" else "Q"
+            out.append((skey, f"%{area}W{start + 2 * j}", 0, 0))
+
+    # Analog detection must NOT rely on the type_name prefix alone: a real
+    # SM 1232 AQ2 analog-output module is named "SM 1232 AQ2" (the "AQ2" is at the
+    # END), so a prefix test misclassifies it as digital and drops its %QW tag.
+    # An analog channel is a 16-bit WORD, so the module's total declared Length is
+    # 16*channels (AQ2: 32==16*2; AI 4x: 64==16*4) — whereas a standard digital
+    # module has Length==channels (ratio 1) and an F-module (caught above by the
+    # "F-" prefix) has a PROFIsafe-inflated ratio. Structure, not naming.
+    total_len = sum(ln for (_io, _s, ln) in addresses)
+    is_analog_type = (
+        tn[:2] in ("AI", "AQ")
+        or tn.startswith(("AI-", "AQ-"))
+        or (channels > 0 and total_len == 16 * channels)
+    )
+
+    if tn.startswith("F-DI"):
+        # value byte + value-status byte => 2*channels DI, all in the Input area
+        if inputs:
+            digital("DI", inputs[0][0], 2 * channels)
+    elif tn.startswith("F-DQ"):
+        # DO part from the Output range + a DI readback part from the Input range
+        if outputs:
+            digital("DO", outputs[0][0], channels)
+        if inputs:
+            digital("DI", inputs[0][0], channels)
+    elif is_analog_type:
+        for (s, ln) in inputs:
+            analog("AI", s, ln // 16)
+        for (s, ln) in outputs:
+            analog("AO", s, ln // 16)
+    else:
+        # standard digital: direction from the single declared range's io_type;
+        # capacity = channels (== Length bits for these ST modules).
+        if inputs:
+            digital("DI", inputs[0][0], channels)
+        if outputs:
+            digital("DO", outputs[0][0], channels)
+    return out
+
+
+def _synthesize_cpu_onboard(addresses: list) -> list[tuple[str, str, int, int]]:
+    """Synthesize ONLY the standard low-address onboard I/O of a 1200-class CPU
+    (the 1214C "PLC_1"). Conservative by design — see brief.
+
+    Enumerated ranges:
+      * Input  0/16  -> %I0.0..%I1.7   (16 DI)
+      * Output 0/16  -> %Q0.0..%Q1.7   (16 DO)
+      * Input  64/32 -> %IW64, %IW66   (2 AI words)
+    ALL other ranges (start >= 1000 — HSC/pulse %ID/%QD double-words that
+    parse_address returns None for) yield NO synthesized digital channels here;
+    real tags at such addresses are instead picked up by the tag-sweep in
+    build_distributed_stations. NEVER invents a channel.
+    """
+    out: list[tuple[str, str, int, int]] = []
+    for (io, start, length) in addresses:
+        if io == "Input" and start == 0 and length == 16:
+            for i in range(16):
+                out.append(("DI", f"%I{start + i // 8}.{i % 8}", 0, 0))
+        elif io == "Output" and start == 0 and length == 16:
+            for i in range(16):
+                out.append(("DO", f"%Q{start + i // 8}.{i % 8}", 0, 0))
+        elif io == "Input" and start == 64 and length == 32:
+            for j in range(2):
+                out.append(("AI", f"%IW{start + 2 * j}", 0, 0))
+        # else: HSC/pulse %ID/%QD ranges (start >= 1000) -> nothing synthesized.
+    return out
+
+
+def _direction_of(skey: str) -> str:
+    return "I" if skey in ("DI", "AI") else "O"
+
+
+def _module_coverage(synth_addrs: list[str], addr_index: dict[tuple, tuple]) -> int:
+    """How many of these synthesized channel addresses a given pre-indexed tag
+    table covers (used for owning-table selection)."""
+    n = 0
+    for raw in synth_addrs:
+        if _addr_key(parse_address(raw)) in addr_index:
+            n += 1
+    return n
+
+
+def build_distributed_stations(aml_path: str, tag_tables: dict[str, dict]) -> list:
+    """Build the vendor-neutral IR for ALL stations of the plant from the FULL
+    .aml hardware map joined to the per-PLC tag tables. PURE (tables passed in).
+
+    Args:
+      aml_path:   the full CAx/AML export (parse_aml + profinet_nodes source).
+      tag_tables: {label -> {Name: {address, comment}}} — one entry per sibling
+                  PLCTags*.xlsx (label is the xlsx stem, e.g. "S71500"/"S71200").
+
+    Returns an ORDERED list of dicts (heaviest-PLC-first; see brief), one per
+    station, each:
+        station_name      str
+        owning_plc_label  str   the tag-table label that best covers the station
+        modules           dict[name -> Module]
+        io_mods           list[Module]   (rack/document ordered)
+        points            list[IoPoint]  (tagged channels only)
+        skipped           list[tuple]    (RESERVA spares + unparsable)
+        ambiguous_owner   bool   True only on a genuine coverage TIE (raise it)
+
+    NEVER invents: a channel address comes from the real .aml enumeration; a
+    description from the real comment (or ""); an unmatched channel is RESERVA.
+    Returns [] on a missing/!aml (parse_aml raises only on a true parse error,
+    which the public plc_ir wrapper guards).
+    """
+    import tia_aml
+
+    hw = tia_aml.parse_aml(aml_path)
+    nodes = tia_aml.profinet_nodes(aml_path)
+
+    # Pre-index every candidate tag table by parsed address for fast coverage +
+    # join. Deterministic table order (sorted by label) for tie auditing.
+    indexed = {lbl: index_tag_table_by_address(tbl)
+               for lbl, tbl in tag_tables.items()}
+
+    # --- group hw modules by station, preserving .aml document order (slot) ---
+    stations: dict[str, list[tuple[str, dict]]] = {}
+    for (st, mod), info in hw.items():
+        stations.setdefault(st, []).append((mod, info))
+    for st in stations:
+        stations[st].sort(key=lambda mi: (mi[1].get("slot") is None,
+                                          mi[1].get("slot") or 0))
+
+    # --- synthesize each station's channel list (skip CPU/head/server) -------
+    # station -> list of (phys_name, info, [(skey, raw, _, _), ...])
+    synth_by_station: dict[str, list[tuple[str, dict, list]]] = {}
+    for st, mods in stations.items():
+        per_mod: list[tuple[str, dict, list]] = []
+        for mod, info in mods:
+            addresses = info.get("addresses") or []
+            if info.get("device_item_type") == "CPU":
+                # Only the 1200-class onboard CPU carries real low-address I/O.
+                ch = _synthesize_cpu_onboard(addresses)
+                if ch:
+                    per_mod.append((mod, info, ch))
+                continue
+            if not addresses:
+                continue  # head/server module — no I/O
+            ch = _synthesize_channels(info.get("type_name", ""), addresses,
+                                      info.get("channels", 0), mod)
+            if ch:
+                per_mod.append((mod, info, ch))
+        synth_by_station[st] = per_mod
+
+    # --- choose the owning tag table per station (highest coverage) ----------
+    owner: dict[str, str] = {}
+    ambiguous: dict[str, bool] = {}
+    for st, per_mod in synth_by_station.items():
+        all_addrs = [raw for (_m, _i, chans) in per_mod for (_sk, raw, _a, _b) in chans]
+        best_lbl, best_cov, tie = None, -1, False
+        for lbl in sorted(indexed):
+            cov = _module_coverage(all_addrs, indexed[lbl])
+            if cov > best_cov:
+                best_cov, best_lbl, tie = cov, lbl, False
+            elif cov == best_cov and best_cov > 0:
+                tie = True
+        owner[st] = best_lbl
+        # a genuine tie among >0-coverage tables is ambiguous — flag, never guess
+        ambiguous[st] = tie and best_cov > 0
+
+    # --- order stations: heaviest PLC first, CPU-local station first within ---
+    ordered_names = _order_stations(stations, owner, nodes)
+
+    # --- build IR per station (in order) -------------------------------------
+    result: list = []
+    for st in ordered_names:
+        addr_index = indexed.get(owner.get(st), {})
+        modules, io_mods, points, skipped = _build_station_ir(
+            st, synth_by_station[st], addr_index)
+        # join the .aml hardware (catalog/order#, network_address, slot)
+        station_hw = tia_aml.hardware_for_station(hw, st)
+        for mod in io_mods:
+            info = station_hw.get(_physical_name(mod.name))
+            if not info:
+                continue
+            if info.get("order_number"):
+                mod.catalog = info["order_number"]
+            if info.get("network_address"):
+                mod.network_address = info["network_address"]
+            if info.get("slot") is not None:
+                mod.slot = info["slot"]
+        result.append({
+            "station_name": st,
+            "owning_plc_label": owner.get(st),
+            "modules": modules,
+            "io_mods": io_mods,
+            "points": points,
+            "skipped": skipped,
+            "ambiguous_owner": ambiguous.get(st, False),
+        })
+    return result
+
+
+def _build_station_ir(station_name: str,
+                      per_mod: list[tuple[str, dict, list]],
+                      addr_index: dict[tuple, tuple]):
+    """Turn one station's synthesized channels into Module/IoPoint IR, mirroring
+    build_modules_and_points' conventions (split per (direction,analog), lowest
+    byte/word base, index math, raw address, comment-or-"", _is_nondevice_signal,
+    RESERVA spares -> skipped). Returns (modules, io_mods, points, skipped)."""
+    # group synthesized channels per (phys, skey) into the IR-module split parts
+    groups: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for phys, _info, chans in per_mod:
+        for (skey, raw, _a, _b) in chans:
+            parsed = parse_address(raw)
+            if parsed is None:
+                continue  # synthesized addresses always parse; guard anyway
+            gkey = (phys, skey)
+            if gkey not in groups:
+                groups[gkey] = {
+                    "phys": phys,
+                    "direction": parsed["direction"],
+                    "analog": parsed["analog"],
+                    "kind": skey,
+                    "channels": [],
+                }
+                order.append(gkey)
+            groups[gkey]["channels"].append((parsed, raw))
+
+    phys_split_count: dict[str, int] = {}
+    for (phys, _skey) in order:
+        phys_split_count[phys] = phys_split_count.get(phys, 0) + 1
+
+    modules: dict[str, Module] = {}
+    io_mods: list[Module] = []
+    points: list[IoPoint] = []
+    skipped: list[tuple] = []
+
+    for gkey in order:
+        g = groups[gkey]
+        phys, skey = gkey
+        analog = g["analog"]
+        direction = g["direction"]
+        chans = g["channels"]
+
+        if analog:
+            base = min(p["word"] for p, _ in chans)
+        else:
+            base = min(p["byte"] for p, _ in chans)
+
+        split = phys_split_count[phys] > 1
+        ir_name = f"{phys} [{g['kind']}]" if split else phys
+        mod = Module(
+            name=ir_name,
+            catalog="",
+            parent=station_name,
+            slot=None,
+            kind=g["kind"],
+            points=len(chans),
+            rack=0,
+        )
+        if analog:
+            if direction == "I":
+                mod.an_in_word_base = base
+            else:
+                mod.an_out_word_base = base
+        else:
+            if direction == "I":
+                mod.in_byte_base = base
+            else:
+                mod.out_byte_base = base
+        modules[ir_name] = mod
+        io_mods.append(mod)
+
+        for parsed, raw in chans:
+            if analog:
+                index = (parsed["word"] - base) // 2
+            else:
+                index = (parsed["byte"] - base) * 8 + parsed["bit"]
+
+            match = addr_index.get(_addr_key(parsed))
+            if match is None:
+                # no tag at this synthesized address -> RESERVA spare
+                skipped.append(("RESERVA", raw, "spare"))
+                continue
+            tag, comment = match
+            description = comment or ""  # NEVER invent
+            points.append(
+                IoPoint(
+                    tag=tag,
+                    module=mod,
+                    direction=direction,
+                    index=index,
+                    analog=analog,
+                    radix="",
+                    description=description,
+                    logix_address=raw,
+                    scope=station_name,
+                    no_symbol=_is_nondevice_signal(tag, description),
+                )
+            )
+
+    return modules, io_mods, points, skipped
+
+
+def _order_stations(stations: dict, owner: dict, nodes: list) -> list[str]:
+    """Order stations heaviest-PLC-first (1500-class CPU before 1200-class),
+    and within a PLC put the CPU-local station first then drops by ascending
+    station IP / name. Derives CPU class from each station's controller node via
+    the shared profinet_nodes list. Deterministic; never invented."""
+    # map ip -> controller type for controller nodes
+    ctrl_type_by_ip = {ip: typ for (ip, _n, typ, _m, is_ctrl) in nodes if is_ctrl}
+
+    def station_ip(st: str) -> str | None:
+        for _mod, info in stations[st]:
+            if info.get("network_address"):
+                return info["network_address"]
+        return None
+
+    def cpu_rank(typ: str | None) -> int:
+        """Lower rank = heavier PLC = sorts first."""
+        t = (typ or "")
+        if "1500" in t or "1512" in t or "151" in t:
+            return 0
+        if "1200" in t or "1214" in t or "121" in t:
+            return 1
+        return 2  # unknown class sorts last (deterministic), never invented
+
+    # for each station: does its IP host a controller node (CPU-local)? and the
+    # owning-PLC class rank (derived from the station's own CPU module if it has
+    # one, else from any controller at the station IP).
+    def station_cpu_type(st: str) -> str | None:
+        # a station that itself contains a CPU module names that CPU type
+        for _mod, info in stations[st]:
+            if info.get("device_item_type") == "CPU":
+                return info.get("type_name") or None
+        # else: the controller node sharing this station's IP (drops behind a CPU
+        # share the controller's IP) — but ET200SP drops each have their own IP,
+        # so fall back to the owning PLC group's CPU below.
+        ip = station_ip(st)
+        return ctrl_type_by_ip.get(ip) if ip else None
+
+    # group stations by owning PLC label so all drops of a PLC share its class
+    plc_of = owner  # owning tag-table label is the PLC identity
+    # class rank per PLC label = the heaviest (min) CPU rank among its stations
+    plc_rank: dict[str, int] = {}
+    for st in stations:
+        lbl = plc_of.get(st)
+        r = cpu_rank(station_cpu_type(st))
+        if lbl not in plc_rank or r < plc_rank[lbl]:
+            plc_rank[lbl] = r
+
+    def is_cpu_local(st: str) -> bool:
+        # CPU-local == the station physically contains the controller CPU module
+        return any(info.get("device_item_type") == "CPU"
+                   for _mod, info in stations[st])
+
+    def sort_key(st: str):
+        lbl = plc_of.get(st)
+        return (
+            plc_rank.get(lbl, 99),          # heaviest PLC first
+            str(lbl),                       # stable PLC grouping
+            0 if is_cpu_local(st) else 1,   # CPU-local station first
+            _ip_sort_tuple(station_ip(st)), # then by ascending station IP
+            st,                             # then name (final tie-break)
+        )
+
+    return sorted(stations.keys(), key=sort_key)
+
+
+def _ip_sort_tuple(ip: str | None) -> tuple:
+    """Numeric IPv4 sort tuple; None / non-numeric sorts last (deterministic)."""
+    if not ip:
+        return (1,)
+    try:
+        return (0,) + tuple(int(x) for x in ip.split("."))
+    except (ValueError, AttributeError):
+        return (1,)

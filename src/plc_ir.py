@@ -142,6 +142,80 @@ def build_tia_project(
     )
 
 
+def build_tia_distributed_project(
+    aml_path: str,
+    tag_paths: list[str] | None = None,
+) -> list[PlcProject]:
+    """E6: build ONE PlcProject per station for the FULL plant's distributed I/O.
+
+    The single-station `build_tia_project` reads a per-station IO_Channels.xml
+    (only Q100 has one). This NEW path instead synthesizes every station's real
+    channel addresses from the FULL CAx/AML (`parse_aml`) and joins them to the
+    per-PLC `PLCTags*.xlsx` tag tables by address — covering all 9 stations.
+
+    Args:
+      aml_path:  the full CAx/AML export.
+      tag_paths: explicit list of PLCTags*.xlsx paths; when None, sibling
+                 `PLCTags*.xlsx` next to the .aml are auto-discovered (sorted).
+
+    Returns an ORDERED `list[PlcProject]` (heaviest-PLC-first; see
+    tia_front_end.build_distributed_stations), one per station, each with
+    source_vendor="siemens", modules/io_mods/points/skipped filled, the shared
+    plant `network_nodes`, and `controller_cpu` set from the station's IP.
+
+    NEVER raises on a missing/!aml or missing tag tables — returns [] (mirroring
+    the existing path's graceful degradation of optional inputs). NEVER invents.
+    """
+    import os
+    import glob as _glob
+
+    if not aml_path or not os.path.isfile(aml_path):
+        return []
+
+    import tia_front_end as tia
+    import tia_aml
+
+    # discover sibling PLCTags*.xlsx if not given (mirror tia_to_qet spirit)
+    if tag_paths is None:
+        folder = os.path.dirname(os.path.abspath(aml_path))
+        tag_paths = sorted(_glob.glob(os.path.join(folder, "PLCTags*.xlsx")))
+
+    # label each table by its xlsx stem with the "PLCTags" prefix stripped, e.g.
+    # "PLCTagsS71500.xlsx" -> "S71500" — the owning-PLC label surfaced in the IR.
+    tag_tables: dict[str, dict] = {}
+    for p in tag_paths or []:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        label = stem[len("PLCTags"):] if stem.startswith("PLCTags") else stem
+        tag_tables[label] = tia.load_tag_table(p)
+
+    try:
+        stations = tia.build_distributed_stations(aml_path, tag_tables)
+    except Exception:
+        # a true .aml parse error degrades to [] rather than crashing the caller
+        return []
+
+    network_nodes = tia_aml.profinet_nodes(aml_path)
+
+    projects: list[PlcProject] = []
+    for s in stations:
+        controller_cpu = _owning_controller_cpu(network_nodes, s["io_mods"])
+        projects.append(
+            PlcProject(
+                name=s["station_name"],
+                source_vendor="siemens",
+                modules=s["modules"],
+                io_mods=s["io_mods"],
+                points=s["points"],
+                skipped=s["skipped"],
+                controller_tags={},
+                program_tags={},
+                network_nodes=network_nodes,
+                controller_cpu=controller_cpu,
+            )
+        )
+    return projects
+
+
 def _owning_controller_cpu(network_nodes: list, io_mods: list) -> str | None:
     """Identify the CPU TYPE that owns this station from REAL .aml data.
 
