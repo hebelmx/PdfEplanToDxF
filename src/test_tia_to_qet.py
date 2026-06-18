@@ -983,11 +983,15 @@ class PlantRenderTest(unittest.TestCase):
         self.irs = plc_ir.build_tia_distributed_project(str(self.AML))
         if not self.irs:
             self.skipTest("distributed IR empty (missing tag tables?)")
+        # E6 (c2): build the off-module groups so the rendered plant includes the
+        # new section (the structural checks below then cover its folios too).
+        self.offmodule_groups = tia_to_qet._offmodule_groups(str(self.AML))
         buf = io.StringIO()
         self._tmp = tempfile.TemporaryDirectory()
         out = Path(self._tmp.name) / "plant.qet"
         with redirect_stderr(buf):
-            rc = rp.render_plant(self.irs, str(out))
+            rc = rp.render_plant(self.irs, str(out),
+                                 offmodule_groups=self.offmodule_groups)
         self.assertEqual(rc, 0)
         self.err = buf.getvalue()
         self.root = ET.fromstring(out.read_text(encoding="utf-8"))
@@ -1114,6 +1118,70 @@ class PlantRenderTest(unittest.TestCase):
         self.assertTrue(q100)
         self.assertTrue(q100[0].startswith("Q100-Cooling1/UV — Cooling1/UV"),
                         f"band title not prefixed: {q100[0]!r}")
+
+    # ── E6 (c2): off-module PROFINET I/O section ─────────────────────────────
+    def test_offmodule_section_present_in_band(self):
+        # the section's folios sit in the 1100..1899 band (after BOM, before the
+        # changelog), titled with the section name.
+        off = [(int(d.get("order")), d.get("title") or "")
+               for d in self.root.findall("diagram")
+               if rp.PLANT_SEC_OFFMODULE <= int(d.get("order"))
+               < rp.PLANT_SEC_CHANGELOG]
+        self.assertTrue(off, "no off-module folios in the 1100.. band")
+        for _o, t in off:
+            self.assertIn(rp.OFFMODULE_SECTION_TITLE, t)
+        # all three functions appear, summary tables AND box folios
+        blob = " ".join(t for _o, t in off)
+        for func in ("Drives", "Identification", "Coordination/Safety"):
+            self.assertIn(func, blob)
+        self.assertIn("resumen", blob)  # the summary-table folios
+
+    def test_offmodule_index_lists_section_no_collision(self):
+        # no duplicate-order warning anywhere, and the índice lists the section's
+        # first folio order (1100).
+        self.assertNotIn("duplicate diagram order", self.err)
+        self.assertIn(rp.PLANT_SEC_OFFMODULE, self.orders)
+        # the section orders are all globally unique
+        self.assertEqual(len(self.orders), len(set(self.orders)))
+
+    def test_offmodule_element_boxes_present(self):
+        # per-element placeholder boxes carry the element name + address range as
+        # a box heading; assert a couple of known element titles appear.
+        texts = []
+        for d in self.root.findall("diagram"):
+            if rp.PLANT_SEC_OFFMODULE <= int(d.get("order")) < rp.PLANT_SEC_CHANGELOG:
+                texts.extend(t.get("text") or "" for t in d.iter("input"))
+        blob = " ".join(texts)
+        for elem in ("-UvRot", "-A1", "-bcoat"):
+            self.assertTrue(any(elem in t for t in texts),
+                            f"element box {elem!r} not drawn")
+        # the box headings carry an address range in brackets
+        self.assertTrue(any("-UvRot" in t and "[" in t and "%IW1000" in t
+                            for t in texts))
+
+    def test_offmodule_folios_have_titleblock_and_no_raw_tokens(self):
+        off = [d for d in self.root.findall("diagram")
+               if rp.PLANT_SEC_OFFMODULE <= int(d.get("order"))
+               < rp.PLANT_SEC_CHANGELOG]
+        self.assertTrue(off)
+        for d in off:
+            self.assertEqual(d.get("titleblocktemplate"), "exxerpro",
+                             f"off-module folio {d.get('title')!r} no titleblock")
+            for inp in d.iter("input"):
+                self.assertNotIn("%{", inp.get("text") or "",
+                                 f"raw token in {d.get('title')!r}")
+
+    def test_offmodule_box_terminals_unique_per_folio(self):
+        # every stub is a borne_2 terminal; ids must be unique within each folio.
+        for d in self.root.findall("diagram"):
+            o = int(d.get("order"))
+            if not (rp.PLANT_SEC_OFFMODULE <= o < rp.PLANT_SEC_CHANGELOG):
+                continue
+            elements = d.find("elements")
+            ids = [t.get("id") for el in elements.findall("element")
+                   for t in el.iter("terminal")]
+            self.assertEqual(len(ids), len(set(ids)),
+                             f"duplicate terminal id in {d.get('title')!r}")
 
 
 if __name__ == "__main__":

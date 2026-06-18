@@ -98,6 +98,30 @@ def _discover_aml(io_channels_path: str) -> str | None:
     return str(candidates[0]) if candidates else None
 
 
+def _offmodule_groups(aml_path: str | None):
+    """E6 (c2): build the off-module PROFINET I/O groups for the plant.
+
+    Discovers the sibling PLCTags*.xlsx next to the .aml (labelled by stem with
+    the 'PLCTags' prefix stripped, mirroring build_tia_distributed_project), loads
+    them, and hands them to tia_front_end.build_offmodule_groups along with the
+    .aml. Returns [] when there is no .aml (so render_plant draws no section) —
+    NEVER invents."""
+    if not aml_path:
+        return []
+    import os
+    import glob as _glob
+    import tia_front_end as tia
+
+    folder = os.path.dirname(os.path.abspath(aml_path))
+    tag_paths = sorted(_glob.glob(os.path.join(folder, "PLCTags*.xlsx")))
+    tag_tables: dict[str, dict] = {}
+    for p in tag_paths:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        label = stem[len("PLCTags"):] if stem.startswith("PLCTags") else stem
+        tag_tables[label] = tia.load_tag_table(p)
+    return tia.build_offmodule_groups(aml_path, tag_tables)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Convert a Siemens TIA Portal IO_Channels.xml export to a "
@@ -146,6 +170,12 @@ def main(argv=None):
     # is empty ([]) and we degrade to a cover-only plant document, never invent.
     if args.distributed:
         station_irs = plc_ir.build_tia_distributed_project(aml_path)
+        # E6 (c2): compute the OFF-MODULE PROFINET I/O groups (drive telegrams /
+        # RFID / coordination signals that address as real I/O but sit on no
+        # Siemens card) so render_plant can draw the new section. Gated ON only
+        # when there ARE off-module tags (build_offmodule_groups returns [] when
+        # there is no .aml or nothing off-module → render_plant draws no section).
+        offmodule_groups = _offmodule_groups(aml_path)
         if args.output:
             out_path = args.output
         else:
@@ -155,6 +185,7 @@ def main(argv=None):
             station_irs, out_path,
             no_symbols=args.no_symbols,
             wire_scheme=args.wire_scheme,
+            offmodule_groups=offmodule_groups,
         )
 
     # Build the vendor-neutral PlcProject IR via the Siemens front end, then hand

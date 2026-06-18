@@ -768,5 +768,172 @@ class DistributedPlantIntegrationTest(unittest.TestCase):
         self.assertGreater(tot_m, 0)
 
 
+# --------------------------------------------------------------------------
+# E6 (c2): off-module PROFINET I/O grouping (build_offmodule_groups + helpers)
+# --------------------------------------------------------------------------
+class OffmoduleHelpersPureTest(unittest.TestCase):
+    """Pure tests for the function-bucket + element-prefix helpers."""
+
+    def test_function_bucket_drives_analog_word_ge_1000(self):
+        # analog word >= 1000 -> Drives (a drive telegram)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%IW1000")), "Drives")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%QW1010")), "Drives")
+        # analog word < 1000 is NOT a drive (falls to coordination)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%IW64")),
+            "Coordination/Safety")
+
+    def test_function_bucket_identification_digital_byte_ge_8600(self):
+        # digital byte >= 8600 -> Identification (RFID reader)
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%I8600.0")),
+            "Identification")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%Q8616.6")),
+            "Identification")
+
+    def test_function_bucket_coordination_default(self):
+        # everything else -> Coordination/Safety
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%I14.0")),
+            "Coordination/Safety")
+        self.assertEqual(
+            tia.offmodule_function(tia.parse_address("%Q500.3")),
+            "Coordination/Safety")
+
+    def test_element_prefix_strips_vs_then_leading_token(self):
+        self.assertEqual(tia.offmodule_element("UvRot_InStatus"), "UvRot")
+        self.assertEqual(tia.offmodule_element("UvRot_OutControl"), "UvRot")
+        self.assertEqual(tia.offmodule_element("A1_TagDetected"), "A1")
+        self.assertEqual(tia.offmodule_element("VS_bcoat_ema2"), "bcoat")
+        # the VS_ strip is only the LEADING prefix
+        self.assertEqual(tia.offmodule_element("VS_evst10_x"), "evst10")
+
+
+class OffmoduleGroupsPureTest(unittest.TestCase):
+    """Pure test of build_offmodule_groups on tiny inline tag tables with a
+    monkey-patched IR builder (so no fixture is needed): correct bucketing,
+    element prefixes, and off-module = not-covered only."""
+
+    def setUp(self):
+        # a tiny covered set returned by a stubbed distributed-IR build
+        self._orig = plc_ir.build_tia_distributed_project
+
+        class _Pt:
+            def __init__(self, a):
+                self.logix_address = a
+
+        class _IR:
+            # %I8.0 is a real, COVERED on-module address (a mapped point)
+            points = [_Pt("%I8.0")]
+            # %Q8.0 is a COVERED RESERVA spare (skipped 2nd field)
+            skipped = [("RESERVA", "%Q8.0", "spare")]
+
+        plc_ir.build_tia_distributed_project = lambda *_a, **_k: [_IR()]
+
+    def tearDown(self):
+        plc_ir.build_tia_distributed_project = self._orig
+
+    def test_grouping_bucketing_and_covered_exclusion(self):
+        tables = {"S71500": {
+            # Drives: analog word >= 1000, element prefix from leading token
+            "UvRot_InStatus": {"address": "%IW1000", "comment": "Uv rot status"},
+            "UvRot_OutControl": {"address": "%QW1002", "comment": ""},
+            # Identification: digital byte >= 8600
+            "A1_TagDetected": {"address": "%I8600.0", "comment": "Tag detected"},
+            # Coordination/Safety: digital byte < 8600 (VS_-stripped element 'ev')
+            "VS_ev_open": {"address": "%I14.0", "comment": "valve open"},
+            # COVERED on-module -> excluded
+            "on_module_mapped": {"address": "%I8.0", "comment": "x"},
+            # COVERED spare -> excluded
+            "on_module_spare": {"address": "%Q8.0", "comment": "y"},
+            # NOT an I/O address (merker) -> excluded (parse None)
+            "not_io": {"address": "%MD100", "comment": "z"},
+        }}
+        groups = tia.build_offmodule_groups("dummy.aml", tables)
+        gd = dict(groups)
+        self.assertEqual([f for f, _ in groups],
+                         ["Drives", "Identification", "Coordination/Safety"])
+        # Drives: ONE element "UvRot" with both its tags
+        drives = gd["Drives"]
+        self.assertEqual([e["name"] for e in drives], ["UvRot"])
+        self.assertEqual(len(drives[0]["tags"]), 2)
+        self.assertEqual(drives[0]["addr_min"], "%IW1000")
+        self.assertEqual(drives[0]["addr_max"], "%QW1002")
+        # Identification: A1
+        self.assertEqual([e["name"] for e in gd["Identification"]], ["A1"])
+        # Coordination/Safety: 'ev' (VS_-stripped; covered/merker excluded)
+        self.assertEqual([e["name"] for e in gd["Coordination/Safety"]], ["ev"])
+        # the COVERED + merker tags are NOT anywhere in the result
+        all_tags = [t[1] for _f, els in groups for e in els for t in e["tags"]]
+        self.assertNotIn("on_module_mapped", all_tags)
+        self.assertNotIn("on_module_spare", all_tags)
+        self.assertNotIn("not_io", all_tags)
+
+    def test_empty_when_all_covered(self):
+        tables = {"X": {"a": {"address": "%I8.0", "comment": ""},
+                        "b": {"address": "%Q8.0", "comment": ""}}}
+        self.assertEqual(tia.build_offmodule_groups("dummy.aml", tables), [])
+
+
+@unittest.skipUnless(_imv1_aml().is_file(), "IMV1 .aml fixture absent")
+class OffmoduleGroupsFixtureTest(unittest.TestCase):
+    """Fixture-gated: the real plant gives Abel's VALIDATED off-module counts."""
+
+    def setUp(self):
+        import glob
+        import os
+        aml = str(_imv1_aml())
+        folder = os.path.dirname(aml)
+        tag_tables = {}
+        for p in sorted(glob.glob(os.path.join(folder, "PLCTags*.xlsx"))):
+            stem = os.path.splitext(os.path.basename(p))[0]
+            label = stem[len("PLCTags"):] if stem.startswith("PLCTags") else stem
+            tag_tables[label] = tia.load_tag_table(p)
+        self.groups = tia.build_offmodule_groups(aml, tag_tables)
+        self.by_func = dict(self.groups)
+
+    def _counts(self, func):
+        els = self.by_func[func]
+        return len(els), sum(len(e["tags"]) for e in els)
+
+    def test_function_order_and_total(self):
+        self.assertEqual([f for f, _ in self.groups],
+                         ["Drives", "Identification", "Coordination/Safety"])
+        total = sum(len(e["tags"]) for _f, els in self.groups for e in els)
+        self.assertEqual(total, 231)
+
+    def test_drives_counts(self):
+        self.assertEqual(self._counts("Drives"), (19, 111))
+        elems = {e["name"]: len(e["tags"]) for e in self.by_func["Drives"]}
+        self.assertEqual(elems.get("UvRot"), 8)
+        self.assertEqual(elems.get("UvTran"), 8)
+        self.assertEqual(elems.get("CoatLA"), 8)
+
+    def test_identification_counts(self):
+        self.assertEqual(self._counts("Identification"), (3, 36))
+        self.assertEqual(
+            sorted(e["name"] for e in self.by_func["Identification"]),
+            ["A1", "A2", "A3"])
+
+    def test_coordination_counts(self):
+        self.assertEqual(self._counts("Coordination/Safety"), (41, 84))
+        elems = {e["name"]: len(e["tags"])
+                 for e in self.by_func["Coordination/Safety"]}
+        self.assertEqual(elems.get("ev"), 28)
+        self.assertEqual(elems.get("bcoat"), 8)
+
+    def test_never_invents_addresses_and_descriptions(self):
+        # every tag's address parses as a real I/O address; description is a str
+        for _f, els in self.groups:
+            for e in els:
+                for raw, name, desc in e["tags"]:
+                    self.assertIsNotNone(tia.parse_address(raw))
+                    self.assertIsInstance(name, str)
+                    self.assertIsInstance(desc, str)
+
+
 if __name__ == "__main__":
     unittest.main()

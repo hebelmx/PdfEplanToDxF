@@ -22,8 +22,11 @@ Layout (folio `order` == DA.5 section page):
     base+1, base+2, …   I/O card folios   (build_folio / build_split_card_folio)
     base+50, base+51, … bornero folios    (build_bornero_folios)
   Back matter (shared)
-    300+  BOM          — aggregates ALL stations' bom_rows in station order
-    900   Historial    — changelog
+    1000+ BOM          — aggregates ALL stations' bom_rows in station order
+    1100+ E/S PROFINET fuera de módulo (E6 c2) — the off-module section: per
+                        function (Drives / Identification / Coordination/Safety) a
+                        summary table + packed per-element placeholder boxes
+    1900  Historial    — changelog
 
 Every band's I/O folios reuse build_folio / build_split_card_folio (incl. the
 split-pair detection and the RESERVA spare drawing) EXACTLY as render_project
@@ -73,6 +76,13 @@ PLANT_SEC_NETWORK = 30      # shared PROFINET network
 PLANT_SEC_INDEX = 40        # plant índice (built LAST)
 PLANT_SEC_RACK = 50         # station-grouped rack
 PLANT_SEC_BOM = 1000        # aggregated BOM (paginates 1000, 1001, …)
+# E6 (c2): the off-module PROFINET I/O section. It sorts AFTER the station bands
+# and AFTER the BOM (which paginates 1000..10xx) and BEFORE the changelog, so the
+# índice reading order is front → stations → BOM → off-module → changelog. Its
+# own folios (per-function summary tables + packed per-element box folios) take
+# consecutive orders from this base upward (a running counter), so the section
+# never collides with the BOM band below it or the changelog above it.
+PLANT_SEC_OFFMODULE = 1100  # off-module PROFINET I/O (summary tables + boxes)
 PLANT_SEC_CHANGELOG = 1900  # changelog, LAST
 
 
@@ -403,9 +413,252 @@ def _prefix_titles(diagrams, label):
         d.set("title", f"{label} · {t}")
 
 
+# ── Off-module PROFINET I/O section (E6 c2) ──────────────────────────────────
+# A NEW section drawing the ~231 addressed tags that parse as real I/O addresses
+# yet fall outside every I/O module's .aml range — drive telegrams / RFID / plant-
+# coordination signals on mixed-brand PROFINET nodes, NOT on a Siemens I/O card.
+# Grouped BY FUNCTION (Drives / Identification / Coordination/Safety) → PER
+# ELEMENT (tag-name prefix). Each function gets: a SUMMARY TABLE folio (every tag:
+# address | tag | description | element, paginated, mirroring build_summary_folios'
+# text-grid) THEN packed per-element placeholder BOX folios (each box = the element
+# name + its address range, with one labelled borne_2 STUB per tag, like the card
+# folios' RESERVA stubs — placeholders, no conductors required). NEVER invents:
+# every address/name/description is the real tag-table data.
+OFFMODULE_SECTION_TITLE = "E/S PROFINET fuera de módulo"
+
+# Summary-table folio: reuse the BOM/summary text-grid geometry. Columns laid out
+# left→right inside SUMMARY_PAGE_WIDTH; description gets the widest budget.
+_OFF_SUMMARY_COLUMNS = (
+    ("address", 20, 12),
+    ("tag", 130, 34),
+    ("description", 430, 64),
+    ("element", 880, 18),
+)
+_OFF_SUMMARY_LABELS = {
+    "address": "DIRECCIÓN", "tag": "TAG", "description": "DESCRIPCIÓN",
+    "element": "ELEMENTO",
+}
+
+# Per-element box geometry: small "mini I/O card" boxes packed several per folio.
+# Two columns of boxes; a box is a rectangle with a heading (name + address range)
+# and one stub row per tag (a borne_2 terminal + address/tag/description text).
+_OFFBOX_COL_X = (60, 540)      # left x of the box in each of the 2 columns
+_OFFBOX_W = 440                # box width
+_OFFBOX_HEAD_Y = 50            # first box-row top y on a folio
+_OFFBOX_STUB_DY = 18           # per-stub vertical pitch
+_OFFBOX_HEAD_H = 26            # heading band height above the first stub
+_OFFBOX_STUB_X = 30            # stub terminal x inset from the box left edge
+_OFFBOX_PAD = 14               # vertical pad below the last stub inside the box
+_OFFBOX_GAP = 16               # vertical gap between stacked boxes in a column
+_OFFBOX_PAGE_H = lq.SUMMARY_HEIGHT  # 660
+_OFFBOX_BOTTOM = _OFFBOX_PAGE_H - 24
+
+
+def _offmodule_summary_rows(element_list) -> list[dict]:
+    """Flatten one function's element_list into summary table rows (one per tag),
+    in element order then tag order: {address, tag, description, element}."""
+    rows = []
+    for el in element_list:
+        for raw, name, desc in el["tags"]:
+            rows.append({"address": raw, "tag": name,
+                         "description": desc, "element": el["name"]})
+    return rows
+
+
+def _add_offmodule_summary_diagram(project, order, title, page_rows,
+                                   page_no, page_total):
+    """One off-module summary-table folio: a legible text grid (header + rows),
+    text + shape primitives ONLY (empty <elements>/<conductors>) so it inherits
+    the ISO title block, mirroring _add_summary_diagram's style."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order),
+        "title": f"{title} ({page_no}/{page_total})",
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(lq.SUMMARY_HEIGHT), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+
+    x0 = _OFF_SUMMARY_COLUMNS[0][1]
+    lq.add_text(inputs, x0, 30,
+                f"{title.upper()}   (PÁG. {page_no} DE {page_total})",
+                lq.FONT_HEADER)
+    for key, x, _w in _OFF_SUMMARY_COLUMNS:
+        lq.add_text(inputs, x, lq.SUMMARY_ROW_Y0, _OFF_SUMMARY_LABELS[key],
+                    lq.FONT_SMALL)
+    for i, row in enumerate(page_rows):
+        y = lq.SUMMARY_ROW_Y0 + (i + 1) * lq.SUMMARY_ROW_DY
+        for key, x, w in _OFF_SUMMARY_COLUMNS:
+            value = lq._ellipsize(row.get(key, ""), w)
+            if value:
+                lq.add_text(inputs, x, y, value, lq.FONT_SMALL)
+    return diagram
+
+
+def _build_offmodule_summary(project, start_order, func, element_list) -> int:
+    """Append the paginated summary-table folio(s) for ONE function (every tag in
+    that function). Returns the count appended. Orders run start_order .."""
+    rows = _offmodule_summary_rows(element_list)
+    if not rows:
+        return 0
+    per = lq.SUMMARY_ROWS_PER_PAGE
+    pages = [rows[i:i + per] for i in range(0, len(rows), per)]
+    title = f"{OFFMODULE_SECTION_TITLE} · {func} — resumen"
+    for n, page_rows in enumerate(pages, start=1):
+        _add_offmodule_summary_diagram(project, start_order + n - 1, title,
+                                       page_rows, n, len(pages))
+    return len(pages)
+
+
+def _offbox_height(n_tags: int) -> int:
+    """Drawn height of one element box with `n_tags` stubs."""
+    return _OFFBOX_HEAD_H + max(n_tags, 1) * _OFFBOX_STUB_DY + _OFFBOX_PAD
+
+
+def _pack_offmodule_boxes(element_list) -> list[list[tuple]]:
+    """Pack the function's element boxes into folios: a 2-column layout, boxes
+    stacked top→bottom per column until the next box would overflow the page,
+    then the next column, then a new folio. Returns a list of folios; each folio
+    is a list of (col_x, top_y, element) placements. Deterministic."""
+    folios: list[list[tuple]] = []
+    cur: list[tuple] = []
+    col = 0
+    y = _OFFBOX_HEAD_Y
+    for el in element_list:
+        h = _offbox_height(len(el["tags"]))
+        if y + h > _OFFBOX_BOTTOM:
+            # this column is full — move to the next column, or a new folio
+            col += 1
+            y = _OFFBOX_HEAD_Y
+            if col >= len(_OFFBOX_COL_X):
+                folios.append(cur)
+                cur = []
+                col = 0
+        cur.append((_OFFBOX_COL_X[col], y, el))
+        y += h + _OFFBOX_GAP
+    if cur:
+        folios.append(cur)
+    return folios
+
+
+def _draw_offmodule_box(elements, shapes, inputs, ids, col_x, top_y, el):
+    """Draw ONE element placeholder box at (col_x, top_y): a rectangle headed by
+    the element name + address RANGE, with one labelled borne_2 STUB per tag
+    (address + tag + description) for the user to wire. Placeholder — no
+    conductors. Reuses add_terminal_element (borne_2, like the RESERVA stubs);
+    `ids` keeps every terminal id unique per diagram."""
+    tags = el["tags"]
+    box_bottom = top_y + _offbox_height(len(tags))
+    lq.add_rect(shapes, col_x, top_y, col_x + _OFFBOX_W, box_bottom)
+    rng = el["addr_min"] if el["addr_min"] == el["addr_max"] \
+        else f"{el['addr_min']} … {el['addr_max']}"
+    lq.add_text(inputs, col_x + 6, top_y - 4,
+                f"-{el['name']}   [{rng}]", lq.FONT_TEXT)
+    # a rule under the heading band
+    head_rule_y = top_y + _OFFBOX_HEAD_H - 6
+    lq.add_rect(shapes, col_x, head_rule_y, col_x + _OFFBOX_W, head_rule_y + 1)
+    for i, (raw, name, desc) in enumerate(tags):
+        y = top_y + _OFFBOX_HEAD_H + i * _OFFBOX_STUB_DY
+        x = col_x + _OFFBOX_STUB_X
+        # the wiring STUB: a borne_2 terminal (no conductor — a placeholder the
+        # user finishes), labelled with the real address; function = the tag name
+        # so QET shows it on the terminal. ids stay diagram-unique.
+        lq.add_terminal_element(elements, x, y, raw, name, ids)
+        # the row text: address, tag, then description (ellipsized so it stays in
+        # the box). NEVER invents — a blank description prints nothing.
+        lq.add_text(inputs, x + 16, y - 6,
+                    f"{lq._ellipsize(raw, 9):<9}  {lq._ellipsize(name, 28)}",
+                    lq.FONT_SMALL)
+        if desc:
+            lq.add_text(inputs, x + 16, y + 4, lq._ellipsize(desc, 52),
+                        lq.FONT_SMALL)
+
+
+def _add_offmodule_box_diagram(project, order, title, placements):
+    """One packed per-element box folio: several element placeholder boxes drawn
+    with borne_2 stubs + text + shapes. Carries the ISO title block."""
+    diagram = ET.SubElement(project, "diagram", {
+        "order": str(order), "title": title,
+        "cols": "17", "colsize": "60", "rows": "8", "rowsize": "80",
+        "height": str(_OFFBOX_PAGE_H), "displaycols": "false",
+        "displayrows": "false", "author": "logix_to_qet", "folio": "%id/%total",
+        "version": "0.100",
+    })
+    ET.SubElement(diagram, "defaultconductor", {
+        "type": "multi", "num": "", "condsize": "1", "numsize": "9",
+        "displaytext": "1", "onetextperfolio": "0",
+    })
+    elements = ET.SubElement(diagram, "elements")
+    ET.SubElement(diagram, "conductors")
+    shapes = ET.SubElement(diagram, "shapes")
+    inputs = ET.SubElement(diagram, "inputs")
+    ids = __import__("itertools").count(1)  # terminal ids unique per diagram
+
+    lq.add_text(inputs, _OFFBOX_COL_X[0], 30, title.upper(), lq.FONT_HEADER)
+    for col_x, top_y, el in placements:
+        _draw_offmodule_box(elements, shapes, inputs, ids, col_x, top_y, el)
+    return diagram
+
+
+def _build_offmodule_boxes(project, start_order, func, element_list) -> int:
+    """Append the packed per-element box folio(s) for ONE function. Returns the
+    count appended. Orders run start_order .."""
+    folios = _pack_offmodule_boxes(element_list)
+    if not folios:
+        return 0
+    total = len(folios)
+    for n, placements in enumerate(folios, start=1):
+        suffix = f" ({n}/{total})" if total > 1 else ""
+        title = f"{OFFMODULE_SECTION_TITLE} · {func}{suffix}"
+        _add_offmodule_box_diagram(project, start_order + n - 1, title,
+                                   placements)
+    return total
+
+
+def build_offmodule_section(project, start_order, groups) -> tuple[int, list]:
+    """Append the WHOLE off-module section to `project`: per function (in the
+    Drives, Identification, Coordination/Safety order the data layer yields), a
+    summary-table folio block THEN the packed per-element box folios. Orders run
+    consecutively from `start_order` (a running counter), so the section never
+    collides with the BOM band below it or the changelog above it.
+
+    Returns ``(n_folios, layout)`` where layout is a per-function report list of
+    ``{func, n_elements, n_tags, summary_orders, box_orders}`` for the stderr
+    note / índice. Returns (0, []) when `groups` is empty (gated OFF — never an
+    empty section). NEVER invents."""
+    if not groups:
+        return 0, []
+    order = start_order
+    n_folios = 0
+    layout = []
+    for func, element_list in groups:
+        n_tags = sum(len(e["tags"]) for e in element_list)
+        s0 = order
+        ns = _build_offmodule_summary(project, order, func, element_list)
+        order += ns
+        b0 = order
+        nb = _build_offmodule_boxes(project, order, func, element_list)
+        order += nb
+        n_folios += ns + nb
+        layout.append({
+            "func": func, "n_elements": len(element_list), "n_tags": n_tags,
+            "summary_orders": list(range(s0, s0 + ns)),
+            "box_orders": list(range(b0, b0 + nb)),
+        })
+    return n_folios, layout
+
+
 # ── render_plant ─────────────────────────────────────────────────────────────
 def render_plant(station_irs, out_path, *, no_symbols=False,
-                 wire_scheme="address"):
+                 wire_scheme="address", offmodule_groups=None):
     """Render the FULL plant (ordered ``list[PlcProject]``) to ONE `.qet` with
     PER-STATION 100-BANDS. See the module docstring for the layout. Reuses the
     existing folio builders verbatim (so the single-station / Rockwell path is
@@ -494,6 +747,11 @@ def render_plant(station_irs, out_path, *, no_symbols=False,
 
     # ── shared back matter ───────────────────────────────────────────────────
     summary_folios = lq.build_summary_folios(project, PLANT_SEC_BOM, bom_rows)
+    # E6 (c2): the off-module PROFINET I/O section (BETWEEN the BOM and the
+    # changelog). Gated ON only when there ARE off-module groups (never an empty
+    # section). Built BEFORE the índice so the índice enumerates it.
+    offmodule_folios, offmodule_layout = build_offmodule_section(
+        project, PLANT_SEC_OFFMODULE, offmodule_groups or [])
     revisions = lq.normalize_revisions(tmpl.get("revisions"), tb_fields)
     changelog_folios = lq.build_changelog_folios(project, PLANT_SEC_CHANGELOG,
                                                  revisions)
@@ -529,6 +787,15 @@ def render_plant(station_irs, out_path, *, no_symbols=False,
     print(f"spare      : {n_spare} reserve terminal(s) (RESERVA)", file=err)
     print(f"bom        : {len(bom_rows)} rows over {summary_folios} "
           f"summary folio(s)", file=err)
+    if offmodule_folios:
+        n_off = sum(r["n_tags"] for r in offmodule_layout)
+        print(f"off-module : {offmodule_folios} folio(s) (orders "
+              f"{PLANT_SEC_OFFMODULE}..), {n_off} tag(s) over "
+              f"{len(offmodule_layout)} function(s)", file=err)
+        for r in offmodule_layout:
+            print(f"  · {r['func']:<20} {r['n_elements']:>2} elem / "
+                  f"{r['n_tags']:>3} tag — summary {r['summary_orders']}, "
+                  f"boxes {r['box_orders']}", file=err)
     if network_folios:
         print(f"red PN     : {network_folios} '{lq.PROFINET_TITLE}' folio(s) "
               f"(order {PLANT_SEC_NETWORK}), {len(network_nodes)} node(s)",

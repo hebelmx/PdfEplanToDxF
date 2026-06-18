@@ -936,3 +936,165 @@ def _ip_sort_tuple(ip: str | None) -> tuple:
         return (0,) + tuple(int(x) for x in ip.split("."))
     except (ValueError, AttributeError):
         return (1,)
+
+
+# ==========================================================================
+# E6 (c2): OFF-MODULE PROFINET I/O grouping (data layer for the new section).
+#
+# ~231 addressed S71500/S71200 tags parse as REAL I/O addresses yet fall
+# outside every I/O module's .aml range — they are drive telegrams / RFID /
+# plant-coordination signals on mixed-brand PROFINET nodes (SK drives, EX260
+# valve terminals, BIS RFID), NOT on a Siemens I/O card. Abel wants them drawn
+# as a NEW section (subsection BY FUNCTION -> PER ELEMENT) so a user can finish
+# the schematic. This helper computes the off-module tag set and groups it.
+# PURE (tables passed in); NEVER invents — every address/name/description is the
+# real tag-table data; an absent comment is "".
+# ==========================================================================
+
+# Function buckets (per parsed address), Abel's LOCKED rule:
+#   analog with word >= 1000             -> "Drives"
+#   non-analog (digital) with byte >= 8600 -> "Identification"
+#   everything else                      -> "Coordination/Safety"
+OFFMODULE_FUNCTIONS = ("Drives", "Identification", "Coordination/Safety")
+_OFFMODULE_DRIVE_WORD = 1000
+_OFFMODULE_IDENT_BYTE = 8600
+
+# Element identity = tag-name prefix: strip a leading "VS_", then take the
+# leading [A-Za-z]+[0-9]* token (UvRot_InStatus -> "UvRot"; A1_TagDetected ->
+# "A1"; VS_bcoat_ema2 -> "bcoat").
+_OFFMODULE_ELEMENT_RE = re.compile(r"[A-Za-z]+[0-9]*")
+
+
+def offmodule_function(parsed: dict) -> str:
+    """The function bucket for a parsed I/O address (Abel's LOCKED rule).
+
+    analog word >= 1000 -> "Drives"; digital byte >= 8600 -> "Identification";
+    everything else -> "Coordination/Safety". Pure; never invents."""
+    if parsed.get("analog") and parsed.get("word", 0) >= _OFFMODULE_DRIVE_WORD:
+        return "Drives"
+    if (not parsed.get("analog")) and parsed.get("byte", 0) >= _OFFMODULE_IDENT_BYTE:
+        return "Identification"
+    return "Coordination/Safety"
+
+
+def offmodule_element(tag_name: str) -> str:
+    """Element identity for a tag name: strip a leading 'VS_', then take the
+    leading [A-Za-z]+[0-9]* token. 'UvRot_InStatus' -> 'UvRot', 'A1_TagDetected'
+    -> 'A1', 'VS_bcoat_ema2' -> 'bcoat'. Falls back to the (stripped) name when
+    it carries no leading alpha token (never invents)."""
+    name = (tag_name or "").strip()
+    if name.startswith("VS_"):
+        name = name[3:]
+    m = _OFFMODULE_ELEMENT_RE.match(name)
+    return m.group(0) if m else name
+
+
+def _addr_sort_key(raw: str) -> tuple:
+    """A deterministic numeric-aware sort key for a raw Siemens address so
+    addresses order as a human reads them (%I8.0 before %I10.0, %IW1000 before
+    %IW1002). Falls back to the raw string when it doesn't parse."""
+    parsed = parse_address(raw)
+    if parsed is None:
+        return (3, raw)
+    # analog after digital within the same area is fine; sort by (digital?,
+    # area, number, bit). area I before Q.
+    area = 0 if parsed["direction"] == "I" else 1
+    if parsed["analog"]:
+        return (1, area, parsed["word"], 0)
+    return (0, area, parsed["byte"], parsed["bit"])
+
+
+def collect_covered_addresses(station_irs) -> set:
+    """Every COVERED raw address across the rendered plant: every mapped point's
+    `IoPoint.logix_address` PLUS every RESERVA spare's raw address (the 2nd field
+    of a `skipped` entry) across all stations. This is the SAME data the renderer
+    draws, so a tag at any of these addresses is ON a module, not off it.
+
+    `station_irs` is the ordered list of PlcProject-shaped objects (each with
+    `.points` and `.skipped`). Pure; never invents. Addresses are stored stripped
+    so the membership test matches the tag table's stripped address string."""
+    covered: set = set()
+    for ir in station_irs or []:
+        for pt in getattr(ir, "points", None) or []:
+            raw = (getattr(pt, "logix_address", "") or "").strip()
+            if raw:
+                covered.add(raw)
+        for entry in getattr(ir, "skipped", None) or []:
+            # skipped entries are (tag-or-RESERVA, raw-address, reason)
+            if len(entry) >= 2:
+                raw = (entry[1] or "").strip()
+                if raw:
+                    covered.add(raw)
+    return covered
+
+
+def build_offmodule_groups(aml_path: str, tag_tables: dict[str, dict]):
+    """Compute and group the OFF-MODULE addressed tag set for the plant.
+
+    Args:
+      aml_path:   the full CAx/AML export (used to build the plant IR via the
+                  SAME path the renderer uses, so the covered set is exact).
+      tag_tables: {label -> {Name: {address, comment}}} — one per PLCTags*.xlsx.
+
+    Logic (Abel's VALIDATED rule):
+      1. Build the plant IR (build_tia_distributed_project) and collect every
+         COVERED address (mapped points + RESERVA spares) across all stations.
+      2. A tag is OFF-MODULE when parse_address(its address) is a real I/O
+         address (not None) AND its raw address string is NOT covered.
+      3. Function bucket per parsed address (offmodule_function); element identity
+         = tag-name prefix (offmodule_element).
+      4. Return an ordered structure: a list of (function, elements) in the order
+         Drives, Identification, Coordination/Safety (functions with no off-module
+         tag are omitted); within a function, elements are sorted by their lowest
+         address then name; each element is a dict
+            {"name", "addr_min", "addr_max", "tags": [(raw, name, desc), ...]}
+         with its tags sorted by address then name.
+
+    PURE over the passed tables (the IR is built from aml_path). NEVER invents:
+    addresses/names/descriptions are the real tag-table data; description is the
+    comment or "". Returns [] when there are no off-module tags."""
+    import plc_ir
+
+    station_irs = plc_ir.build_tia_distributed_project(aml_path,
+                                                       tag_paths=None) \
+        if aml_path else []
+    # the distributed builder re-discovers sibling tag tables itself, but we pass
+    # the same tables in for the off-module classification so the two never drift.
+    covered = collect_covered_addresses(station_irs)
+
+    # function -> element-name -> list[(raw, name, desc)]
+    grouped: dict[str, dict[str, list]] = {f: {} for f in OFFMODULE_FUNCTIONS}
+    for _label, tbl in (tag_tables or {}).items():
+        for name, meta in (tbl or {}).items():
+            raw = ((meta or {}).get("address", "") or "").strip()
+            parsed = parse_address(raw)
+            if parsed is None:
+                continue  # not a real I/O address (merker / %ID / blank)
+            if raw in covered:
+                continue  # on a module — not off-module
+            func = offmodule_function(parsed)
+            elem = offmodule_element(name)
+            desc = (meta or {}).get("comment", "") or ""  # NEVER invent
+            grouped[func].setdefault(elem, []).append((raw, name, desc))
+
+    result = []
+    for func in OFFMODULE_FUNCTIONS:
+        elems = grouped[func]
+        if not elems:
+            continue  # never an empty function section
+        element_list = []
+        for elem_name in elems:
+            tags = sorted(elems[elem_name],
+                          key=lambda t: (_addr_sort_key(t[0]), t[1]))
+            addrs = [t[0] for t in tags]
+            element_list.append({
+                "name": elem_name,
+                "addr_min": addrs[0],
+                "addr_max": addrs[-1],
+                "tags": tags,
+            })
+        # elements sorted by their lowest address then name (deterministic)
+        element_list.sort(key=lambda e: (_addr_sort_key(e["addr_min"]),
+                                         e["name"]))
+        result.append((func, element_list))
+    return result
