@@ -1,27 +1,29 @@
-# Handoff — Phase 2 (EPIC E6 full-plant distributed I/O ✅ MERGED to `main` @ `f3a3fc5`; next: S7-300 / new vendor work)
+# Handoff — Phase 2 (EPIC E7 S7-300 vendor path ✅ COMPLETE on `feat/s7300-import`, PENDING MERGE GATE; E6 distributed I/O merged @ `f3a3fc5`)
 
 > Self-contained handoff so a **fresh agent in a new session** can resume with no prior context.
-> Updated 2026-06-17 (supersedes the "feature-complete on a branch, pending eyeball + merge gate"
-> version). Phase 1 (Rockwell) shipped & merged long ago; this is **Phase 2** (multi-vendor +
-> config-driven diagrams), driven by `docs/planning/{brief,prd,epics}.md`. **Live source of truth for
-> the open work = `docs/TIA-tracker.md`** (GitHub issue #2 CLOSED 2026-06-17; surviving low-pri nits → issue #3).
+> Updated 2026-06-18. Phase 1 (Rockwell) shipped long ago; Phase 2 = multi-vendor Siemens, driven by
+> `docs/planning/{brief,prd,epics}.md`. **Live source of truth for the OPEN S7-300 work =
+> `docs/S7300-tracker.md`**; the TIA work = `docs/TIA-tracker.md` (E6 merged). GitHub issue #3 = low-pri nits.
 
-## ⚡ CURRENT STATUS (2026-06-17) — EPIC E6 ✅ DONE & MERGED to `main` @ `f3a3fc5` (read `docs/TIA-tracker.md` EPIC E6 for full detail)
-The full-plant distributed-I/O build shipped & Abel-eyeball-approved. **Suite 397→471 green; Rockwell
-byte-identical; single-station Siemens unchanged (22 folios).** What landed:
-- **E6(a)** `parse_aml` carries per-module I/O address ranges.
-- **E6(b)+(b-fix)** `plc_ir.build_tia_distributed_project(aml)` → ordered `list[PlcProject]`,
-  **9 stations / 768 ch / 547 mapped / 221 RESERVA** (range-join; ownership by tag-table coverage;
-  F-DI value+status / F-DQ split; **1214C onboard clamped to the datasheet's physical 14 DI/10 DO/2 AI**
-  — `_CPU_ONBOARD_PHYSICAL_IO` from the S7-1200 catalog in `docs/`). Q100 reproduces the approved
-  single-station floor 88/48/40. Passed a 3-lens adversarial review.
-- **E6(c1)** `src/render_plant.py` + `tia_to_qet --distributed` → per-station numeric bands
-  (front 0–50, bands 100–900, back 1000+). 191 folios.
-- **E6(c2)** off-module PROFINET I/O section (drives/RFID/coordination, by function→per element,
-  summary tables + per-element placeholder boxes). Plant = **206 folios**; off-module 233 non-1:1 tags.
-- **NEXT candidates** (none gating): S7-300 path (fixture in hand, schema in memory
-  `siemens-import-findings`); issue-#3 low-pri nits; a curated Siemens símbología dictionary. The
-  CLI `tia_to_qet --distributed` is the whole-plant entry; single-station `tia_to_qet …` still works.
+## ⚡ CURRENT STATUS (2026-06-18) — EPIC E7 (Siemens S7-300 / STEP 7 Classic) ✅ COMPLETE on branch `feat/s7300-import`, ⏳ AWAITING ABEL'S MERGE GATE
+A full new vendor path: STEP 7 `.cfg` (HW config) + `.asc` (symbol table) → the SAME `PlcProject` IR →
+a single-station QElectroTech drawing set. **Abel eyeball-APPROVED the full 52-folio set**; passed a
+3-lens data review + a 2-lens render review (both clean after fixes). **Suite 471→588 green; Rockwell
+BYTE-IDENTICAL throughout; E6/TIA + single-station Siemens unchanged.** Read `docs/S7300-tracker.md` for full detail. What landed (branch commits `eaa04b4`..`445dad0`):
+- **S7300-1** `src/s7300_cfg.py` (`parse_cfg`) + `src/s7300_asc.py` (`parse_asc`/`physical_io`) — parsers.
+- **S7300-2 + DATAFIX** `plc_ir.build_s7300_project(cfg,asc) -> list[PlcProject]` (per-station: local
+  CPU 315-2 rack + each PROFIBUS-DP drop). **FLOOR: 7 stations / 256 ch / 214 mapped / 42 RESERVA.**
+  (DATAFIX recovered 27 real channels a 3-lens review caught being over-dropped by an unanchored spare regex.)
+- **S7300-3a** `src/s7300_to_qet.py` CLI + `build_s7300_single_project` (merge to ONE station) →
+  `render_project`. Single-station layout, DP drops as remote cards (Abel's locked choice).
+- **S7300-3b** off-module section (E6 c2 reuse): Drives = 3 CMMP-AS servos; Identification = 2 Keyence
+  cameras (data-linked `.cfg` slots) + an unassigned-PIW-telegrams element (never invents the camera link).
+  Bus-aware labels (PROFIBUS-DP / PROFINET) via an additive `render_project(offmodule_bus_labels=)` param.
+- **S7300-3c** two-bus topology folio "Red de comunicaciones" (`build_comm_buses` → PROFINET 192.168.30.x
+  CPU+2 cameras, PROFIBUS-DP CPU+9 slaves) via an additive `render_project(topology_buses=)` param.
+- **Full S7-300 set = 52 folios.** CLI: `python s7300_to_qet.py <…>.cfg -o out.qet` (sibling `.asc` auto-discovered).
+- **⏳ NEXT = the MERGE GATE: `feat/s7300-import` → `main` (Abel's call).** Then (none gating): S7-400
+  (shares the STEP 7 schema — the path is built to extend), issue-#3 nits, a curated Siemens símbología dict.
 
 ## TL;DR — read this first
 - Product: turn a PLC program export into a near-finished **QElectroTech** drawing set.
