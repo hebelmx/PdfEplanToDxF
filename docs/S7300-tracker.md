@@ -128,8 +128,9 @@ exists, else leave on the network/off-module overview; NEVER invent. Also: **the
       OUTSIDE the AI8 range 352–366; positive-control test proves the PIW join works when in range.
       Off-module exposed: 3× CMMP-AS servo telegrams (DP 16/17/18 @528+) + 2× Keyence cameras
       (PROFINET IOADDR 1/2). NEVER invented.
-- [ ] **S7300-3 — CLI + render + off-module + topology + EYEBALL GATE.** `src/s7300_to_qet.py`.
-      **GATED DESIGN LOCKED (Abel, 2026-06-17):**
+- [x] **S7300-3 — CLI + render + off-module + topology + EYEBALL GATE. DONE (3a `80d05b3` / 3b
+      `354e1e1`+`e08270a` / 3c `adbb9b2`+`445dad0` R1-fix) — see status log. MERGED to `main` @ `ac75dca`.**
+      `src/s7300_to_qet.py`. **GATED DESIGN LOCKED (Abel, 2026-06-17):**
       * **Layout = SINGLE STATION, DP drops as remote CARDS** (option 3, the compact view): ONE
         `S7300` station band — local modules (DI32×2, DO32×2, AI8) + the 5 ET200eco + Festo CPX
         all drawn as I/O card folios in one sequence, **one bornero strip, one BOM**. So S7300-3

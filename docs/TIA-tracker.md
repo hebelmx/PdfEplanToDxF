@@ -289,7 +289,7 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
       listed in the drawing index. **Pending the human merge gate `feat/e5-alim` → main.**
 - [ ] **Símbología vocabulary (future, low pri)** — only `push_button` matches the Siemens tag
       vocabulary today (correct never-invent). Could add a Siemens symbol dictionary (fcuv/VS_/etc.)
-      with CONFIDENT mappings only. Not a bug.
+      with CONFIDENT mappings only. Not a bug. → tracked in **GitHub issue #3**.
 - [x] **Adversarial review** (phase boundary, 5 refute-lenses Workflow) DONE 2026-06-16. No floor
       blockers (matched=75/FP=0/byte-equiv all confirmed). Findings triaged below.
 - [~] **TIA-FIX-1** — address review findings (never-invent + test holes). IN FLIGHT 2026-06-16:
@@ -321,6 +321,7 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
       RE-BASELINE 10/106/75/0/62/33 → 11/106/75/0/78/35 w/ matched=75+FP=0 invariants; 1200-first;
       Siemens-only folio scope; `.aml`-direct catalog vs curated module_db for Story 4.1; resolve the
       4 carried open questions) + reconcile `epics.md` Stories 2.2/2.3 (Siemens-first) & 4.1.
+      → tracked in **GitHub issue #5**.
 - [x] **Rockwell-pipeline audit** (Abel-requested, 3-lens Workflow) DONE 2026-06-16. Confirmed real
       analogues of the TIA defect classes: (MAJOR) `SUPPLY_DEFAULT_RAILS` seeds a **`24V` rail no
       WADDING card references** (collect_supply_rails, logix_to_qet.py:1298/1305) + the test locks it
@@ -340,6 +341,7 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
       with Abel's test power data). The 3 surviving low-pri nits → **GitHub issue #3** (non-blocking).
 - [ ] **TIA-DEFERRED (nits)** — >32-ch column overflow assert+test (latent); NET inter-row spine
       (cosmetic); two-column positional test drive from a synthetic 32-ch module (currently skips).
+      → tracked in **GitHub issue #3** (overflow also #1).
 
 ## Status log
 - 2026-06-17: **E5 OUTPUT-FIXES CYCLE (branch `feat/e5-output-fixes`, off `main` @ 586555e).**
