@@ -95,21 +95,27 @@ def classify_type(type_str: str) -> Tuple[str, Optional[int]]:
     return ("other", None)
 
 
-# A bare placeholder symbol NAME like "I0.4", "I38.1", "Q11.3", "13.5" (with or
-# without the leading I/Q letter). Used only as a non-destructive HINT.
-_PLACEHOLDER_NAME_RE = re.compile(r"^[IQ]?\d+\.\d")
+# A bare placeholder symbol NAME is the WHOLE name being just an address token,
+# e.g. "I0.4", "I38.1", "Q11.3", "13.5" -- with or without the leading I/Q
+# letter, and with NOTHING following it. The match is ANCHORED (full-match):
+# a name that merely BEGINS with an address but carries a real description
+# ("I2.6 LeftSide S.Det Vent", "Q3.4 Venturi AutoExp", "13.5 lamp test power")
+# is a REAL wired channel, NOT a spare, and must keep its tag+comment.
+_PLACEHOLDER_NAME_RE = re.compile(r"[IQ]?\d+\.\d+")
 
 
 def looks_like_spare(name: str, comment: str) -> bool:
     """Cheap, non-destructive hint: does this symbol look like a spare/reserve?
 
-    True when the comment is exactly "Spare" OR the name is a bare placeholder
-    address. This does NOT drop or relabel anything -- classification is the
-    front-end's job. Provided only so the next chunk does not re-derive it.
+    True iff the comment is exactly "Spare" OR the stripped name FULL-matches a
+    bare address token (``[IQ]?<byte>.<bit>`` and nothing else). A name with any
+    trailing description is a real wired channel and returns False (so its real
+    tag+comment are preserved). This does NOT drop or relabel anything --
+    classification is the front-end's job; provided only as a hint.
     """
     if (comment or "").strip().lower() == "spare":
         return True
-    return bool(_PLACEHOLDER_NAME_RE.match((name or "").strip()))
+    return bool(_PLACEHOLDER_NAME_RE.fullmatch((name or "").strip()))
 
 
 # ---------------------------------------------------------------------------

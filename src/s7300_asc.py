@@ -43,6 +43,7 @@ filter differently.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -119,12 +120,29 @@ def parse_line(line: str) -> Optional[AscSymbol]:
         return None
     body = line[len(_PREFIX):]
     name = body[_COL_NAME[0]:_COL_NAME[1]].rstrip()
-    # area + address share a span; tokenise it (a long address overruns the
-    # nominal area sub-column, so a fixed slice is unsafe here).
-    operand_toks = body[_COL_OPERAND[0]:_COL_OPERAND[1]].split()
-    area = operand_toks[0] if len(operand_toks) >= 1 else ""
-    addr = operand_toks[1] if len(operand_toks) >= 2 else ""
-    datatype = body[_COL_DTYPE[0]:_COL_DTYPE[1]].strip()
+    # The operand (area + address) and the datatype share the post-name region
+    # and are whitespace-separated; a wide operand (e.g. "PIW 1400") overruns
+    # the nominal datatype sub-column, so a fixed slice would TRUNCATE the
+    # datatype. Tokenise the post-name remainder instead: the first token is the
+    # area, the second the address, the third the datatype. The comment still
+    # starts at its fixed column (it is free text and may contain spaces), so we
+    # only tokenise the operand/datatype span [_COL_OPERAND[0] : _COL_COMMENT].
+    operand_span = body[_COL_OPERAND[0]:_COL_COMMENT]
+    # Find the area token, then the address token, by position so we can take
+    # the datatype as the REMAINDER (verbatim spacing preserved). This avoids
+    # reconstructing the FC/FB/DB "<area> <number>" repetition by hand.
+    am = re.match(r"\s*(\S+)\s+(\S+)", operand_span)
+    if am:
+        area = am.group(1)
+        addr = am.group(2)
+        datatype = operand_span[am.end():].strip()
+    else:
+        # 0 or 1 token only (e.g. an area with no address) -- fall back to a
+        # simple split rather than fabricate.
+        toks = operand_span.split()
+        area = toks[0] if len(toks) >= 1 else ""
+        addr = toks[1] if len(toks) >= 2 else ""
+        datatype = ""
     comment = body[_COL_COMMENT:].rstrip()
     if not area:
         # Defensive: a row with no operand area is malformed; skip it rather

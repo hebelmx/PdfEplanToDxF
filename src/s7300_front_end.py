@@ -115,6 +115,12 @@ def _emit_digital_channels(mod: Module, symbols: List["C.Symbol"], capacity: int
     area = "I" if kind == "DI" else "O"
     for sym in symbols:
         ch = sym.ch
+        # Clamp to the declared module capacity: a channel index at/above the
+        # point count cannot be a physical channel, so never emit it (mirrors
+        # the analog path's `for ch in range(capacity)`). Guards against a
+        # module carrying more inline SYMBOL lines than its declared points.
+        if ch >= capacity:
+            continue
         raw = digital_address(area, start_byte, ch)
         if sym.looks_like_spare:
             skipped.append(("RESERVA", raw, "spare"))
@@ -203,8 +209,12 @@ def _local_station(cfg: "C.CfgData", asc_symbols: List["A.AscSymbol"],
 
     for m in cfg.modules:
         if m.kind in ("DI", "DO"):
-            start = (m.in_addr.start_byte if m.kind == "DI"
-                     else m.out_addr.start_byte)
+            # Guard the address block like the analog branch: a DI/DO module
+            # with no address block must not crash (start defaults to 0).
+            if m.kind == "DI":
+                start = m.in_addr.start_byte if m.in_addr else 0
+            else:
+                start = m.out_addr.start_byte if m.out_addr else 0
             mod = _make_digital_module(
                 name=f"Slot{m.slot} {m.kind}", parent=station_name,
                 kind=m.kind, capacity=m.points or 0, start_byte=start,
@@ -271,8 +281,11 @@ def _dp_station(slave: "C.DpSlave", controller_cpu: Optional[str]) -> Optional[d
             kind = "DI"
             start = ss.in_addr.start_byte if ss.in_addr else 0
             syms = ss.in_addr.symbols if ss.in_addr else []
-        capacity = (_et200_capacity(ss)
-                    if slave.type_str == "ET 200eco 16DI" else len(syms))
+        # Always derive capacity generically from the sub-slot type ('16DE'->16,
+        # '32DE'->32), falling back to the symbol count when the type carries no
+        # count. No literal-string gate, so a sibling ET 200eco 32DI drop counts
+        # 32 capacity (extendable), not just its symbol count.
+        capacity = _et200_capacity(ss)
         name = f"DP{slave.dp_address} Slot{ss.slot} {kind}"
         mod = _make_digital_module(
             name=name, parent=station_name, kind=kind, capacity=capacity,

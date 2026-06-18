@@ -139,6 +139,78 @@ class TestFrontEndHelpers(unittest.TestCase):
         empty = C.CfgData(station=None)
         self.assertEqual(F.offmodule_devices(empty), [])
 
+    def test_emit_clamps_to_capacity(self):
+        # M2: a module declaring N points but carrying a SYMBOL beyond channel
+        # N-1 must NOT emit that channel (digital emission clamped to capacity,
+        # mirroring the analog `for ch in range(capacity)`).
+        real = C.Symbol(area="I", ch=0, name="control off", comment="ok")
+        overflow = C.Symbol(area="I", ch=8, name="too far", comment="x")
+        mod = F._make_digital_module("m", "S", "DI", 8, 0, 4, "cat")
+        points, skipped = [], []
+        F._emit_digital_channels(mod, [real, overflow], 8, 0, "DI", "S",
+                                 points, skipped)
+        # capacity 8 -> ch8 is out of range and dropped (not mapped, not RESERVA)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].tag, "control off")
+        self.assertEqual(len(skipped), 0)
+
+    def test_local_station_di_no_address_block_no_crash(self):
+        # M3: a DI module with NO address block (in_addr=None) must not raise
+        # AttributeError; start defaults to 0 (mirrors the analog guard).
+        di = C.CfgModule(rack=0, slot=4, order_no="x", fw_version=None,
+                         type_str="DI32xDC24V", kind="DI", points=32,
+                         in_addr=None, out_addr=None)
+        cfg = C.CfgData(station=C.Station(id="S7300", descr="d"))
+        cfg.modules.append(di)
+        st = F._local_station(cfg, [], "CPU 315-2 PN/DP")  # must not raise
+        mod = next(m for m in st["io_mods"] if m.kind == "DI")
+        self.assertEqual(mod.in_byte_base, 0)  # defaulted, no crash
+
+    def test_local_station_do_no_address_block_no_crash(self):
+        # M3 (output side): a DO module with out_addr=None must not crash.
+        do = C.CfgModule(rack=0, slot=6, order_no="x", fw_version=None,
+                         type_str="DO32xDC24V", kind="DO", points=32,
+                         in_addr=None, out_addr=None)
+        cfg = C.CfgData(station=C.Station(id="S7300", descr="d"))
+        cfg.modules.append(do)
+        st = F._local_station(cfg, [], None)  # must not raise
+        mod = next(m for m in st["io_mods"] if m.kind == "DO")
+        self.assertEqual(mod.out_byte_base, 0)
+
+    def test_et200_capacity_generic_32di(self):
+        # M4: capacity is derived generically from the sub-slot type. A sibling
+        # 32DI drop must report 32 capacity (not its symbol count), so the
+        # literal "ET 200eco 16DI" string is no longer a gate.
+        addr = C.AddrBlock(direction="in", start_byte=30, length_bytes=4,
+                           area_code=0)
+        # 32 channels: 10 real-named, 22 bare-address placeholders (-> RESERVA),
+        # one symbol per channel as the file format provides.
+        syms = []
+        for i in range(32):
+            if i < 10:
+                syms.append(C.Symbol(area="I", ch=i, name=f"sig{i}",
+                                     comment="real"))
+            else:
+                byte, bit = 30 + i // 8, i % 8
+                syms.append(C.Symbol(area="I", ch=i, name=f"I{byte}.{bit}",
+                                     comment=""))  # bare placeholder
+        addr.symbols = syms
+        ss = C.DpSubslot(slot=2, io_descr="x", type_str="32DE", in_addr=addr)
+        # generic capacity from "32DE" -> 32 (NOT the literal-string gate)
+        self.assertEqual(F._et200_capacity(ss), 32)
+        slave = C.DpSlave(dp_address=9, gsd="g", type_str="ET 200eco 32DI")
+        slave.subslots.append(C.DpSubslot(slot=1, io_descr="status",
+                                          type_str="64"))  # no symbols
+        slave.subslots.append(ss)
+        st = F._dp_station(slave, "CPU 315-2 PN/DP")
+        self.assertIsNotNone(st)
+        self.assertEqual(st["io_mods"][0].points, 32)  # generic, not len(syms)
+        mapped = len(st["points"])
+        reserva = sum(1 for s in st["skipped"] if s[0] == "RESERVA")
+        self.assertEqual(mapped, 10)
+        self.assertEqual(reserva, 22)
+        self.assertEqual(mapped + reserva, 32)
+
 
 # ---------------------------------------------------------------------------
 # Fixture integration -- MEASURED ground truth
@@ -190,9 +262,14 @@ class TestFrontEndFixture(unittest.TestCase):
         cap = sum(m.points for m in local.io_mods)
         mapped = len(local.points)
         reserva = sum(1 for s in local.skipped if s[0] == "RESERVA")
-        self.assertEqual(cap, 136)       # 4x32 digital + AI8
-        self.assertEqual(mapped, 101)    # 27+16+28+30 (+ 0 AI8)
-        self.assertEqual(reserva, 35)    # 5+16+4+2 (+ 8 AI8)
+        self.assertEqual(cap, 136)       # 4x32 digital + AI8 (UNCHANGED by M1)
+        # M1 anchored the spare regex: channels whose NAME merely begins with an
+        # address but carries a real description are now MAPPED, not RESERVA.
+        # Slot4 DI 29 + Slot5 DI 16 + Slot6 DO 32 + Slot7 DO 32 (+ 0 AI8) = 109.
+        self.assertEqual(mapped, 109)
+        # 11 digital RESERVA (bare-address placeholders) + 8 AI8 = 19+8 = 27.
+        self.assertEqual(reserva, 27)
+        self.assertEqual(mapped + reserva, cap)
 
     def test_ai8_mapped_via_asc_is_all_reserva(self):
         # The local AI8 has NO inline symbols; it joins via .asc PIW word
@@ -232,8 +309,10 @@ class TestFrontEndFixture(unittest.TestCase):
             "DP4 ET 200eco 16DI": (14, 2),
             "DP5 ET 200eco 16DI": (13, 3),
             "DP6 ET 200eco 16DI": (14, 2),
-            "DP7 ET 200eco 16DI": (13, 3),
-            "DP8 ET 200eco 16DI": (2, 14),
+            # M1: DP7 +1 mapped (I37.6 FC Cil move conect), DP8 +8 mapped
+            # (the I38.x/I39.x described channels).
+            "DP7 ET 200eco 16DI": (14, 2),
+            "DP8 ET 200eco 16DI": (10, 6),
         }
         for name, (mapped, reserva) in expected.items():
             p = drops[name]
@@ -263,8 +342,12 @@ class TestFrontEndFixture(unittest.TestCase):
         mapped = len(festo.points)
         reserva = sum(1 for s in festo.skipped if s[0] == "RESERVA")
         self.assertEqual(cap, 40)
-        self.assertEqual(mapped, 30)
-        self.assertEqual(reserva, 10)
+        # M1: the 10 Festo channels whose names begin with a Q-address but carry
+        # a real description (Q30.6 ext cil horiz alin, ... Q38.7 ret cil
+        # ventcap) are now MAPPED -> 40 mapped / 0 RESERVA.
+        self.assertEqual(mapped, 40)
+        self.assertEqual(reserva, 0)
+        self.assertEqual(mapped + reserva, cap)
         # first output channel: bank slot2 start byte 30 -> %Q30.0
         first = festo.points[0]
         self.assertEqual(first.tag, "LH_upr frame cyl EXT")
@@ -276,10 +359,45 @@ class TestFrontEndFixture(unittest.TestCase):
         mapped = sum(len(p.points) for p in self.projects)
         reserva = sum(1 for p in self.projects for s in p.skipped
                       if s[0] == "RESERVA")
-        self.assertEqual(cap, 256)
-        self.assertEqual(mapped, 187)
-        self.assertEqual(reserva, 69)
+        self.assertEqual(cap, 256)        # capacity UNCHANGED by M1
+        # M1 moved 27 channels RESERVA -> mapped (real wired I/O whose names
+        # merely begin with an address token). Old floor was 256/187/69.
+        self.assertEqual(mapped, 214)     # 187 + 27
+        self.assertEqual(reserva, 42)     # 69 - 27
         self.assertEqual(mapped + reserva, cap)  # every slot accounted for
+
+    def test_m1_previously_dropped_channels_now_mapped(self):
+        # M1 regression: channels whose NAME merely begins with an address token
+        # but carry a real description were WRONGLY dropped to RESERVA by the
+        # unanchored spare regex. They must now be MAPPED with their REAL tag +
+        # comment (faithfulness -- never drop real wired I/O).
+        all_points = [pt for p in self.projects for pt in p.points]
+        by_tag = {pt.tag: pt for pt in all_points}
+        # the "13.5 lamp test power" channel (was RESERVA, now mapped @ %Q3.7)
+        self.assertIn("13.5 lamp test power", by_tag)
+        lamp = by_tag["13.5 lamp test power"]
+        self.assertEqual(lamp.description, "Power on to lamp")
+        self.assertEqual(lamp.logix_address, "%Q3.7")
+        # a few more of the 27 flipped channels, with their real tag+comment
+        self.assertIn("I2.6 LeftSide S.Det Vent", by_tag)
+        self.assertEqual(by_tag["I2.6 LeftSide S.Det Vent"].description,
+                         "Deteccion Color VentCap")
+        self.assertIn("Q3.4 Venturi AutoExp", by_tag)
+        self.assertEqual(by_tag["Q3.4 Venturi AutoExp"].description, "VW216")
+        # the "Xspare"-named channels are faithful real channels, now mapped
+        self.assertIn("Q3.6spare", by_tag)
+        self.assertEqual(by_tag["Q3.6spare"].description, "1=resistance test")
+        self.assertIn("Q2.0spare", by_tag)
+        # and a Festo (DP12) flipped channel
+        self.assertIn("Q38.7 ret cil ventcap", by_tag)
+
+    def test_m1_bare_placeholders_still_reserva(self):
+        # The genuine bare-address placeholders (whole name == an address token)
+        # must STAY RESERVA -- M1 only un-drops names with a trailing description.
+        all_tags = {pt.tag for p in self.projects for pt in p.points}
+        # these bare placeholder names must NOT have become mapped points
+        for bare in ("I0.4", "I3.7"):
+            self.assertNotIn(bare, all_tags)
 
     def test_servos_and_cameras_not_channels(self):
         # The CMMP servos + Keyence cameras must NEVER appear as a channel

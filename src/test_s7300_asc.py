@@ -99,6 +99,18 @@ class TestAscHelpers(unittest.TestCase):
         self.assertEqual(s.addr, "1300.0")
         self.assertEqual(s.bit_addr, (1300, 0))
 
+    def test_wide_operand_datatype_not_truncated(self):
+        # m1 regression: a wide operand ("PIW 1400") pushes the datatype past
+        # the old fixed col-36 slice. Tokenising the post-name remainder must
+        # recover the FULL datatype ("WORD"), not a truncated fragment.
+        line = ('126,WidePIW                 '
+                'PIW 1400    WORD')
+        s = A.parse_line(line)
+        self.assertEqual(s.area, "PIW")
+        self.assertEqual(s.addr, "1400")
+        self.assertEqual(s.datatype, "WORD")   # not "" and not truncated
+        self.assertTrue(s.is_physical)
+
     def test_long_address_db_object(self):
         line = ('126,LEFT_REAR_CAMERA        '
                 'DB   1148   DB   1148')

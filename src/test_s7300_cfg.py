@@ -54,11 +54,24 @@ class TestCfgHelpers(unittest.TestCase):
     def test_looks_like_spare_hint(self):
         # comment == "Spare"
         self.assertTrue(C.looks_like_spare("control off", "Spare"))
-        # bare placeholder name with or without leading I/Q
+        # BARE placeholder name (the WHOLE name is an address token), with or
+        # without the leading I/Q letter -- these stay spare/RESERVA.
         self.assertTrue(C.looks_like_spare("I0.4", "Spare"))
         self.assertTrue(C.looks_like_spare("I38.1", ""))
         self.assertTrue(C.looks_like_spare("Q11.3", ""))
-        self.assertTrue(C.looks_like_spare("13.5 lamp test power", ""))
+        self.assertTrue(C.looks_like_spare("I3.7", ""))
+        self.assertTrue(C.looks_like_spare("13.5", ""))    # bare address, no I/Q
+        # M1: a name that merely BEGINS with an address but carries a real
+        # description is a REAL wired channel, NOT a spare (this flipped from
+        # True -> False when the regex was anchored to a full-match).
+        self.assertFalse(C.looks_like_spare("13.5 lamp test power", ""))
+        self.assertFalse(C.looks_like_spare("I2.6 LeftSide S.Det Vent", ""))
+        self.assertFalse(C.looks_like_spare("Q3.4 Venturi AutoExp", ""))
+        self.assertFalse(C.looks_like_spare("I2.5 Detec_VentCap_LH", ""))
+        # The "Xspare"-named channels (word embedded but NOT a bare address and
+        # comment != "Spare") are faithful real channels -> NOT spare.
+        self.assertFalse(C.looks_like_spare("Q3.6spare", ""))
+        self.assertFalse(C.looks_like_spare("Q2.0spare", ""))
         # a real, named signal is not a spare
         self.assertFalse(C.looks_like_spare("membrane vacuum OK", ""))
         self.assertFalse(C.looks_like_spare("control off", ""))
