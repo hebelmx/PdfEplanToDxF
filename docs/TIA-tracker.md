@@ -172,6 +172,21 @@ the ControlLogix case where both 1756 chassis were in one L5X. **We were drawing
   Suite 454. **Abel: "looks good — proceed to c2."** Functional-name decision: **keep auto-derived +
   blanks** (Q100 Cooling1/UV real; Q200 Infrareds, Q300 Coating derived; rest blank — never invent;
   non-device VS_/Vsupply points excluded from derivation).
+- **E6(c2) INVESTIGATION (orchestrator, 2026-06-17) — feasibility + NO data-layer gap.**
+  * PROFINET non-controller nodes: **17 SK TU3-PNT drives, 5 EX260 valve terminals, 3 BIS M-4008 RFID**,
+    7 IM155-6 heads. ONLY the ET200SP/1200 stations carry `.aml` Address blocks — the drives/RFID/valve
+    devices do NOT expose a device-linked address range, so a telegram-tag → specific-drive join is NOT
+    available from the `.aml` (group by address-range + name pattern instead; per-element ≈ per
+    thousand-block).
+  * **NO data-layer gap (verified):** of the 231 off-module S71500 tags, 10 fall inside a parse_aml
+    range — ALL the 1214C `%IW/%QW>=1000` drive-telegram words (conservatively excluded as non-wired,
+    correct). The rest fall in NO module range (incl. `%I556/557 bcoat_*` which LOOKS like an F-DI but
+    is genuinely not on an ET200SP module — soft-mapped, not a missed module). The per-station synthesis
+    is complete; these are real "non-1:1" I/O.
+  * **Function buckets (231 tags):** Drives ~111 (`%IW/%QW>=1000` telegrams + 1214C telegram words);
+    Identification 36 (`%I/%O>=8600`, RFID); Plant coordination & safety ~84 (inter-station status
+    `%I14/15` "Qx 90%"/"24V Alarm", Coating-zone e-stops `%I556/557`, output coordination `%O100-599`).
+  * c2 design (grouping granularity + render format) is a GATED visual call — pending Abel.
 
 ## Backlog (recommended order)
 - [x] **TIA-1** — `build_tia_project()` IR front-end. DONE @ `3be4655`. `src/tia_front_end.py` +
